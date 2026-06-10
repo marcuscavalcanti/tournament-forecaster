@@ -17,6 +17,7 @@ from worldcup_brazil.agents import agent_effort_profiles, call_agent, call_all_a
 from worldcup_brazil.bracket import (
     annotate_knockout_matches_with_bracket,
     brazil_bracket_path,
+    brazil_bracket_path_candidates,
     hydrate_canonical_configs,
     invalid_configured_knockout_opponents,
 )
@@ -935,6 +936,37 @@ class ReportCoherenceError(RuntimeError):
 
 class MeetingConsensusError(RuntimeError):
     """Raised when the meeting cannot produce a valid consensus (sterile room or ceiling without valid votes)."""
+
+
+def _specs_after_preflight_exclusion(
+    agent_specs: list[Any],
+    config: dict[str, Any],
+    watchdog: Any = None,
+) -> list[Any]:
+    """Remove do run slots que falharam duro no preflight (ex.: HTTP 429 em toda a cadeia).
+
+    O slot contribuiria zero de qualquer forma (planejamento removido + probes de
+    reentrada repetindo o mesmo erro); excluí-lo cedo economiza chamadas, tempo e
+    ruído de watchdog. Gate: exclude_slots_failing_preflight (default true); o CLI
+    só popula _preflight_failed_slots quando --strict-agents está desligado."""
+    failed_slots = {str(slot) for slot in (config.get("_preflight_failed_slots") or []) if str(slot)}
+    if not failed_slots or not bool(config.get("exclude_slots_failing_preflight", True)):
+        return agent_specs
+    excluded = [spec.slot for spec in agent_specs if str(getattr(spec, "slot", "")) in failed_slots]
+    if not excluded:
+        return agent_specs
+    remaining = [spec for spec in agent_specs if str(getattr(spec, "slot", "")) not in failed_slots]
+    if watchdog:
+        watchdog.event(
+            "model_preflight",
+            "slot_excluded",
+            detail=(
+                ", ".join(excluded)
+                + " fora do run por falha dura no preflight; sem chamadas de planejamento nem probes de reentrada"
+            ),
+            extra={"slots": excluded},
+        )
+    return remaining
 
 
 def load_config(path: Path | None) -> dict[str, Any]:
@@ -2407,34 +2439,6 @@ def _mentioned_national_teams(text: str) -> set[str]:
     return {team for team in COMMON_NATIONAL_TEAM_MARKERS if re.search(rf"\b{re.escape(team)}\b", normalized)}
 
 
-def _phase_scoped_bracket_segments(text: str, config: dict[str, Any]) -> list[tuple[dict[str, Any], str]]:
-    normalized = _normalize_text(text)
-    occurrences: list[tuple[int, int, int, dict[str, Any]]] = []
-    for index, entry in enumerate(brazil_bracket_path(config)):
-        phase = _normalize_text(str(entry.get("phase", ""))).strip()
-        if not phase:
-            continue
-        for match in re.finditer(rf"\b{re.escape(phase)}\b", normalized):
-            occurrences.append((match.start(), match.end(), index, entry))
-    if not occurrences:
-        return []
-
-    occurrences.sort(key=lambda item: (item[0], item[1]))
-    segments: list[tuple[dict[str, Any], str]] = []
-    delimiters = (".", ";", "\n", "|")
-    for start, end, _entry_index, entry in occurrences:
-        previous_positions = [normalized.rfind(delimiter, 0, start) for delimiter in delimiters]
-        segment_start = max(previous_positions) + 1
-        next_positions = [
-            position
-            for delimiter in delimiters
-            for position in [normalized.find(delimiter, end)]
-            if position != -1
-        ]
-        segment_end = min(next_positions) if next_positions else len(normalized)
-        segments.append((entry, normalized[segment_start:segment_end]))
-    return segments
-
 
 def _segment_is_generic_opponent_universe(segment: str) -> bool:
     normalized = _normalize_text(segment)
@@ -2454,39 +2458,6 @@ def _segment_is_generic_opponent_universe(segment: str) -> bool:
     )
     return any(marker in normalized for marker in generic_markers)
 
-
-def _segment_is_explicit_bracket_claim(segment: str, phase: str) -> bool:
-    normalized = _normalize_text(segment)
-    phase_key = _normalize_text(phase).strip()
-    if not normalized or not phase_key:
-        return False
-    if _segment_is_generic_opponent_universe(normalized):
-        return False
-    if re.search(rf"\b{re.escape(phase_key)}\b\s*[:=\-]", normalized):
-        return True
-    claim_markers = (
-        "brasil x",
-        " vs ",
-        " contra ",
-        " pega ",
-        " enfrenta ",
-        " cruza ",
-        " cruzamento ",
-        " adversario ",
-        " adversarios ",
-        " candidato ",
-        " candidatos ",
-        " top-2 ",
-        " top 2 ",
-        " opcao ",
-        " opcoes ",
-        " provavel ",
-        " provaveis ",
-        " slot ",
-        " passa por ",
-        " caminho ",
-    )
-    return any(marker in f" {normalized} " for marker in claim_markers)
 
 
 def _mentions_unconfigured_opponent(text: str, config: dict[str, Any]) -> bool:
@@ -2523,27 +2494,160 @@ def _format_impossible_opponent_reason(detail: dict[str, Any] | None) -> str:
     return base + suffix + ")"
 
 
+MAX_PHASE_CLAIM_DISTANCE_CHARS = 280
+
+_THIRD_PLACE_CONTEXT_MARKERS = (
+    "3o lugar",
+    "3º lugar",
+    "terceiro lugar",
+    "terceiros colocados",
+    "melhores terceiros",
+    "caminho de 3",
+    "como terceiro",
+)
+
+_BRACKET_CLAIM_MARKERS = (
+    "brasil x",
+    " x brasil",
+    " vs ",
+    "contra o brasil",
+    "enfrenta",
+    "enfrentar",
+    " pega ",
+    " pegar ",
+    "cruza",
+    "cruzamento",
+    "duelo",
+    "confronto",
+    "adversario",
+    "candidato",
+    "mais provavel",
+    "rival",
+)
+
+
+def _mention_sentence_is_bracket_claim(normalized: str, position: int) -> bool:
+    """Só fiscaliza menções dentro de uma frase que realmente alega confronto/caminho.
+
+    Menção contextual ou histórica ('em 2022 a Croácia eliminou o Brasil nas oitavas',
+    'depois das oitavas o caminho passa por Espanha') não é alegação de cruzamento e
+    não pode anular a fala inteira — classe de falso positivo dos runs de 10/jun/2026."""
+    delimiters = (".", ";", "\n", "|")
+    start = max((normalized.rfind(delimiter, 0, position) for delimiter in delimiters), default=-1) + 1
+    ends = [
+        found
+        for delimiter in delimiters
+        for found in [normalized.find(delimiter, position)]
+        if found != -1
+    ]
+    end = min(ends) if ends else len(normalized)
+    sentence = normalized[start:end]
+    return any(marker in sentence for marker in _BRACKET_CLAIM_MARKERS)
+
+
+def _phase_allowed_opponents_union(config: dict[str, Any]) -> list[dict[str, Any]]:
+    """Candidatos por fase como união dos caminhos do Brasil em 1º, 2º e 3º do grupo.
+
+    'Impossível' significa inalcançável por QUALQUER caminho do Brasil, não apenas
+    fora do caminho da posição configurada — o Monte Carlo simula caminhos
+    alternativos e o briefing pode citá-los legitimamente."""
+    base_entries = brazil_bracket_path(config)
+    if not base_entries:
+        return []
+    union: dict[str, dict[str, Any]] = {}
+    for entry in base_entries:
+        phase = str(entry.get("phase", ""))
+        union[phase] = {**entry, "allowed_opponents": list(entry.get("allowed_opponents", []))}
+    for position in (1, 2):
+        for path in brazil_bracket_path_candidates(config, brazil_group_position=position):
+            for entry in path:
+                phase = str(entry.get("phase", ""))
+                bucket = union.setdefault(phase, {**entry, "allowed_opponents": []})
+                for opponent in entry.get("allowed_opponents", []):
+                    if opponent not in bucket["allowed_opponents"]:
+                        bucket["allowed_opponents"].append(opponent)
+    return list(union.values())
+
+
 def _impossible_bracket_opponent_detail(text: str, config: dict[str, Any]) -> dict[str, Any] | None:
-    segments = _phase_scoped_bracket_segments(text, config)
-    if not segments:
+    """Flagra adversário impossível atribuindo cada menção à fase MAIS PRÓXIMA no texto.
+
+    Regressão histórica (runs de 10/jun/2026): o segmentador por pontuação atribuía a
+    frase inteira a todas as fases citadas — uma enumeração legítima do caminho
+    ('Japão nos 16 avos, depois Equador nas oitavas, e Inglaterra nas quartas')
+    flagrava times de grupo/oitavas como impossíveis nos 16 avos (35 remoções falsas;
+    sala de adversários 0/49; posições do protagonista anuladas). Agora: menção só
+    conta contra a fase do marcador mais próximo dentro de uma janela máxima e só
+    dentro de frase que alega confronto/caminho; adversários de grupo configurados,
+    o Brasil e janelas com contexto explícito de 3º lugar nunca são flagrados; a
+    lista permitida é a união determinística multi-caminho (1º/2º do grupo, com
+    inícios ambíguos enumerados)."""
+    normalized = _normalize_text(text)
+    entries = _phase_allowed_opponents_union(config)
+    if not entries:
         return None
-    for entry, segment in segments:
-        phase = str(entry.get("phase", "")).strip()
-        if not _segment_is_explicit_bracket_claim(segment, phase):
+    keyword_hits: list[tuple[int, dict[str, Any]]] = []
+    for entry in entries:
+        phase_norm = _normalize_text(str(entry.get("phase", ""))).strip()
+        if not phase_norm:
             continue
-        mentioned = _mentioned_national_teams(segment)
-        if not mentioned:
+        variants = {phase_norm, f"{phase_norm}s"}
+        if phase_norm.endswith("l"):
+            variants.add(phase_norm[:-1] + "is")
+        for variant in variants:
+            if variant in ("final", "finais"):
+                pattern = rf"(?<!de )(?<!fase )(?<!reta )\b{re.escape(variant)}\b"
+            else:
+                pattern = rf"\b{re.escape(variant)}\b"
+            for match in re.finditer(pattern, normalized):
+                keyword_hits.append((match.start(), entry))
+    if not keyword_hits:
+        return None
+
+    brazil_norm = _normalize_text(config.get("brazil_team_name", "Brasil"))
+    group_opponents_norm = {_normalize_text(opponent) for opponent in _group_opponents(config)}
+    for team in sorted(COMMON_NATIONAL_TEAM_MARKERS):
+        if team == brazil_norm or team in group_opponents_norm:
             continue
-        allowed = {_normalize_text(candidate) for candidate in entry.get("allowed_opponents", [])}
-        allowed.add("brasil")
-        invalid = sorted(mentioned - allowed)
-        if invalid:
+        for match in re.finditer(rf"\b{re.escape(team)}\b", normalized):
+            position = match.start()
+            window_start = max(0, position - MAX_PHASE_CLAIM_DISTANCE_CHARS)
+            window_end = min(len(normalized), position + MAX_PHASE_CLAIM_DISTANCE_CHARS)
+            window_text = normalized[window_start:window_end]
+            if _segment_is_generic_opponent_universe(window_text):
+                continue
+            if any(marker in window_text for marker in _THIRD_PLACE_CONTEXT_MARKERS):
+                continue
+            if not _mention_sentence_is_bracket_claim(normalized, position):
+                continue
+            nearby_hits = sorted(
+                (
+                    (abs(hit_position - position), hit_entry)
+                    for hit_position, hit_entry in keyword_hits
+                    if abs(hit_position - position) <= MAX_PHASE_CLAIM_DISTANCE_CHARS
+                ),
+                key=lambda item: item[0],
+            )
+            if not nearby_hits:
+                continue
+            allowed_in_some_nearby_phase = False
+            for _distance, entry in nearby_hits:
+                allowed_norm = {
+                    _normalize_text(candidate) for candidate in entry.get("allowed_opponents", [])
+                }
+                allowed_norm.add(brazil_norm)
+                if team in allowed_norm:
+                    allowed_in_some_nearby_phase = True
+                    break
+            if allowed_in_some_nearby_phase:
+                break
+            nearest_entry = nearby_hits[0][1]
             return {
-                "phase": phase,
-                "brazil_slot": entry.get("brazil_slot", ""),
-                "opponent_slots": entry.get("opponent_slots", []),
-                "allowed_opponents": entry.get("allowed_opponents", []),
-                "invalid_opponents": invalid,
+                "phase": str(nearest_entry.get("phase", "")).strip(),
+                "brazil_slot": nearest_entry.get("brazil_slot", ""),
+                "opponent_slots": nearest_entry.get("opponent_slots", []),
+                "allowed_opponents": nearest_entry.get("allowed_opponents", []),
+                "invalid_opponents": [team],
             }
     return None
 
@@ -2737,6 +2841,42 @@ def _has_rational_hypothesis(combined: str) -> bool:
     return len(normalized) >= 80 and has_numeric_claim and has_fact_term
 
 
+_DISAGREEMENT_MARKERS = ("discordo", "discordamos", "rejeito", "nao aceito", "não aceito")
+
+
+def _is_informed_agreement(opinion: Any, combined: str) -> bool:
+    """Aceite explícito da hipótese auditável do protagonista, sem novas alegações próprias.
+
+    Deferência informada é movimento legítimo de debate: a exigência de número+fonte
+    vale para a tese em discussão e para quem discorda ou propõe ajuste — não para o
+    eco que aceita. Regressão histórica (runs de 10/jun/2026): 'concordância sem
+    hipótese auditável' removeu 20+ respostas de aceite, a sala nunca acumulou
+    aceitação para fechar e morreu estéril. Guardas de qualidade: exige concordância
+    estruturada explícita, corpo substantivo referenciando a tese, nenhum marcador de
+    discordância, e proíbe injetar mapas de probabilidade novos sem fonte própria."""
+    if getattr(opinion, "agrees_with_protagonist", None) is not True:
+        return False
+    normalized = _normalize_text(combined)
+    if any(marker in normalized for marker in _DISAGREEMENT_MARKERS):
+        return False
+    if len(normalized) < 80:
+        return False
+    references_thesis = any(
+        marker in normalized
+        for marker in ("protagonista", "racional", "hipotese", "premissa", "proposta", "tese", "consenso")
+    )
+    if not references_thesis:
+        return False
+    has_new_probability_maps = bool(
+        getattr(opinion, "match_probabilities", None) or getattr(opinion, "scenario_probabilities", None)
+    )
+    if has_new_probability_maps:
+        return False
+    if str(getattr(opinion, "adjustment", "") or "").strip():
+        return False
+    return True
+
+
 def _has_unsupported_meeting_vote(
     opinion: Any,
     *,
@@ -2746,6 +2886,8 @@ def _has_unsupported_meeting_vote(
     if not _looks_like_meeting_vote(opinion, combined):
         return False
     cfg = config or {}
+    if bool(cfg.get("allow_informed_agreement_votes", True)) and _is_informed_agreement(opinion, combined):
+        return False
     source_urls, source_queries = _effective_meeting_sources(opinion, cfg)
     if bool(cfg.get("require_auditable_source_urls_for_meeting_votes", True)) and not (
         source_urls or source_queries
@@ -4861,6 +5003,20 @@ async def build_report_bundle(
     generated_at = generated_at or datetime.now(timezone.utc)
     baseline_title_pct = float(config.get("baseline_title_pct", 11.0))
     agent_specs = load_agent_specs_from_config(config)
+    agent_specs = _specs_after_preflight_exclusion(agent_specs, config, watchdog)
+    minimum_source_ready_agents = int(config.get("minimum_source_ready_agents", 3))
+    if len(agent_specs) < minimum_source_ready_agents:
+        excluded_by_preflight = ", ".join(
+            str(slot) for slot in (config.get("_preflight_failed_slots") or [])
+        )
+        message = (
+            f"Quórum impossível antes do planejamento: {len(agent_specs)} slot(s) ativo(s) "
+            f"contra mínimo de {minimum_source_ready_agents}; excluído(s) por falha dura no "
+            f"preflight: {excluded_by_preflight or 'nenhum'}."
+        )
+        if watchdog:
+            watchdog.fail("agent_source_planning", detail=message)
+        raise SourcePlanningQuorumError(message)
     token_cost_ledger = _new_token_cost_ledger(config)
     monte_carlo_result = run_brazil_monte_carlo(config)
     config["_monte_carlo_result"] = monte_carlo_result

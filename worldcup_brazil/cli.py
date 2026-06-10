@@ -333,6 +333,13 @@ def main(argv: list[str] | None = None) -> int:
                         ]
                     },
                 )
+            failed_preflight_slots = [result.slot for result in preflight_results if not result.ok]
+            if (
+                failed_preflight_slots
+                and not args.strict_agents
+                and bool(config.get("exclude_slots_failing_preflight", True))
+            ):
+                config["_preflight_failed_slots"] = failed_preflight_slots
         memory = SourceMemory(args.source_memory)
         artifacts = build_report_bundle_sync(
             config=config,

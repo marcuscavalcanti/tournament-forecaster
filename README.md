@@ -301,6 +301,11 @@ Isso grava `outputs/agent_source_harness_latest.json`. Exit code `0` significa q
 
 Funil de probabilidades: com Monte Carlo ativo, o funil publicado (quartas/semifinal/final/título) vem inteiro da simulação reconciliada — o título não é mais colado do consenso da sala. A leitura direta dos modelos aparece em "Palpites por modelo" e em `metadata.agent_title_consensus_pct`, e influencia o funil apenas via sinais de contexto auditáveis. O gate de coerência pré-render permanece como retaguarda.
 
+- `allow_informed_agreement_votes` (default true): aceite explícito da tese do protagonista conta como voto/aceitação mesmo sem fonte própria, desde que referencie a tese, não discorde e não injete mapas de probabilidade novos sem fonte. A exigência de número+fonte continua valendo para a tese e para discordância/ajuste.
+- Validador de bracket por proximidade e multi-caminho: menção de seleção só conta contra a fase do marcador mais próximo (janela de ~280 caracteres, com plurais), candidatos são a união dos caminhos do Brasil em 1º/2º do grupo, adversários de grupo e enumerações do universo configurado nunca são flagrados. A mensagem de remoção continua citando fase, seleção e candidatos permitidos.
+- `exclude_slots_failing_preflight` (default true): slot que falha duro no preflight (ex.: HTTP 429 em toda a cadeia) sai do run inteiro — sem chamadas de planejamento nem probes de reentrada. Evento `slot_excluded` no watchdog. Com `--strict-agents` a exclusão não se aplica.
+- `CLAUDE_CLI_ALLOWED_TOOLS` (default `WebSearch,WebFetch`): o bridge CLI do slot Opus concede ferramentas de busca via `--allowedTools`; string vazia desliga a flag.
+
 Para ver o breakdown de tempo do último run (etapas, latência por rodada, fase de pergunta vs respostas, eventos de controle):
 
 ```bash

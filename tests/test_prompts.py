@@ -568,8 +568,8 @@ def test_sanitize_main_meeting_opinions_rejects_impossible_opponent_inside_phase
         AgentOpinion(
             agent="Gemini Pro",
             title_pct=8.4,
-            summary="Oitavas: México é o adversário mais provável.",
-            answer="México nas Oitavas exigiria um cruzamento que não existe para Brasil W76.",
+            summary="Oitavas: Japão é o adversário mais provável.",
+            answer="Japão nas Oitavas exigiria um cruzamento que não existe em nenhum caminho do Brasil.",
             source_urls=["https://example.com/bracket"],
             agrees_with_protagonist=False,
         )

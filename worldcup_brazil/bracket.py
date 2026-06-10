@@ -201,24 +201,14 @@ def _find_next_match(
     return None
 
 
-def brazil_bracket_path(
+def _walk_brazil_path(
     config: dict[str, Any],
-    *,
-    brazil_group: str | None = None,
-    brazil_group_position: int | None = None,
+    matches_by_id: dict[int, dict[str, Any]],
+    brazil_key: str,
+    match: dict[str, Any],
+    brazil_slot: str,
 ) -> list[dict[str, Any]]:
-    if not config.get("bracket_config") or not config.get("groups_config"):
-        return []
-
-    group = str(brazil_group or config.get("brazil_group", "C")).strip().upper() or "C"
-    position = int(brazil_group_position or config.get("brazil_expected_group_position", 1))
-    matches_by_id = _all_matches(config)
-    brazil_key = _normalize(config.get("brazil_team_name", "Brasil"))
     path: list[dict[str, Any]] = []
-
-    match, brazil_slot = _find_round_of_32_match(config, group=group, position=position)
-    match = {**match, "_phase_key": "round_of_32"}
-
     while True:
         phase_key = str(match["_phase_key"])
         match_id = int(match["match_id"])
@@ -251,6 +241,52 @@ def brazil_bracket_path(
         match, brazil_slot = next_match
 
     return path
+
+
+def brazil_bracket_path(
+    config: dict[str, Any],
+    *,
+    brazil_group: str | None = None,
+    brazil_group_position: int | None = None,
+) -> list[dict[str, Any]]:
+    if not config.get("bracket_config") or not config.get("groups_config"):
+        return []
+
+    group = str(brazil_group or config.get("brazil_group", "C")).strip().upper() or "C"
+    position = int(brazil_group_position or config.get("brazil_expected_group_position", 1))
+    matches_by_id = _all_matches(config)
+    brazil_key = _normalize(config.get("brazil_team_name", "Brasil"))
+
+    match, brazil_slot = _find_round_of_32_match(config, group=group, position=position)
+    match = {**match, "_phase_key": "round_of_32"}
+    return _walk_brazil_path(config, matches_by_id, brazil_key, match, brazil_slot)
+
+
+def brazil_bracket_path_candidates(
+    config: dict[str, Any],
+    *,
+    brazil_group: str | None = None,
+    brazil_group_position: int | None = None,
+) -> list[list[dict[str, Any]]]:
+    """Como brazil_bracket_path, mas enumera TODOS os caminhos quando o início é ambíguo.
+
+    Terceiros colocados entram em mais de um jogo possível de 32-avos (ex.: 3C cabe
+    nos jogos 74/77/79); para validação de caminho a resposta correta é a união dos
+    caminhos, não um erro de ambiguidade."""
+    if not config.get("bracket_config") or not config.get("groups_config"):
+        return []
+    group = str(brazil_group or config.get("brazil_group", "C")).strip().upper() or "C"
+    position = int(brazil_group_position or config.get("brazil_expected_group_position", 1))
+    matches_by_id = _all_matches(config)
+    brazil_key = _normalize(config.get("brazil_team_name", "Brasil"))
+    paths: list[list[dict[str, Any]]] = []
+    for match in _bracket_matches(config, "round_of_32"):
+        for slot in match.get("slots", []):
+            label = str(slot).strip().upper().replace(" ", "")
+            if _slot_matches_position(label, group=group, position=position):
+                start = {**match, "_phase_key": "round_of_32"}
+                paths.append(_walk_brazil_path(config, matches_by_id, brazil_key, start, label))
+    return paths
 
 
 def _placeholder_opponent(opponent: Any) -> bool:

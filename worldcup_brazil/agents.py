@@ -156,7 +156,8 @@ def _local_claude_cli_command() -> list[str] | None:
         return None
     model = os.environ.get("CLAUDE_CLI_MODEL", "claude-opus-4-8")
     effort = os.environ.get("CLAUDE_CLI_EFFORT", "high")
-    return [
+    allowed_tools = os.environ.get("CLAUDE_CLI_ALLOWED_TOOLS", "WebSearch,WebFetch")
+    command = [
         path,
         "--print",
         "--verbose",
@@ -166,8 +167,11 @@ def _local_claude_cli_command() -> list[str] | None:
         model,
         "--effort",
         effort,
-        "{prompt}",
     ]
+    if allowed_tools.strip():
+        command.extend(["--allowedTools", allowed_tools.strip()])
+    command.append("{prompt}")
+    return command
 
 
 def _local_codex_cli_command() -> list[str] | None:

@@ -64,6 +64,7 @@ def test_default_agent_specs_use_local_claude_cli_when_anthropic_api_key_is_miss
     monkeypatch.delenv("CLAUDE_CLI_COMMAND", raising=False)
     monkeypatch.delenv("CLAUDE_CLI_EFFORT", raising=False)
     monkeypatch.delenv("CLAUDE_CLI_MODEL", raising=False)
+    monkeypatch.delenv("CLAUDE_CLI_ALLOWED_TOOLS", raising=False)
 
     specs = {spec.slot: spec for spec in default_agent_specs()}
 
@@ -77,6 +78,8 @@ def test_default_agent_specs_use_local_claude_cli_when_anthropic_api_key_is_miss
         "claude-opus-4-8",
         "--effort",
         "high",
+        "--allowedTools",
+        "WebSearch,WebFetch",
         "{prompt}",
     ]
     assert specs["Opus 4.8"].prefer_bridge is True

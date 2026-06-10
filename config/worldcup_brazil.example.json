@@ -24,7 +24,12 @@
     "default_draw_pct": 24.0,
     "rating_scale": 400.0,
     "rating_source": "team_ratings seed configurados para as 48 seleções; modelos podem ajustar com fontes frescas via team_context; fallback por posição só se o groups.config mudar",
-    "default_position_ratings": [1600, 1500, 1450, 1400],
+    "default_position_ratings": [
+      1600,
+      1500,
+      1450,
+      1400
+    ],
     "rating_uncertainty_enabled": true,
     "rating_uncertainty_outer_samples": 200,
     "rating_uncertainty_inner_iterations": 200,
@@ -181,7 +186,9 @@
       "env_api_key": "GEMINI_API_KEY",
       "endpoint": "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
       "browser_command": null,
-      "model_fallbacks": ["gemini-3.1-flash-lite"],
+      "model_fallbacks": [
+        "gemini-3.1-flash-lite"
+      ],
       "prefer_bridge": true,
       "reasoning_effort": "high",
       "notes": "Se o binário gemini estiver no PATH, o script prefere Gemini CLI com gemini-3.5-flash: gemini --skip-trust -p {prompt} --output-format text --approval-mode plan -m GEMINI_MODEL. Se o CLI/API falhar, tenta gemini-3.1-flash-lite antes de remover o Gemini da sala. Para API HTTP primária, use GEMINI_PREFER_BRIDGE=false.",
@@ -315,5 +322,7 @@
       "brazil_pct": 48.0,
       "qualitative_shift_pct": 0.0
     }
-  ]
+  ],
+  "exclude_slots_failing_preflight": true,
+  "allow_informed_agreement_votes": true
 }
