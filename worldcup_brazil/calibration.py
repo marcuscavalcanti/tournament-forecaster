@@ -167,9 +167,15 @@ def prediction_records_from_bundle(
     artifact_path: str = "",
 ) -> list[dict[str, Any]]:
     generated_at_iso = str(getattr(bundle, "generated_at_iso", "") or "")
+    bundle_metadata = getattr(bundle, "metadata", {}) or {}
+    monte_carlo_meta = bundle_metadata.get("monte_carlo") or {}
+    funnel_source = "monte_carlo_funnel" if monte_carlo_meta.get("enabled") else "consensus_heuristic"
     records: list[dict[str, Any]] = []
     for stage, probability in (getattr(bundle, "stage_probabilities", {}) or {}).items():
         target_type = "title" if stage == "titulo" else "stage_reach"
+        stage_metadata: dict[str, Any] = {"probability_source": funnel_source}
+        if stage == "titulo":
+            stage_metadata["room_consensus_title_pct"] = bundle_metadata.get("agent_title_consensus_pct")
         records.append(
             _pending_record(
                 run_id=run_id,
@@ -179,6 +185,7 @@ def prediction_records_from_bundle(
                 phase=str(stage),
                 predicted_pct=float(probability),
                 artifact_path=artifact_path,
+                metadata=stage_metadata,
             )
         )
     for match in [

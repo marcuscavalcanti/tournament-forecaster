@@ -22,6 +22,14 @@ AGENT_WEIGHTS = {
 }
 
 
+class DegenerateConsensusError(RuntimeError):
+    """Sala sem nenhum voto com peso válido; consenso não pode ser fabricado a partir de fallbacks.
+
+    Regressão histórica: no run de 10/jun/2026 a sala terminou com 0 votos válidos e o
+    fallback degenerado publicou a média dos baselines sintéticos (11.0%) como consenso.
+    """
+
+
 def _looks_removed_or_unusable(opinion: AgentOpinion) -> bool:
     if bool(getattr(opinion, "removed_from_main", False)):
         return True
@@ -188,11 +196,10 @@ def build_consensus(
         voting_title_values.append(by_agent[agent].title_pct)
 
     if denominator <= 0.0:
-        title_values = [by_agent[agent].title_pct for agent in slots]
-        title_pct = round(sum(title_values) / len(title_values), 1)
-        voting_title_values = title_values
-    else:
-        title_pct = round(numerator / denominator, 1)
+        raise DegenerateConsensusError(
+            "nenhum voto com peso válido entre os slots: " + ", ".join(slots)
+        )
+    title_pct = round(numerator / denominator, 1)
     title_values = voting_title_values
     dispersion_pct = round(max(title_values) - min(title_values), 1)
 

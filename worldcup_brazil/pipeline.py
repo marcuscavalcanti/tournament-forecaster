@@ -20,7 +20,12 @@ from worldcup_brazil.bracket import (
     hydrate_canonical_configs,
     invalid_configured_knockout_opponents,
 )
-from worldcup_brazil.consensus import AgentOpinion, build_consensus
+from worldcup_brazil.consensus import (
+    AgentOpinion,
+    Consensus,
+    DegenerateConsensusError,
+    build_consensus,
+)
 from worldcup_brazil.meeting import (
     _counts_as_consensus_participant,
     _enough_peer_acceptances,
@@ -928,6 +933,10 @@ class ReportCoherenceError(RuntimeError):
     """Raised when the final report would publish internally inconsistent probabilities."""
 
 
+class MeetingConsensusError(RuntimeError):
+    """Raised when the meeting cannot produce a valid consensus (sterile room or ceiling without valid votes)."""
+
+
 def load_config(path: Path | None) -> dict[str, Any]:
     if path is None:
         return {}
@@ -1621,7 +1630,7 @@ def _stage_probabilities(title_pct: float, config: dict[str, Any]) -> dict[str, 
             "quartas": round(float(stages.get("quartas", title_pct * 5.9)), 1),
             "semifinal": round(float(stages.get("semifinal", title_pct * 3.7)), 1),
             "final": round(float(stages.get("final", title_pct * 2.05)), 1),
-            "titulo": round(float(title_pct), 1),
+            "titulo": round(float(stages.get("titulo", title_pct)), 1),
         }
     return {
         "quartas": round(min(95.0, max(0.0, title_pct * 5.9)), 1),
@@ -2446,6 +2455,21 @@ def _mentions_unconfigured_group_opponent(question: str, config: dict[str, Any])
     return bool(mentioned - allowed)
 
 
+def _format_impossible_opponent_reason(detail: dict[str, Any] | None) -> str:
+    base = "citar adversário impossível para o cruzamento oficial"
+    if not isinstance(detail, dict):
+        return base
+    phase = str(detail.get("phase", "")).strip()
+    invalid = ", ".join(str(item) for item in (detail.get("invalid_opponents") or [])[:4])
+    allowed = ", ".join(str(item) for item in (detail.get("allowed_opponents") or [])[:8])
+    if not phase or not invalid:
+        return base
+    suffix = f" ({phase}: citou {invalid}"
+    if allowed:
+        suffix += f"; permitidos: {allowed}"
+    return base + suffix + ")"
+
+
 def _impossible_bracket_opponent_detail(text: str, config: dict[str, Any]) -> dict[str, Any] | None:
     segments = _phase_scoped_bracket_segments(text, config)
     if not segments:
@@ -2626,7 +2650,8 @@ def _sanitize_main_meeting_opinions(
             )
         )
         has_reserved_benchmark = _has_opta_marker(combined)
-        has_impossible_bracket_opponent = bool(config and _impossible_bracket_opponent_detail(combined, config))
+        impossible_bracket_detail = _impossible_bracket_opponent_detail(combined, config) if config else None
+        has_impossible_bracket_opponent = bool(impossible_bracket_detail)
         has_unconfigured_group_opponent = bool(config and _mentions_unconfigured_opponent(combined, config))
         has_unusable_payload = any(
             marker in _normalize_text(combined)
@@ -2663,7 +2688,7 @@ def _sanitize_main_meeting_opinions(
         if has_reserved_benchmark:
             removal_reason = "tentar usar benchmark reservado"
         elif has_impossible_bracket_opponent:
-            removal_reason = "citar adversário impossível para o cruzamento oficial"
+            removal_reason = _format_impossible_opponent_reason(impossible_bracket_detail)
         elif has_unconfigured_group_opponent:
             removal_reason = "citar adversário de grupo fora do JSON configurado"
         elif has_unusable_payload:
@@ -2977,7 +3002,8 @@ def _next_peer_after_invalid_protagonist_question(turn: dict[str, Any], *, curre
         response
         for response in turn.get("responses", [])
         if (
-            (not bool(response.get("used_fallback", False)) or int(response.get("source_count", 0) or 0) > 0)
+            not bool(response.get("removed_from_main", False))
+            and (not bool(response.get("used_fallback", False)) or int(response.get("source_count", 0) or 0) > 0)
             and str(response.get("agent", "")) != current_protagonist
         )
     ]
@@ -3025,6 +3051,9 @@ async def _run_model_meeting(
     breaker_threshold = max(1, int(config.get("meeting_slot_breaker_threshold", 3)))
     stability_delta_pp = float(config.get("meeting_stability_delta_pp", 1.0))
     stability_rounds_required = max(1, int(config.get("meeting_stability_rounds", 2)))
+    sterile_round_limit = max(1, int(config.get("meeting_sterile_round_limit", 2)))
+    max_reentries_per_slot = max(0, int(config.get("meeting_max_reentries_per_slot", 1)))
+    probe_max_attempts = max(1, int(config.get("agent_reentry_probe_max_attempts", 2)))
     active_slots = _slots_from_specs(agent_specs)
     reentry_enabled = bool(config.get("agent_reentry_probe_enabled", False))
     reentry_timeout = int(config.get("agent_reentry_probe_timeout_seconds", 180))
@@ -3043,6 +3072,13 @@ async def _run_model_meeting(
     consecutive_invalid: dict[str, int] = {slot: 0 for slot in active_slots}
     stable_rounds = 0
     previous_consensus_title: float | None = None
+    consecutive_sterile = 0
+    last_round_consensus_valid = False
+    exited_with_consensus = False
+    breaker_counts: dict[str, int] = {}
+    reentry_counts: dict[str, int] = {}
+    probe_attempts: dict[str, int] = {}
+    fallback_question_streak: dict[str, int] = {}
 
     if watchdog:
         watchdog.start("model_meeting", detail=f"starting dynamic meeting with protagonist {protagonist}")
@@ -3053,6 +3089,33 @@ async def _run_model_meeting(
         for slot, spec in list(reentry_candidates.items()):
             if slot in active_slots or slot in pending_reentry_tasks:
                 continue
+            if reentry_counts.get(slot, 0) >= max_reentries_per_slot:
+                reentry_candidates.pop(slot, None)
+                if watchdog:
+                    watchdog.event(
+                        "model_room",
+                        "reentry_cooldown",
+                        detail=(
+                            f"{slot} já usou {reentry_counts.get(slot, 0)} reentrada(s) "
+                            f"(limite {max_reentries_per_slot}); fora até o fim do run"
+                        ),
+                        extra={"round": round_index, "agent": slot},
+                    )
+                continue
+            if probe_attempts.get(slot, 0) >= probe_max_attempts:
+                reentry_candidates.pop(slot, None)
+                if watchdog:
+                    watchdog.event(
+                        "model_room",
+                        "reentry_probe_budget",
+                        detail=(
+                            f"{slot} esgotou {probe_attempts.get(slot, 0)} tentativa(s) de probe "
+                            f"(limite {probe_max_attempts}); sem novas sondagens neste run"
+                        ),
+                        extra={"round": round_index, "agent": slot},
+                    )
+                continue
+            probe_attempts[slot] = probe_attempts.get(slot, 0) + 1
             reason = reentry_removed_reasons.get(slot, "sem resposta externa verificável")
             pending_reentry_tasks[slot] = asyncio.create_task(
                 _run_agent_reentry_probe(
@@ -3094,6 +3157,9 @@ async def _run_model_meeting(
                         extra={"round": round_index, "agent": slot, "reason": reason},
                     )
                 continue
+            if reentry_counts.get(slot, 0) >= max_reentries_per_slot:
+                reentry_candidates.pop(slot, None)
+                continue
             spec = reentry_candidates.pop(slot, None)
             if spec is None or slot in active_slots:
                 continue
@@ -3106,6 +3172,8 @@ async def _run_model_meeting(
             )
             protagonist_counts.setdefault(slot, 0)
             consecutive_invalid[slot] = 0
+            reentry_counts[slot] = reentry_counts.get(slot, 0) + 1
+            probe_attempts[slot] = 0
             if token_cost_ledger is not None:
                 _record_token_costs(
                     token_cost_ledger,
@@ -3148,6 +3216,16 @@ async def _run_model_meeting(
             allow_agent_fallback=allow_agent_fallback,
             timeout=protagonist_timeout,
         )
+        question_was_fallback = (
+            question_opinion is None
+            or bool(getattr(question_opinion, "used_fallback", False))
+            or bool(getattr(question_opinion, "removed_from_main", False))
+            or not str(getattr(question_opinion, "question", "") or "").strip()
+        )
+        if question_was_fallback:
+            fallback_question_streak[protagonist] = fallback_question_streak.get(protagonist, 0) + 1
+        else:
+            fallback_question_streak[protagonist] = 0
         if question_opinion is not None:
             if token_cost_ledger is not None:
                 _record_token_costs(
@@ -3236,7 +3314,50 @@ async def _run_model_meeting(
             )
         all_opinions.extend(opinions)
         consensus_opinions = [protagonist_position, *opinions]
-        consensus = build_consensus(consensus_opinions, agent_slots=active_slots)
+        try:
+            consensus = build_consensus(consensus_opinions, agent_slots=active_slots)
+            last_round_consensus_valid = True
+            consecutive_sterile = 0
+        except DegenerateConsensusError as exc:
+            last_round_consensus_valid = False
+            consecutive_sterile += 1
+            if watchdog:
+                watchdog.event(
+                    "model_room",
+                    "sterile_round",
+                    detail=(
+                        f"rodada {round_index} sem nenhum voto válido "
+                        f"({consecutive_sterile}/{sterile_round_limit} antes de abortar): {exc}"
+                    ),
+                    extra={"round": round_index, "consecutive_sterile": consecutive_sterile},
+                )
+            if consecutive_sterile >= sterile_round_limit:
+                for pending_slot, pending_task in pending_reentry_tasks.items():
+                    if not pending_task.done():
+                        pending_task.cancel()
+                if watchdog:
+                    watchdog.fail(
+                        "model_meeting",
+                        detail=(
+                            f"sala estéril: {consecutive_sterile} rodadas consecutivas sem voto válido "
+                            f"(rodada {round_index} de {max_rounds})"
+                        ),
+                    )
+                raise MeetingConsensusError(
+                    f"sala estéril: {consecutive_sterile} rodadas consecutivas sem nenhum voto válido "
+                    f"(abortada na rodada {round_index} de {max_rounds})"
+                ) from exc
+            consensus = Consensus(
+                title_pct=round(
+                    float(previous_consensus_title if previous_consensus_title is not None else baseline_title_pct),
+                    1,
+                ),
+                agent_summaries={opinion.agent: opinion.summary for opinion in consensus_opinions},
+                dispersion_pct=0.0,
+                raw_opinions=list(consensus_opinions),
+                debate_transcript=[],
+                agent_slots=tuple(active_slots),
+            )
         turn = build_meeting_turn(
             round_index=round_index,
             protagonist=protagonist,
@@ -3317,6 +3438,8 @@ async def _run_model_meeting(
                 continue
             if _counts_as_consensus_participant(vote_opinion):
                 consecutive_invalid[vote_slot] = 0
+                if vote_slot != protagonist:
+                    fallback_question_streak[vote_slot] = 0
             else:
                 consecutive_invalid[vote_slot] = consecutive_invalid.get(vote_slot, 0) + 1
         for broken_slot in [
@@ -3349,9 +3472,27 @@ async def _run_model_meeting(
                 active_count=len(active_slots),
             )
             consecutive_invalid[broken_slot] = 0
-            if reentry_enabled and removed_spec is not None and broken_slot not in reentry_candidates:
+            breaker_counts[broken_slot] = breaker_counts.get(broken_slot, 0) + 1
+            if (
+                reentry_enabled
+                and removed_spec is not None
+                and broken_slot not in reentry_candidates
+                and reentry_counts.get(broken_slot, 0) < max_reentries_per_slot
+            ):
                 reentry_candidates[broken_slot] = removed_spec
                 reentry_removed_reasons[broken_slot] = breaker_reason
+            else:
+                reentry_candidates.pop(broken_slot, None)
+                if watchdog and reentry_counts.get(broken_slot, 0) >= max_reentries_per_slot:
+                    watchdog.event(
+                        "model_room",
+                        "reentry_cooldown",
+                        detail=(
+                            f"{broken_slot} quebrou o circuit breaker {breaker_counts[broken_slot]}x; "
+                            f"limite de {max_reentries_per_slot} reentrada(s) atingido — fora até o fim do run"
+                        ),
+                        extra={"round": round_index, "agent": broken_slot, "breaker_count": breaker_counts[broken_slot]},
+                    )
             if turn["next_protagonist"] == broken_slot:
                 turn["next_protagonist"] = _next_peer_after_invalid_protagonist_question(
                     turn,
@@ -3366,6 +3507,44 @@ async def _run_model_meeting(
                         "assíncrona com fontes próprias"
                     ),
                     extra={"round": round_index, "agent": broken_slot, "active_slots": active_slots},
+                )
+
+        next_candidate = str(turn["next_protagonist"])
+        candidate_ineligible = (
+            consecutive_invalid.get(next_candidate, 0) > 0
+            or fallback_question_streak.get(next_candidate, 0) >= 2
+            or next_candidate not in active_slots
+        )
+        if candidate_ineligible:
+            rotated = _next_peer_after_invalid_protagonist_question(turn, current_protagonist=next_candidate)
+            if rotated != next_candidate and consecutive_invalid.get(rotated, 0) == 0 and rotated in active_slots:
+                turn["next_protagonist"] = rotated
+                if watchdog:
+                    watchdog.event(
+                        "model_room",
+                        "protagonist_rotation",
+                        detail=(
+                            f"{next_candidate} inelegível para protagonismo "
+                            f"(voto inválido na rodada ou {fallback_question_streak.get(next_candidate, 0)} "
+                            f"pergunta(s) fallback consecutivas); protagonismo forçado para {rotated}"
+                        ),
+                        extra={"round": round_index, "from": next_candidate, "to": rotated},
+                    )
+        if str(turn["next_protagonist"]) not in active_slots and active_slots:
+            forced = next(
+                (slot for slot in active_slots if consecutive_invalid.get(slot, 0) == 0),
+                active_slots[0],
+            )
+            turn["next_protagonist"] = forced
+            if watchdog:
+                watchdog.event(
+                    "model_room",
+                    "protagonist_rotation",
+                    detail=(
+                        f"próximo protagonista fora da sala ativa (removido pelo breaker); "
+                        f"protagonismo forçado para {forced}"
+                    ),
+                    extra={"round": round_index, "to": forced},
                 )
 
         final_consensus = consensus
@@ -3401,8 +3580,10 @@ async def _run_model_meeting(
             stable_rounds = 0
         previous_consensus_title = float(consensus.title_pct)
         if consensus_ready and coverage_ok:
+            exited_with_consensus = True
             break
         if stable_rounds >= stability_rounds_required:
+            exited_with_consensus = True
             if watchdog:
                 watchdog.event(
                     "model_room",
@@ -3442,6 +3623,20 @@ async def _run_model_meeting(
                 extra={"agent": slot},
             )
 
+    if final_consensus is None:
+        if watchdog:
+            watchdog.fail("model_meeting", detail="nenhuma rodada produziu consenso válido")
+        raise MeetingConsensusError("nenhuma rodada produziu consenso válido")
+    if not exited_with_consensus and not last_round_consensus_valid:
+        if watchdog:
+            watchdog.fail(
+                "model_meeting",
+                detail=f"teto de {max_rounds} rodadas atingido sem nenhum voto válido na rodada final",
+            )
+        raise MeetingConsensusError(
+            f"teto de {max_rounds} rodadas atingido sem nenhum voto válido na rodada final; "
+            "consenso não pode ser publicado a partir de fallbacks"
+        )
     if watchdog:
         watchdog.finish(
             "model_meeting",

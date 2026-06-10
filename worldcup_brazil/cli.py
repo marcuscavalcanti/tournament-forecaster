@@ -15,6 +15,7 @@ from worldcup_brazil.agents import (
 from worldcup_brazil.bracket import brazil_bracket_path, invalid_configured_knockout_opponents
 from worldcup_brazil.calibration import append_prediction_log, prediction_records_from_bundle
 from worldcup_brazil.pipeline import (
+    MeetingConsensusError,
     ReportCoherenceError,
     SourcePlanningQuorumError,
     build_report_bundle_sync,
@@ -416,7 +417,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"json: {json_path}")
         print(f"audit: {audit_path}")
         print(f"graph: {graph_path}")
-    except (SourcePlanningQuorumError, ReportCoherenceError) as exc:
+    except (SourcePlanningQuorumError, ReportCoherenceError, MeetingConsensusError) as exc:
         if watchdog:
             watchdog.fail("run", detail=str(exc))
         print(f"fail: {exc}", file=sys.stderr)

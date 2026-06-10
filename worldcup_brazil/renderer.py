@@ -438,7 +438,8 @@ def render_linkedin_post(bundle: ReportBundle) -> str:
     lines.append(
         "Probabilidade de título: "
         f"{_fmt_pct(bundle.stage_probabilities.get('titulo', 0.0))} "
-        "- consenso final dos modelos ativos na sala, sem empurrar a tese para 'Brasil campeão'."
+        "- funil único da simulação de chave, reconciliado com os sinais auditáveis da sala; "
+        "a leitura direta dos modelos aparece em 'Palpites por modelo'."
         f"{_stage_ci(bundle, 'titulo')}"
     )
     lines.append("")
@@ -736,7 +737,7 @@ def render_decision_flow_svg(bundle: ReportBundle) -> str:
     boxes = [
         ("1", "Fontes + eventos", "fontes próprias e eventos recentes com fonte, data e efeito"),
         ("2", "Sala multi-modelo", f"{rounds} rodadas; protagonismo por discordância ou mérito"),
-        ("3", "Consenso principal", f"Brasil título {_fmt_pct(model_title)}"),
+        ("3", "Funil final (simulação + sala)", f"Brasil título {_fmt_pct(model_title)}"),
         ("4", "Auditoria", "fontes, custos, influência, participação e nome/versão declarados"),
     ]
     box_svg = []

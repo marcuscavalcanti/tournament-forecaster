@@ -98,7 +98,11 @@ def test_blend_match_estimate_preserves_exact_percentage_with_multiple_sources()
     assert estimate.brazil_pct == 59.0
 
 
-def test_stage_probabilities_use_monte_carlo_reach_but_keep_consensus_title() -> None:
+def test_stage_probabilities_use_single_monte_carlo_funnel_including_title() -> None:
+    """Regressão do run de 10/jun/2026: o funil misturava fases do Monte Carlo com título
+    do consenso da sala e tentou publicar titulo=11.0% > final=2.7%. Funil agora é único:
+    com Monte Carlo ativo, o título também vem da simulação; a leitura da sala fica em
+    metadata/palpites e só influencia o funil via sinais de contexto reconciliados."""
     probabilities = _stage_probabilities(
         11.2,
         {
@@ -119,5 +123,6 @@ def test_stage_probabilities_use_monte_carlo_reach_but_keep_consensus_title() ->
         "quartas": 62.0,
         "semifinal": 38.0,
         "final": 21.0,
-        "titulo": 11.2,
+        "titulo": 8.0,
     }
+    assert probabilities["titulo"] <= probabilities["final"]

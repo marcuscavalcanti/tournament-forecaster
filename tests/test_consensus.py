@@ -329,3 +329,26 @@ def test_parse_agent_opinion_sanitizes_fenced_partial_json_and_scratch_text() ->
     assert "JSON parcial" in opinion.answer
     assert "```json" not in opinion.answer
     assert "Wait" not in opinion.answer
+
+
+def test_build_consensus_raises_when_no_valid_votes() -> None:
+    """Regressão do run de 10/jun/2026: sala sem voto válido publicou média dos
+    baselines sintéticos (11.0%). Peso total zero agora levanta erro tipado."""
+    import pytest
+
+    from worldcup_brazil.consensus import DegenerateConsensusError
+
+    slots = ("GPT 5.5", "Perplexity Pro", "Gemini Pro")
+    opinions = [
+        AgentOpinion(
+            agent=agent,
+            title_pct=11.0,
+            summary="Resposta removida do Modelo Principal por falha operacional.",
+            used_fallback=True,
+            removed_from_main=True,
+        )
+        for agent in slots
+    ]
+
+    with pytest.raises(DegenerateConsensusError):
+        build_consensus(opinions, agent_slots=slots)

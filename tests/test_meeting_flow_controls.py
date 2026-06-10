@@ -1,9 +1,15 @@
 import asyncio
 from datetime import datetime, timezone
 
+import pytest
+
 from worldcup_brazil.agents import AgentSpec
 from worldcup_brazil.consensus import AgentOpinion
-from worldcup_brazil.pipeline import _run_model_meeting
+from worldcup_brazil.pipeline import (
+    MeetingConsensusError,
+    _format_impossible_opponent_reason,
+    _run_model_meeting,
+)
 
 
 def _specs() -> list[AgentSpec]:
@@ -274,3 +280,364 @@ def test_protagonist_question_uses_dedicated_timeout(monkeypatch) -> None:
 
     assert question_timeouts == [33]
     assert response_timeouts == [222]
+
+
+def test_meeting_aborts_with_error_after_consecutive_sterile_rounds(monkeypatch) -> None:
+    """Regressão do run de 10/jun/2026: a sala rodou 18 rodadas com 95/97 respostas
+    removidas e publicou consenso fabricado de fallbacks. Sala sem nenhum voto válido
+    por N rodadas consecutivas agora aborta com MeetingConsensusError."""
+    config = {
+        **_base_config(),
+        "meeting_min_rounds": 1,
+        "meeting_max_rounds": 8,
+        "meeting_sterile_round_limit": 2,
+        "meeting_slot_breaker_threshold": 99,
+        "meeting_stability_rounds": 99,
+    }
+
+    async def fake_call_agent(spec, prompt, **kwargs):
+        return _invalid_response(spec.slot)
+
+    async def fake_call_all_agents(prompt, *, specs, **kwargs):
+        return [_invalid_response(spec.slot) for spec in specs]
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_agent", fake_call_agent)
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+
+    with pytest.raises(MeetingConsensusError):
+        asyncio.run(
+            _run_model_meeting(
+                config=config,
+                planning_opinions=_planning_opinions(),
+                generated_at=datetime(2026, 6, 14, tzinfo=timezone.utc),
+                agent_specs=_specs(),
+                baseline_title_pct=11.0,
+                allow_agent_fallback=True,
+                watchdog=None,
+            )
+        )
+
+
+def test_zombie_protagonist_loses_leadership_after_invalid_round(monkeypatch) -> None:
+    """Regressão do run de 10/jun/2026: Gemini segurou o protagonismo por 10 rodadas
+    sem nenhum voto válido porque 'não houve discordância útil'. Protagonista com voto
+    inválido na rodada perde a liderança para o melhor respondente válido."""
+    config = {
+        **_base_config(),
+        "meeting_min_rounds": 1,
+        "meeting_max_rounds": 4,
+        "meeting_consensus_threshold_pct": 0.01,
+        "meeting_stability_rounds": 99,
+        "meeting_slot_breaker_threshold": 99,
+    }
+
+    async def fake_call_agent(spec, prompt, **kwargs):
+        if spec.slot == "GPT 5.5":
+            return _invalid_response("GPT 5.5")
+        return _healthy_question_opinion(spec.slot)
+
+    async def fake_call_all_agents(prompt, *, specs, **kwargs):
+        return [
+            _healthy_response(spec.slot, 9.0 if spec.slot == "Gemini Pro" else 10.0)
+            for spec in specs
+        ]
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_agent", fake_call_agent)
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+
+    _consensus, _opinions, transcript, _all = asyncio.run(
+        _run_model_meeting(
+            config=config,
+            planning_opinions=_planning_opinions(),
+            generated_at=datetime(2026, 6, 14, tzinfo=timezone.utc),
+            agent_specs=_specs(),
+            baseline_title_pct=11.0,
+            allow_agent_fallback=True,
+            watchdog=None,
+        )
+    )
+
+    assert transcript[0]["protagonist"] == "GPT 5.5"
+    assert transcript[1]["protagonist"] != "GPT 5.5"
+
+
+def test_slot_broken_twice_stays_out_for_rest_of_run(monkeypatch) -> None:
+    """Regressão da porta giratória de 10/jun/2026: slot removido pelo breaker era
+    readmitido pelo probe e removido de novo, em ciclo. Agora: 1 reentrada por run;
+    quebrou de novo, fora até o fim."""
+    config = {
+        **_base_config(),
+        "meeting_min_rounds": 1,
+        "meeting_max_rounds": 8,
+        "meeting_consensus_threshold_pct": 0.01,
+        "meeting_stability_rounds": 99,
+        "meeting_slot_breaker_threshold": 2,
+        "agent_reentry_probe_enabled": True,
+        "meeting_max_reentries_per_slot": 1,
+        "agent_reentry_probe_max_attempts": 8,
+    }
+    readmitted_opinion = AgentOpinion(
+        agent="Perplexity Pro",
+        title_pct=10.1,
+        summary="Plano novo com fontes próprias.",
+        source_urls=["https://example.com/reentry"],
+    )
+
+    async def fake_probe(*, spec, config, generated_at, baseline_title_pct, removed_reason, timeout):
+        return readmitted_opinion, "", "prompt de reentrada"
+
+    async def fake_call_agent(spec, prompt, **kwargs):
+        return _healthy_question_opinion(spec.slot)
+
+    async def fake_call_all_agents(prompt, *, specs, **kwargs):
+        opinions = []
+        for spec in specs:
+            if spec.slot == "Perplexity Pro":
+                opinions.append(_invalid_response("Perplexity Pro"))
+            else:
+                opinions.append(_healthy_response(spec.slot, 9.0 if spec.slot == "Gemini Pro" else 10.0))
+        return opinions
+
+    monkeypatch.setattr("worldcup_brazil.pipeline._run_agent_reentry_probe", fake_probe)
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_agent", fake_call_agent)
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+
+    _consensus, _opinions, transcript, _all = asyncio.run(
+        _run_model_meeting(
+            config=config,
+            planning_opinions=_planning_opinions(),
+            generated_at=datetime(2026, 6, 14, tzinfo=timezone.utc),
+            agent_specs=_specs(),
+            baseline_title_pct=11.0,
+            allow_agent_fallback=True,
+            watchdog=None,
+        )
+    )
+
+    rounds_with_perplexity = [
+        index
+        for index, turn in enumerate(transcript)
+        if "Perplexity Pro" in {response["agent"] for response in turn["responses"]}
+    ]
+    assert 0 in rounds_with_perplexity
+    assert any(index >= 2 for index in rounds_with_perplexity), "reentrada única deveria ter acontecido"
+    assert rounds_with_perplexity[-1] < len(transcript) - 2, "após a segunda quebra o slot não pode voltar"
+
+
+def test_reentry_probe_attempts_are_capped(monkeypatch) -> None:
+    config = {
+        **_base_config(),
+        "meeting_min_rounds": 1,
+        "meeting_max_rounds": 8,
+        "meeting_consensus_threshold_pct": 0.01,
+        "meeting_stability_rounds": 99,
+        "meeting_slot_breaker_threshold": 2,
+        "agent_reentry_probe_enabled": True,
+        "agent_reentry_probe_max_attempts": 2,
+    }
+    probe_calls: list[str] = []
+
+    async def fake_probe(*, spec, config, generated_at, baseline_title_pct, removed_reason, timeout):
+        probe_calls.append(spec.slot)
+        return None, "HTTP 429", ""
+
+    async def fake_call_agent(spec, prompt, **kwargs):
+        return _healthy_question_opinion(spec.slot)
+
+    async def fake_call_all_agents(prompt, *, specs, **kwargs):
+        opinions = []
+        for spec in specs:
+            if spec.slot == "Perplexity Pro":
+                opinions.append(_invalid_response("Perplexity Pro"))
+            else:
+                opinions.append(_healthy_response(spec.slot, 9.0 if spec.slot == "Gemini Pro" else 10.0))
+        return opinions
+
+    monkeypatch.setattr("worldcup_brazil.pipeline._run_agent_reentry_probe", fake_probe)
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_agent", fake_call_agent)
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+
+    asyncio.run(
+        _run_model_meeting(
+            config=config,
+            planning_opinions=_planning_opinions(),
+            generated_at=datetime(2026, 6, 14, tzinfo=timezone.utc),
+            agent_specs=_specs(),
+            baseline_title_pct=11.0,
+            allow_agent_fallback=True,
+            watchdog=None,
+        )
+    )
+
+    assert probe_calls.count("Perplexity Pro") == 2
+
+
+def test_format_impossible_opponent_reason_includes_phase_country_and_candidates() -> None:
+    reason = _format_impossible_opponent_reason(
+        {
+            "phase": "Oitavas",
+            "invalid_opponents": ["França"],
+            "allowed_opponents": ["Alemanha", "Equador", "Senegal"],
+        }
+    )
+    assert reason.startswith("citar adversário impossível para o cruzamento oficial")
+    assert "Oitavas" in reason
+    assert "França" in reason
+    assert "Alemanha" in reason
+
+
+def test_breaker_removing_protagonist_in_sterile_round_raises_typed_error(monkeypatch) -> None:
+    """Regressão da revisão pós-fix: breaker removendo o protagonista numa rodada estéril
+    abaixo do limite deixava um slot fora da sala como próximo protagonista e estourava
+    ValueError cru no build_consensus da rodada seguinte. Agora: ou o protagonismo é
+    forçado para um slot ativo, ou a sala aborta com MeetingConsensusError tipado."""
+    config = {
+        **_base_config(),
+        "meeting_min_rounds": 1,
+        "meeting_max_rounds": 8,
+        "meeting_sterile_round_limit": 3,
+        "meeting_slot_breaker_threshold": 2,
+        "meeting_stability_rounds": 99,
+    }
+
+    async def fake_call_agent(spec, prompt, **kwargs):
+        return _invalid_response(spec.slot)
+
+    async def fake_call_all_agents(prompt, *, specs, **kwargs):
+        return [_invalid_response(spec.slot) for spec in specs]
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_agent", fake_call_agent)
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+
+    with pytest.raises(MeetingConsensusError):
+        asyncio.run(
+            _run_model_meeting(
+                config=config,
+                planning_opinions=_planning_opinions(),
+                generated_at=datetime(2026, 6, 14, tzinfo=timezone.utc),
+                agent_specs=_specs(),
+                baseline_title_pct=11.0,
+                allow_agent_fallback=True,
+                watchdog=None,
+            )
+        )
+
+
+def test_planning_removed_slot_respects_reentry_cooldown(monkeypatch) -> None:
+    """Regressão da revisão pós-fix: candidatos de reentrada vindos do PLANEJAMENTO
+    ignoravam meeting_max_reentries_per_slot (max=1 permitia 2 reentradas). O cooldown
+    agora conta reentradas efetivas, valendo para qualquer origem do candidato."""
+    config = {
+        **_base_config(),
+        "meeting_min_rounds": 1,
+        "meeting_max_rounds": 8,
+        "meeting_consensus_threshold_pct": 0.01,
+        "meeting_stability_rounds": 99,
+        "meeting_slot_breaker_threshold": 2,
+        "agent_reentry_probe_enabled": True,
+        "meeting_max_reentries_per_slot": 1,
+        "agent_reentry_probe_max_attempts": 8,
+    }
+    perplexity_spec = next(spec for spec in _specs() if spec.slot == "Perplexity Pro")
+    active_specs = [spec for spec in _specs() if spec.slot != "Perplexity Pro"]
+    planning = [opinion for opinion in _planning_opinions() if opinion.agent != "Perplexity Pro"]
+    readmitted_opinion = AgentOpinion(
+        agent="Perplexity Pro",
+        title_pct=10.1,
+        summary="Plano novo com fontes próprias.",
+        source_urls=["https://example.com/reentry"],
+    )
+
+    async def fake_probe(*, spec, config, generated_at, baseline_title_pct, removed_reason, timeout):
+        return readmitted_opinion, "", "prompt de reentrada"
+
+    async def fake_call_agent(spec, prompt, **kwargs):
+        return _healthy_question_opinion(spec.slot)
+
+    async def fake_call_all_agents(prompt, *, specs, **kwargs):
+        opinions = []
+        for spec in specs:
+            if spec.slot == "Perplexity Pro":
+                opinions.append(_invalid_response("Perplexity Pro"))
+            else:
+                opinions.append(_healthy_response(spec.slot, 9.0 if spec.slot == "Gemini Pro" else 10.0))
+        return opinions
+
+    monkeypatch.setattr("worldcup_brazil.pipeline._run_agent_reentry_probe", fake_probe)
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_agent", fake_call_agent)
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+
+    _consensus, _opinions, transcript, _all = asyncio.run(
+        _run_model_meeting(
+            config=config,
+            planning_opinions=planning,
+            generated_at=datetime(2026, 6, 14, tzinfo=timezone.utc),
+            agent_specs=active_specs,
+            baseline_title_pct=11.0,
+            allow_agent_fallback=True,
+            watchdog=None,
+            reentry_candidate_specs=[perplexity_spec],
+            reentry_removed_reasons={"Perplexity Pro": "removido no planejamento"},
+        )
+    )
+
+    rounds_with_perplexity = [
+        index
+        for index, turn in enumerate(transcript)
+        if "Perplexity Pro" in {response["agent"] for response in turn["responses"]}
+    ]
+    assert rounds_with_perplexity, "a única reentrada permitida deveria ter acontecido"
+    assert rounds_with_perplexity[-1] < len(transcript) - 2, (
+        "após quebrar pós-reentrada, slot vindo do planejamento não pode voltar"
+    )
+
+
+def test_production_shape_fallback_question_increments_streak(monkeypatch) -> None:
+    """Regressão da revisão pós-fix: o fallback de produção carrega pergunta enlatada
+    NÃO-vazia, que era classificada como pergunta válida e resetava o streak. A detecção
+    agora considera used_fallback/removed_from_main."""
+    config = {
+        **_base_config(),
+        "meeting_min_rounds": 1,
+        "meeting_max_rounds": 4,
+        "meeting_consensus_threshold_pct": 0.01,
+        "meeting_stability_rounds": 99,
+        "meeting_slot_breaker_threshold": 99,
+    }
+    canned_question = "Qual premissa ainda precisa de evidência externa antes de mover o consenso?"
+
+    async def fake_call_agent(spec, prompt, **kwargs):
+        if spec.slot == "GPT 5.5":
+            return AgentOpinion(
+                agent="GPT 5.5",
+                title_pct=11.0,
+                summary="Fallback operacional com pergunta enlatada.",
+                question=canned_question,
+                answer="Falha operacional sem resposta externa utilizável.",
+                used_fallback=True,
+            )
+        return _healthy_question_opinion(spec.slot)
+
+    async def fake_call_all_agents(prompt, *, specs, **kwargs):
+        return [
+            _healthy_response(spec.slot, 9.0 if spec.slot == "Gemini Pro" else 10.0)
+            for spec in specs
+        ]
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_agent", fake_call_agent)
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+
+    _consensus, _opinions, transcript, _all = asyncio.run(
+        _run_model_meeting(
+            config=config,
+            planning_opinions=_planning_opinions(),
+            generated_at=datetime(2026, 6, 14, tzinfo=timezone.utc),
+            agent_specs=_specs(),
+            baseline_title_pct=11.0,
+            allow_agent_fallback=True,
+            watchdog=None,
+        )
+    )
+
+    assert transcript[0]["protagonist"] == "GPT 5.5"
+    assert transcript[1]["protagonist"] != "GPT 5.5"
