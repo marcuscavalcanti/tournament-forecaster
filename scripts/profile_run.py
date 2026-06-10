@@ -25,7 +25,7 @@ def load_events(path: Path) -> list[dict]:
     return events
 
 
-def pick_run(events: list[dict], run_id: str | None) -> tuple[str, list[dict]]:
+def pick_run(events: list[dict], run_id: str | None, *, successful_only: bool = False) -> tuple[str, list[dict]]:
     by_run: dict[str, list[dict]] = defaultdict(list)
     for event in events:
         by_run[str(event.get("run_id", ""))].append(event)
@@ -33,12 +33,15 @@ def pick_run(events: list[dict], run_id: str | None) -> tuple[str, list[dict]]:
         if run_id not in by_run:
             raise SystemExit(f"run_id {run_id} não encontrado em {len(by_run)} runs")
         return run_id, by_run[run_id]
-    complete = [
-        (rid, run)
-        for rid, run in by_run.items()
-        if any(e.get("step") == "render_post" and e.get("status") == "finish" for e in run)
-    ]
-    pool = complete or list(by_run.items())
+    pool = list(by_run.items())
+    if successful_only:
+        pool = [
+            (rid, run)
+            for rid, run in by_run.items()
+            if any(e.get("step") == "render_post" and e.get("status") == "finish" for e in run)
+        ]
+        if not pool:
+            raise SystemExit("nenhum run bem-sucedido encontrado no watchdog")
     rid, run = sorted(pool, key=lambda kv: kv[1][-1].get("timestamp", ""))[-1]
     return rid, run
 
@@ -113,6 +116,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Breakdown de tempo por etapa/rodada a partir do watchdog JSONL.")
     parser.add_argument("--watchdog-log", default="data/watchdog.jsonl")
     parser.add_argument("--run-id", default=None)
+    parser.add_argument(
+        "--successful",
+        action="store_true",
+        help="Perfil do último run bem-sucedido. Por padrão usa o run mais recente, inclusive falho.",
+    )
     args = parser.parse_args()
 
     path = Path(args.watchdog_log)
@@ -121,10 +129,15 @@ def main() -> int:
     events = load_events(path)
     if not events:
         raise SystemExit("watchdog log vazio")
-    run_id, run = pick_run(events, args.run_id)
+    run_id, run = pick_run(events, args.run_id, successful_only=args.successful)
 
     first, last = _parse_ts(str(run[0]["timestamp"])), _parse_ts(str(run[-1]["timestamp"]))
     print(f"run: {run_id}")
+    final_detail = str(run[-1].get("detail", "") or "").strip()
+    status_line = f"{run[-1].get('step', '')} {run[-1].get('status', '')}".strip()
+    if final_detail:
+        status_line += f" - {final_detail}"
+    print(f"status: {status_line}")
     print(f"TOTAL: {(last - first).total_seconds():.0f}s ({run[0]['timestamp']} -> {run[-1]['timestamp']})")
     print()
     print("etapa | duração")

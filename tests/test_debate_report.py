@@ -3,7 +3,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-from worldcup_brazil.debate_report import find_latest_run_json, render_debate_report
+from worldcup_brazil.debate_report import (
+    find_latest_run_json,
+    latest_failed_watchdog_run_after_json,
+    render_debate_report,
+    render_failed_watchdog_run_report,
+)
 
 
 def _turn(round_index: int, protagonist: str, question: str, agent: str, answer: str) -> dict:
@@ -223,7 +228,14 @@ def test_debate_script_entrypoint_renders_latest_json(tmp_path: Path) -> None:
 
     root = Path(__file__).resolve().parents[1]
     result = subprocess.run(
-        [sys.executable, "scripts/render_debate_report.py", "--output-dir", str(output_dir)],
+        [
+            sys.executable,
+            "scripts/render_debate_report.py",
+            "--output-dir",
+            str(output_dir),
+            "--watchdog-log",
+            str(tmp_path / "empty_watchdog.jsonl"),
+        ],
         cwd=root,
         text=True,
         capture_output=True,
@@ -233,3 +245,111 @@ def test_debate_script_entrypoint_renders_latest_json(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert "Debate das salas" in result.stdout
     assert "Run: 2026-06-09T18:58:59+00:00" in result.stdout
+
+
+def test_debate_report_detects_newer_failed_watchdog_run_than_latest_json(tmp_path: Path) -> None:
+    output_dir = tmp_path / "outputs"
+    output_dir.mkdir()
+    latest_json = output_dir / "linkedin_brazil_2026-06-09.json"
+    latest_json.write_text(
+        json.dumps({"bundle": {"generated_at_iso": "2026-06-09T18:58:59+00:00"}}),
+        encoding="utf-8",
+    )
+    watchdog = tmp_path / "watchdog.jsonl"
+    events = [
+        {
+            "run_id": "failed-run",
+            "timestamp": "2026-06-10T18:00:00+00:00",
+            "step": "run",
+            "status": "start",
+            "detail": "",
+        },
+        {
+            "run_id": "failed-run",
+            "timestamp": "2026-06-10T18:05:00+00:00",
+            "step": "model_meeting",
+            "status": "fail",
+            "detail": "sala estéril",
+        },
+        {
+            "run_id": "failed-run",
+            "timestamp": "2026-06-10T18:05:01+00:00",
+            "step": "run",
+            "status": "fail",
+            "detail": "sala estéril",
+        },
+    ]
+    watchdog.write_text("\n".join(json.dumps(event) for event in events), encoding="utf-8")
+
+    failed = latest_failed_watchdog_run_after_json(watchdog_log=watchdog, latest_json=latest_json)
+
+    assert failed is not None
+    run_id, run = failed
+    report = render_failed_watchdog_run_report(run_id, run, latest_json=latest_json)
+    assert "run mais recente falhou" in report
+    assert "nao esta mostrando o debate antigo" in report
+    assert "sala estéril" in report
+
+
+def test_debate_script_entrypoint_reports_failed_run_instead_of_stale_json(tmp_path: Path) -> None:
+    output_dir = tmp_path / "outputs"
+    output_dir.mkdir()
+    (output_dir / "linkedin_brazil_2026-06-09.json").write_text(
+        json.dumps(
+            {
+                "bundle": {
+                    "generated_at_iso": "2026-06-09T18:58:59+00:00",
+                    "stage_probabilities": {"titulo": 9.6},
+                    "meeting_transcript": [],
+                    "metadata": {"parallel_opponent_debriefing": {"enabled": False}},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    watchdog = tmp_path / "watchdog.jsonl"
+    events = [
+        {
+            "run_id": "failed-run",
+            "timestamp": "2026-06-10T18:00:00+00:00",
+            "step": "run",
+            "status": "start",
+        },
+        {
+            "run_id": "failed-run",
+            "timestamp": "2026-06-10T18:01:00+00:00",
+            "step": "model_room",
+            "status": "response",
+            "detail": "Resposta removida por adversário impossível.",
+            "extra": {"round": 3, "agent": "GPT 5.5"},
+        },
+        {
+            "run_id": "failed-run",
+            "timestamp": "2026-06-10T18:02:00+00:00",
+            "step": "run",
+            "status": "fail",
+            "detail": "sala estéril",
+        },
+    ]
+    watchdog.write_text("\n".join(json.dumps(event) for event in events), encoding="utf-8")
+
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/render_debate_report.py",
+            "--output-dir",
+            str(output_dir),
+            "--watchdog-log",
+            str(watchdog),
+        ],
+        cwd=root,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "run mais recente falhou" in result.stdout
+    assert "Run: 2026-06-09T18:58:59+00:00" not in result.stdout
+    assert "Resposta removida por adversário impossível" in result.stdout

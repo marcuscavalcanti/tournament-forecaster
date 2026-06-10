@@ -585,6 +585,63 @@ def test_sanitize_main_meeting_opinions_rejects_impossible_opponent_inside_phase
     assert "adversário impossível" in sanitized[0].summary
 
 
+def test_sanitize_main_meeting_opinions_does_not_treat_configured_universe_as_phase_claim() -> None:
+    config = load_config(Path("config/worldcup_brazil.example.json"))
+    opinions = [
+        AgentOpinion(
+            agent="GPT 5.5",
+            title_pct=6.9,
+            summary=(
+                "Minha posicao usa odds, rating Elo e probabilidade para Brasil e todos os adversarios "
+                "explicitamente configurados no JSON (Marrocos, Haiti, Escocia, Japao, Holanda, Equador, "
+                "Noruega, Inglaterra, Mexico, Portugal, Argentina, Alemanha e Franca) antes de refinar "
+                "16 avos e fases finais."
+            ),
+            answer=(
+                "Isso nao atribui Alemanha ou Franca aos 16 avos; e apenas o universo configurado. "
+                "Com mercado, rating e probabilidade, mantenho titulo em 6.9% e peço consenso."
+            ),
+            source_urls=["https://www.eloratings.net"],
+            agrees_with_protagonist=True,
+        )
+    ]
+
+    sanitized = _sanitize_main_meeting_opinions(
+        opinions,
+        baseline_title_pct=6.9,
+        config={**config, "require_auditable_source_urls_for_meeting_votes": True},
+    )
+
+    assert sanitized[0].used_fallback is False
+
+
+def test_sanitize_main_meeting_opinions_rejects_impossible_16_avos_claim() -> None:
+    config = load_config(Path("config/worldcup_brazil.example.json"))
+    opinions = [
+        AgentOpinion(
+            agent="GPT 5.5",
+            title_pct=6.9,
+            summary="16 avos: Alemanha é o adversário mais provável do Brasil.",
+            answer=(
+                "Discordo do bracket anterior porque odds, rating e probabilidade colocam Alemanha "
+                "contra o Brasil nos 16 avos."
+            ),
+            source_urls=["https://www.eloratings.net"],
+            agrees_with_protagonist=False,
+        )
+    ]
+
+    sanitized = _sanitize_main_meeting_opinions(
+        opinions,
+        baseline_title_pct=6.9,
+        config={**config, "require_auditable_source_urls_for_meeting_votes": True},
+    )
+
+    assert sanitized[0].used_fallback is True
+    assert "16 avos" in sanitized[0].summary
+    assert "alemanha" in sanitized[0].summary
+
+
 def test_sanitize_main_meeting_opinions_neutralizes_partial_json_title() -> None:
     opinions = [
         AgentOpinion(
@@ -644,6 +701,68 @@ def test_sanitize_main_meeting_opinions_removes_agreement_without_auditable_sour
 
     assert sanitized[0].used_fallback is True
     assert sanitized[0].title_pct == 8.0
+    assert "sem hipótese auditável" in sanitized[0].summary
+
+
+def test_sanitize_main_meeting_opinions_inherits_same_run_planning_sources_for_rational_vote() -> None:
+    opinions = [
+        AgentOpinion(
+            agent="GPT 5.5",
+            title_pct=7.1,
+            summary="Concordo parcialmente: odds de mercado e rating Elo sustentam titulo perto de 7.1%.",
+            answer=(
+                "Aceito a tese central porque odds, rating Elo, probabilidade de chave e descanso "
+                "apontam variacao menor que 1 p.p.; a pergunta pode avançar para o consenso."
+            ),
+            agrees_with_protagonist=True,
+        )
+    ]
+
+    sanitized = _sanitize_main_meeting_opinions(
+        opinions,
+        baseline_title_pct=6.9,
+        config={
+            "require_auditable_source_urls_for_meeting_votes": True,
+            "_agent_source_context_by_agent": {
+                "GPT 5.5": {
+                    "source_urls": ["https://www.eloratings.net"],
+                    "source_queries": ["Brazil World Cup 2026 odds injuries ratings"],
+                }
+            },
+        },
+    )
+
+    assert sanitized[0].used_fallback is False
+    assert sanitized[0].source_urls == ["https://www.eloratings.net"]
+    assert sanitized[0].source_queries == ["Brazil World Cup 2026 odds injuries ratings"]
+
+
+def test_sanitize_main_meeting_opinions_does_not_let_inherited_sources_replace_rationale() -> None:
+    opinions = [
+        AgentOpinion(
+            agent="GPT 5.5",
+            title_pct=7.1,
+            summary="Concordo integralmente.",
+            answer="Concordo.",
+            agrees_with_protagonist=True,
+        )
+    ]
+
+    sanitized = _sanitize_main_meeting_opinions(
+        opinions,
+        baseline_title_pct=6.9,
+        config={
+            "require_auditable_source_urls_for_meeting_votes": True,
+            "_agent_source_context_by_agent": {
+                "GPT 5.5": {
+                    "source_urls": ["https://www.eloratings.net"],
+                    "source_queries": ["Brazil World Cup 2026 odds injuries ratings"],
+                }
+            },
+        },
+    )
+
+    assert sanitized[0].used_fallback is True
     assert "sem hipótese auditável" in sanitized[0].summary
 
 

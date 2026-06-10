@@ -2436,6 +2436,59 @@ def _phase_scoped_bracket_segments(text: str, config: dict[str, Any]) -> list[tu
     return segments
 
 
+def _segment_is_generic_opponent_universe(segment: str) -> bool:
+    normalized = _normalize_text(segment)
+    generic_markers = (
+        "todos os adversarios",
+        "adversarios explicitamente configurados",
+        "adversarios configurados",
+        "cenarios configurados",
+        "universo configurado",
+        "json configurado",
+        "configurados no json",
+        "lista de adversarios",
+        "source_urls",
+        "source_queries",
+        "fontes usadas",
+        "plano de fontes",
+    )
+    return any(marker in normalized for marker in generic_markers)
+
+
+def _segment_is_explicit_bracket_claim(segment: str, phase: str) -> bool:
+    normalized = _normalize_text(segment)
+    phase_key = _normalize_text(phase).strip()
+    if not normalized or not phase_key:
+        return False
+    if _segment_is_generic_opponent_universe(normalized):
+        return False
+    if re.search(rf"\b{re.escape(phase_key)}\b\s*[:=\-]", normalized):
+        return True
+    claim_markers = (
+        "brasil x",
+        " vs ",
+        " contra ",
+        " pega ",
+        " enfrenta ",
+        " cruza ",
+        " cruzamento ",
+        " adversario ",
+        " adversarios ",
+        " candidato ",
+        " candidatos ",
+        " top-2 ",
+        " top 2 ",
+        " opcao ",
+        " opcoes ",
+        " provavel ",
+        " provaveis ",
+        " slot ",
+        " passa por ",
+        " caminho ",
+    )
+    return any(marker in f" {normalized} " for marker in claim_markers)
+
+
 def _mentions_unconfigured_opponent(text: str, config: dict[str, Any]) -> bool:
     if not _has_explicit_match_scope(config):
         return False
@@ -2476,6 +2529,8 @@ def _impossible_bracket_opponent_detail(text: str, config: dict[str, Any]) -> di
         return None
     for entry, segment in segments:
         phase = str(entry.get("phase", "")).strip()
+        if not _segment_is_explicit_bracket_claim(segment, phase):
+            continue
         mentioned = _mentioned_national_teams(segment)
         if not mentioned:
             continue
@@ -2563,6 +2618,80 @@ def _auditable_source_urls(opinion: Any) -> list[str]:
     ]
 
 
+def _auditable_source_queries(opinion: Any) -> list[str]:
+    return [
+        str(query).strip()
+        for query in (getattr(opinion, "source_queries", []) or [])
+        if str(query).strip() and not _has_opta_marker(str(query))
+    ]
+
+
+def _agent_source_context_by_agent(opinions: list[Any]) -> dict[str, dict[str, list[str]]]:
+    context: dict[str, dict[str, list[str]]] = {}
+    for opinion in opinions:
+        if getattr(opinion, "used_fallback", False) or getattr(opinion, "removed_from_main", False):
+            continue
+        agent = str(getattr(opinion, "agent", "") or "").strip()
+        if not agent:
+            continue
+        source_urls = _auditable_source_urls(opinion)
+        source_queries = _auditable_source_queries(opinion)
+        if not source_urls and not source_queries:
+            continue
+        current = context.setdefault(agent, {"source_urls": [], "source_queries": []})
+        current["source_urls"] = list(dict.fromkeys([*current["source_urls"], *source_urls]))
+        current["source_queries"] = list(dict.fromkeys([*current["source_queries"], *source_queries]))
+    return context
+
+
+def _agent_source_context(config: dict[str, Any] | None, agent: str) -> dict[str, list[str]]:
+    if not config:
+        return {"source_urls": [], "source_queries": []}
+    raw_context = config.get("_agent_source_context_by_agent", {})
+    if not isinstance(raw_context, dict):
+        return {"source_urls": [], "source_queries": []}
+    direct = raw_context.get(agent)
+    if isinstance(direct, dict):
+        return {
+            "source_urls": [str(url).strip() for url in direct.get("source_urls", []) if str(url).strip()],
+            "source_queries": [
+                str(query).strip() for query in direct.get("source_queries", []) if str(query).strip()
+            ],
+        }
+    normalized_agent = _normalize_text(agent)
+    for key, value in raw_context.items():
+        if _normalize_text(str(key)) == normalized_agent and isinstance(value, dict):
+            return {
+                "source_urls": [str(url).strip() for url in value.get("source_urls", []) if str(url).strip()],
+                "source_queries": [
+                    str(query).strip() for query in value.get("source_queries", []) if str(query).strip()
+                ],
+            }
+    return {"source_urls": [], "source_queries": []}
+
+
+def _effective_meeting_sources(opinion: Any, config: dict[str, Any] | None) -> tuple[list[str], list[str]]:
+    explicit_urls = _auditable_source_urls(opinion)
+    explicit_queries = _auditable_source_queries(opinion)
+    if explicit_urls or explicit_queries:
+        return explicit_urls, explicit_queries
+    context = _agent_source_context(config, str(getattr(opinion, "agent", "") or ""))
+    inherited_urls = [
+        url for url in context.get("source_urls", []) if _valid_http_url(url) and not _has_opta_marker(url)
+    ]
+    inherited_queries = [query for query in context.get("source_queries", []) if query and not _has_opta_marker(query)]
+    return list(dict.fromkeys(inherited_urls)), list(dict.fromkeys(inherited_queries))
+
+
+def _with_inherited_meeting_sources(opinion: Any, config: dict[str, Any] | None) -> Any:
+    if _auditable_source_urls(opinion) or _auditable_source_queries(opinion):
+        return opinion
+    source_urls, source_queries = _effective_meeting_sources(opinion, config)
+    if not source_urls and not source_queries:
+        return opinion
+    return replace(opinion, source_urls=source_urls, source_queries=source_queries)
+
+
 def _looks_like_meeting_vote(opinion: Any, combined: str) -> bool:
     normalized = _normalize_text(combined)
     if getattr(opinion, "agrees_with_protagonist", None) is not None:
@@ -2617,11 +2746,14 @@ def _has_unsupported_meeting_vote(
     if not _looks_like_meeting_vote(opinion, combined):
         return False
     cfg = config or {}
-    source_urls = _auditable_source_urls(opinion)
-    if bool(cfg.get("require_auditable_source_urls_for_meeting_votes", True)) and not source_urls:
+    source_urls, source_queries = _effective_meeting_sources(opinion, cfg)
+    if bool(cfg.get("require_auditable_source_urls_for_meeting_votes", True)) and not (
+        source_urls or source_queries
+    ):
         return True
     allowed_urls = {str(url) for url in cfg.get("_allowed_fact_source_urls", []) if str(url)}
-    if allowed_urls and source_urls and not any(url in allowed_urls for url in source_urls):
+    explicit_urls = _auditable_source_urls(opinion)
+    if allowed_urls and explicit_urls and not any(url in allowed_urls for url in explicit_urls):
         return True
     return not _has_rational_hypothesis(combined)
 
@@ -2683,7 +2815,7 @@ def _sanitize_main_meeting_opinions(
             and not has_implausible_title_jump
             and not has_unsupported_meeting_vote
         ):
-            sanitized.append(opinion)
+            sanitized.append(_with_inherited_meeting_sources(opinion, config))
             continue
         if has_reserved_benchmark:
             removal_reason = "tentar usar benchmark reservado"
@@ -4931,6 +5063,7 @@ async def build_report_bundle(
         **config,
         "_meeting_room": "main_brazil",
         "_allowed_fact_source_urls": [],
+        "_agent_source_context_by_agent": _agent_source_context_by_agent(active_planning_opinions),
     }
     opponent_debriefing_task = None
     opponent_debriefing_result: dict[str, Any] = {"enabled": False}

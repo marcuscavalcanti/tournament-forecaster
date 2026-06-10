@@ -21,7 +21,7 @@ RUN_DAILY := $(PYTHON) scripts/run_daily_worldcup_brazil.py \
 	--watchdog-log "$(WATCHDOG_LOG)" \
 	--calibration-log "$(CALIBRATION_INPUT)"
 
-DEBATE_ARGS := --output-dir "$(OUTPUT_DIR)"
+DEBATE_ARGS := --output-dir "$(OUTPUT_DIR)" --watchdog-log "$(WATCHDOG_LOG)"
 ifneq ($(strip $(DEBATE_INPUT)),)
 DEBATE_ARGS += --input "$(DEBATE_INPUT)"
 endif
@@ -72,7 +72,7 @@ calibration:
 	$(PYTHON) scripts/validate_calibration.py --input "$(CALIBRATION_INPUT)"
 
 profile:
-	$(PYTHON) scripts/profile_run.py --watchdog-log "$(WATCHDOG_LOG)"
+	$(PYTHON) scripts/profile_run.py --watchdog-log "$(WATCHDOG_LOG)" $(PROFILE_ARGS)
 
 validate:
 	$(PYTEST) -q

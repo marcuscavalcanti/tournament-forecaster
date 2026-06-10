@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +51,94 @@ def find_latest_run_json(output_dir: Path) -> Path:
     if not candidates:
         raise FileNotFoundError(f"Nenhum linkedin_brazil_*.json encontrado em {output_dir}")
     return candidates[-1]
+
+
+def _maybe_find_latest_run_json(output_dir: Path) -> Path | None:
+    try:
+        return find_latest_run_json(output_dir)
+    except FileNotFoundError:
+        return None
+
+
+def _parse_timestamp(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _payload_generated_at(path: Path | None) -> datetime | None:
+    if path is None:
+        return None
+    try:
+        payload = load_run_json(path)
+    except (OSError, json.JSONDecodeError):
+        return None
+    bundle = _bundle(payload)
+    return _parse_timestamp(bundle.get("generated_at_iso"))
+
+
+def load_watchdog_events(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    events: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict):
+            events.append(event)
+    return events
+
+
+def latest_watchdog_run(events: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]] | None:
+    by_run: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for event in events:
+        run_id = str(event.get("run_id", "") or "").strip()
+        if run_id:
+            by_run[run_id].append(event)
+    if not by_run:
+        return None
+    return sorted(by_run.items(), key=lambda item: str(item[1][-1].get("timestamp", "")))[-1]
+
+
+def _run_last_timestamp(run: list[dict[str, Any]]) -> datetime | None:
+    if not run:
+        return None
+    return _parse_timestamp(run[-1].get("timestamp"))
+
+
+def _run_failed(run: list[dict[str, Any]]) -> bool:
+    return any(event.get("step") == "run" and event.get("status") == "fail" for event in run)
+
+
+def latest_failed_watchdog_run_after_json(
+    *,
+    watchdog_log: Path,
+    latest_json: Path | None,
+) -> tuple[str, list[dict[str, Any]]] | None:
+    latest_run = latest_watchdog_run(load_watchdog_events(watchdog_log))
+    if latest_run is None:
+        return None
+    _run_id, run = latest_run
+    if not _run_failed(run):
+        return None
+    run_ts = _run_last_timestamp(run)
+    json_ts = _payload_generated_at(latest_json)
+    if run_ts is None:
+        return None
+    if json_ts is None or run_ts > json_ts:
+        return latest_run
+    return None
 
 
 def load_run_json(path: Path) -> dict[str, Any]:
@@ -287,20 +377,124 @@ def render_debate_report(payload: dict[str, Any], *, source_path: Path | None = 
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _count_control_events(run: list[dict[str, Any]]) -> dict[str, int]:
+    counters: dict[str, int] = defaultdict(int)
+    for event in run:
+        if event.get("step") not in {"model_room", "opponent_model_room"}:
+            continue
+        status = str(event.get("status", "") or "")
+        if status:
+            counters[status] += 1
+    return dict(counters)
+
+
+def _failure_events(run: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [event for event in run if event.get("status") == "fail"]
+
+
+def _chat_events(run: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        event
+        for event in run
+        if event.get("step") in {"model_room", "opponent_model_room"}
+        and event.get("status") in {"question", "response", "chat", "invalidation", "repair"}
+    ]
+
+
+def render_failed_watchdog_run_report(
+    run_id: str,
+    run: list[dict[str, Any]],
+    *,
+    latest_json: Path | None,
+) -> str:
+    first_ts = str(run[0].get("timestamp", "nao informado")) if run else "nao informado"
+    last_ts = str(run[-1].get("timestamp", "nao informado")) if run else "nao informado"
+    failures = _failure_events(run)
+    controls = _count_control_events(run)
+    latest_failure = failures[-1] if failures else {}
+    latest_json_text = str(latest_json) if latest_json else "nenhum JSON renderizado encontrado"
+    lines = [
+        "# Debate das salas - run mais recente falhou",
+        "",
+        f"Run watchdog: {run_id}",
+        f"Janela: {first_ts} -> {last_ts}",
+        f"Ultimo JSON de post: {latest_json_text}",
+        "",
+        "## Diagnostico",
+        "- O run mais recente terminou antes de renderizar um novo JSON de post.",
+        "- Este comando nao esta mostrando o debate antigo para nao mascarar a falha atual.",
+        f"- Falha final: {_compact_text(latest_failure.get('detail', 'sem detalhe estruturado'))}",
+    ]
+    if controls:
+        lines.append(
+            "- Eventos da sala: "
+            + ", ".join(f"{key}={value}" for key, value in sorted(controls.items()))
+            + "."
+        )
+    if failures:
+        lines.extend(["", "## Falhas Registradas"])
+        for event in failures[-8:]:
+            lines.append(
+                f"- {event.get('timestamp', '')} | {event.get('step', '')}: "
+                f"{_compact_text(event.get('detail', ''))}"
+            )
+    room_events = _chat_events(run)
+    if room_events:
+        lines.extend(["", "## Ultimos eventos da sala"])
+        for event in room_events[-16:]:
+            extra = event.get("extra") if isinstance(event.get("extra"), dict) else {}
+            round_text = f"rodada {extra.get('round')}" if extra.get("round") else "rodada ?"
+            actor = extra.get("agent") or extra.get("protagonist") or ""
+            actor_text = f" | {actor}" if actor else ""
+            lines.append(
+                f"- {event.get('timestamp', '')} | {event.get('step', '')}/{event.get('status', '')} "
+                f"| {round_text}{actor_text}: {_compact_text(event.get('detail', ''))}"
+            )
+    lines.extend(
+        [
+            "",
+            "## Como ler",
+            "- Rode `make profile` para medir este run falho; por padrao ele agora usa o run mais recente.",
+            "- Rode `make profile PROFILE_ARGS=\"--successful\"` se quiser comparar com o ultimo run bem-sucedido.",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Render a structured debate report for the Brazil and opponent debriefing rooms."
     )
     parser.add_argument("--input", type=Path, help="Specific linkedin_brazil_YYYY-MM-DD.json file.")
     parser.add_argument("--output-dir", type=Path, default=Path("outputs"), help="Directory containing run JSON files.")
+    parser.add_argument(
+        "--watchdog-log",
+        type=Path,
+        default=Path("data/watchdog.jsonl"),
+        help="Watchdog JSONL used to detect a newer failed run than the latest rendered JSON.",
+    )
     parser.add_argument("--output", type=Path, help="Optional markdown file to write. Defaults to stdout.")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    input_path = args.input or find_latest_run_json(args.output_dir)
-    report = render_debate_report(load_run_json(input_path), source_path=input_path)
+    input_path = args.input
+    if input_path is None:
+        input_path = _maybe_find_latest_run_json(args.output_dir)
+        failed_run = latest_failed_watchdog_run_after_json(
+            watchdog_log=args.watchdog_log,
+            latest_json=input_path,
+        )
+        if failed_run is not None:
+            run_id, run = failed_run
+            report = render_failed_watchdog_run_report(run_id, run, latest_json=input_path)
+        elif input_path is not None:
+            report = render_debate_report(load_run_json(input_path), source_path=input_path)
+        else:
+            raise FileNotFoundError(f"Nenhum linkedin_brazil_*.json encontrado em {args.output_dir}")
+    else:
+        report = render_debate_report(load_run_json(input_path), source_path=input_path)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(report, encoding="utf-8")
