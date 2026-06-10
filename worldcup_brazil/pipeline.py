@@ -1,0 +1,4976 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import math
+import os
+import re
+import unicodedata
+import urllib.parse
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
+from pathlib import Path
+from statistics import NormalDist
+from typing import Any
+
+from worldcup_brazil.agents import agent_effort_profiles, call_agent, call_all_agents, load_agent_specs_from_config
+from worldcup_brazil.bracket import (
+    annotate_knockout_matches_with_bracket,
+    brazil_bracket_path,
+    hydrate_canonical_configs,
+    invalid_configured_knockout_opponents,
+)
+from worldcup_brazil.consensus import AgentOpinion, build_consensus
+from worldcup_brazil.meeting import (
+    _counts_as_consensus_participant,
+    _enough_peer_acceptances,
+    build_meeting_turn,
+    consensus_reached,
+)
+from worldcup_brazil.models import ReportBundle
+from worldcup_brazil.monte_carlo import (
+    monte_carlo_compact_summary,
+    monte_carlo_path_gate_is_reliable,
+    run_brazil_monte_carlo,
+    widen_ci_for_monte_carlo_path_uncertainty,
+)
+from worldcup_brazil.probabilities import SourceSignal, blend_match_estimate
+from worldcup_brazil.renderer import render_linkedin_post
+from worldcup_brazil.source_memory import SourceMemory
+from worldcup_brazil.sources import (
+    EvidenceSource,
+    EvidenceResult,
+)
+from worldcup_brazil.watchdog import RunWatchdog
+
+
+DEFAULT_CUSTOM_HASHTAG = "#copaComAchismo"
+DEFAULT_USD_TO_BRL = 5.4
+DEFAULT_MODEL_PRICING_USD_PER_MILLION_TOKENS = {
+    "Opus 4.8": {"input": 15.0, "output": 75.0},
+    "GPT 5.5": {"input": 10.0, "output": 30.0},
+    "Perplexity Pro": {"input": 3.0, "output": 15.0},
+    "DeepSeek V4 Pro": {"input": 2.0, "output": 8.0},
+    "Gemini Pro": {"input": 1.25, "output": 10.0},
+}
+DEFAULT_MINIMUM_SOURCE_READY_AGENTS = 3
+DEFAULT_SOURCE_PLANNING_REPAIR_ATTEMPTS = 2
+
+
+def _effort_latency_instruction() -> str:
+    return (
+        "Use o nível de raciocínio configurado para este run e mantenha resposta rápida; responda rápido "
+        "com JSON estrito, sem cadeia de pensamento nem texto fora do formato."
+    )
+
+
+def _agent_owned_fresh_search_contract() -> str:
+    return (
+        "Contrato único da sala: todos os modelos recebem as mesmas regras, objetivo e escopo. "
+        "O mediador não faz busca externa, não escolhe fontes, não injeta evidência e não usa cache. "
+        "Cada modelo decide suas próprias fontes, faz busca atualizada no próprio canal, nunca use cache, "
+        "e registra source_urls/source_queries. Regra explícita antes da busca: dados da Opta não contam "
+        "no Modelo Principal; não inclua Opta em source_urls/source_queries, não use Opta como benchmark, "
+        "fonte, ranking, projeção ou âncora. Se fonte falhar, troque por equivalente fresca; não invente dado."
+    )
+
+
+def _is_negated_opta_mention(lowered: str, *, start: int, end: int) -> bool:
+    prefix = lowered[max(0, start - 56) : start]
+    suffix = lowered[end : min(len(lowered), end + 56)]
+    if re.search(
+        r"(?:nao|non|sem|exclu\w*|proibid\w*|vedad\w*|ignore\w*|remov\w*)"
+        r"(?:\W+\w+){0,7}\W*$",
+        prefix,
+    ):
+        return True
+    if prefix.endswith(("nao-", "non-", "sem-")):
+        return True
+    if re.search(
+        r"^\W*(?:nao|non)\W+(?:conta\w*|vale\w*|entra\w*|inclua|incluir|considere|usar|use|ancora|ancorar)",
+        suffix,
+    ):
+        return True
+    if re.search(r"^\W*(?:foi\W+)?(?:proibid\w*|vedad\w*|excluid\w*|reservad\w*)", suffix):
+        return True
+    return False
+
+
+def _has_opta_marker(value: str) -> bool:
+    lowered = unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode("ascii").lower()
+    if "statsperform" in lowered or "stats-perform" in lowered:
+        return True
+    for match in re.finditer(r"\bopta\b", lowered):
+        if _is_negated_opta_mention(lowered, start=match.start(), end=match.end()):
+            continue
+        return True
+    return False
+
+
+def _is_opta_source(source: EvidenceSource) -> bool:
+    return any(
+        _has_opta_marker(value)
+        for value in (source.name, source.url, source.notes)
+        if value
+    )
+
+
+def _filter_non_opta_sources(sources: list[EvidenceSource]) -> list[EvidenceSource]:
+    return [source for source in sources if not _is_opta_source(source)]
+
+
+def _valid_http_url(url: str) -> bool:
+    parsed = urllib.parse.urlparse(url)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _category_from_url(url: str) -> str:
+    lower = url.lower()
+    if any(token in lower for token in ("injur", "squad", "team", "news", "fifa.com")):
+        return "qualitative"
+    return "statistical"
+
+
+def _approx_tokens(text: str) -> int:
+    if not text:
+        return 0
+    return max(1, round(len(text) / 4))
+
+
+def _pricing_for_model(agent: str, config: dict[str, Any]) -> dict[str, float]:
+    configured = config.get("model_pricing_usd_per_million_tokens", {})
+    raw = configured.get(agent, DEFAULT_MODEL_PRICING_USD_PER_MILLION_TOKENS.get(agent, {}))
+    return {
+        "input": float(raw.get("input", 0.0)),
+        "output": float(raw.get("output", 0.0)),
+    }
+
+
+def _new_token_cost_ledger(config: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "pricing_basis": (
+            "estimativa local: tokens ~= caracteres/4; custo por milhão de tokens configurável em "
+            "model_pricing_usd_per_million_tokens; fallback local sem resposta útil conta custo externo zero"
+        ),
+        "usd_to_brl": float(config.get("usd_to_brl", DEFAULT_USD_TO_BRL)),
+        "total": {
+            "calls": 0,
+            "fallback_calls": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "cost_usd": 0.0,
+            "cost_brl": 0.0,
+        },
+        "by_model": {},
+    }
+
+
+def _token_cost_entry(ledger: dict[str, Any], agent: str) -> dict[str, Any]:
+    return ledger["by_model"].setdefault(
+        agent,
+        {
+            "calls": 0,
+            "fallback_calls": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "cost_usd": 0.0,
+            "cost_brl": 0.0,
+            "stages": {},
+        },
+    )
+
+
+def _record_token_costs(
+    ledger: dict[str, Any],
+    *,
+    config: dict[str, Any],
+    prompt: str,
+    opinions: list[Any],
+    stage: str,
+) -> None:
+    prompt_tokens = _approx_tokens(prompt)
+    usd_to_brl = float(ledger.get("usd_to_brl", DEFAULT_USD_TO_BRL))
+    for opinion in opinions:
+        agent = str(opinion.agent)
+        completion_text = str(
+            getattr(opinion, "raw_text", "")
+            or getattr(opinion, "answer", "")
+            or getattr(opinion, "summary", "")
+        )
+        completion_tokens = _approx_tokens(completion_text)
+        used_fallback = bool(getattr(opinion, "used_fallback", False))
+        pricing = _pricing_for_model(agent, config)
+        cost_usd = 0.0
+        if not used_fallback:
+            cost_usd = (
+                prompt_tokens * pricing["input"] / 1_000_000
+                + completion_tokens * pricing["output"] / 1_000_000
+            )
+        cost_brl = cost_usd * usd_to_brl
+        entry = _token_cost_entry(ledger, agent)
+        stage_entry = entry["stages"].setdefault(
+            stage,
+            {
+                "calls": 0,
+                "fallback_calls": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "cost_usd": 0.0,
+                "cost_brl": 0.0,
+            },
+        )
+        for bucket in (entry, stage_entry, ledger["total"]):
+            bucket["calls"] += 1
+            bucket["fallback_calls"] += int(used_fallback)
+            bucket["prompt_tokens"] += prompt_tokens
+            bucket["completion_tokens"] += completion_tokens
+            bucket["total_tokens"] += prompt_tokens + completion_tokens
+            bucket["cost_usd"] = round(float(bucket["cost_usd"]) + cost_usd, 6)
+            bucket["cost_brl"] = round(float(bucket["cost_brl"]) + cost_brl, 6)
+
+
+def _slots_from_specs(agent_specs: list[Any]) -> list[str]:
+    return [spec.slot for spec in agent_specs]
+
+
+def _non_opta_source_items(opinion: Any) -> list[str]:
+    return [
+        str(item).strip()
+        for item in [
+            *getattr(opinion, "source_urls", []),
+            *getattr(opinion, "source_queries", []),
+        ]
+        if str(item).strip() and not _has_opta_marker(str(item))
+    ]
+
+
+def _truncate_for_watchdog(value: str, limit: int = 420) -> str:
+    compact = re.sub(r"\s+", " ", str(value or "")).strip()
+    if len(compact) <= limit:
+        return compact
+    return compact[: limit - 1].rstrip() + "…"
+
+
+def _source_planning_drop_candidates(config: dict[str, Any]) -> tuple[bool, set[str]]:
+    require_source_plan = bool(config.get("require_agent_source_plan", True))
+    drop_candidates = config.get("drop_fallback_only_agents")
+    if drop_candidates is None:
+        drop_candidates = ["*"] if require_source_plan else []
+    candidates = {str(agent) for agent in drop_candidates}
+    return "*" in candidates, candidates
+
+
+def _has_fixed_quanti_quali_allocation(text: str) -> bool:
+    normalized = _normalize_text(str(text or ""))
+    method_markers = (
+        "alocacao",
+        "alocar",
+        "peso",
+        "pesar",
+        "ponderacao",
+        "ponderar",
+        "mix",
+        "proporcao",
+        "razao",
+        "quota",
+        "divisao",
+        "metodo",
+        "metodologic",
+        "regua",
+    )
+    quant_markers = ("quanti", "quantitativ", "estatistic", "numer", "dados")
+    qual_markers = ("quali", "qualitativ", "contexto", "noticias", "lesoes", "arbitragem")
+    has_quant = any(marker in normalized for marker in quant_markers)
+    has_qual = any(marker in normalized for marker in qual_markers)
+    if not has_quant or not has_qual:
+        return False
+    fixed_pair = bool(re.search(r"\b\d{1,3}\s*/\s*\d{1,3}\b", normalized))
+    fixed_percent_pair = bool(re.search(r"\b\d{1,3}\s*%\D{0,90}\b\d{1,3}\s*%", normalized))
+    if not fixed_pair and not fixed_percent_pair:
+        return False
+    has_method_marker = any(marker in normalized for marker in method_markers)
+    direct_quant_qual_percent = bool(
+        re.search(r"\b\d{1,3}\s*%\D{0,45}(quanti|quantitativ|estatistic|numer|dados)", normalized)
+        and re.search(r"\b\d{1,3}\s*%\D{0,45}(quali|qualitativ|contexto|noticias|lesoes|arbitragem)", normalized)
+    )
+    slash_quant_qual = bool(
+        re.search(r"\b\d{1,3}\s*/\s*\d{1,3}\b\D{0,60}(quanti|quantitativ|quali|qualitativ|contexto)", normalized)
+    )
+    return has_method_marker or direct_quant_qual_percent or slash_quant_qual
+
+
+def _opinion_operational_text(opinion: Any) -> str:
+    if isinstance(opinion, str):
+        return opinion
+    return " ".join(
+        str(item or "")
+        for item in (
+            getattr(opinion, "summary", ""),
+            getattr(opinion, "opening_argument", ""),
+            getattr(opinion, "question", ""),
+            getattr(opinion, "answer", ""),
+            getattr(opinion, "critique", ""),
+            getattr(opinion, "adjustment", ""),
+            getattr(opinion, "raw_text", ""),
+        )
+    )
+
+
+def _external_search_failure_issue(opinion: Any) -> str | None:
+    normalized = _normalize_text(_opinion_operational_text(opinion))
+    if not normalized.strip():
+        return None
+
+    permission_markers = (
+        "permissao nao concedida",
+        "erro de permissao",
+        "permission denied",
+        "permission not granted",
+        "not granted",
+        "forbidden",
+        "access denied",
+    )
+    search_channel_markers = (
+        "websearch",
+        "web search",
+        "webfetch",
+        "web fetch",
+        "browser",
+        "busca ao vivo",
+        "busca externa",
+        "fetch externo",
+        "ferramenta de busca",
+    )
+    no_tool_phrases = (
+        "nao ha ferramenta de busca",
+        "nao ha ferramenta de busca externa",
+        "nao tenho ferramenta de busca",
+        "nao tenho acesso a ferramenta de busca",
+        "sem ferramenta de busca",
+        "sem ferramenta de busca externa",
+        "sem ferramenta de fetch",
+        "nao ha ferramenta de busca externa/fetch disponivel",
+        "nao existe ferramenta de busca externa/fetch disponivel",
+        "busca externa/fetch nao disponivel",
+        "ferramenta de busca externa/fetch nao disponivel",
+        "nao ha ferramenta de busca externa ou fetch disponivel",
+        "ferramenta de busca externa ou fetch nao disponivel",
+        "no external search",
+        "no web search",
+        "no websearch",
+        "no browsing tool",
+        "no browser tool",
+        "no fetch tool",
+        "without web access",
+        "web access unavailable",
+        "search tool unavailable",
+        "fetch tool unavailable",
+    )
+    cannot_confirm_live_phrases = (
+        "nao consigo confirmar paginas em tempo real",
+        "nao posso confirmar paginas em tempo real",
+        "nao consigo confirmar paginas",
+        "nao posso confirmar paginas",
+        "sem acesso para confirmar paginas em tempo real",
+        "cannot confirm pages in real time",
+        "cannot verify pages in real time",
+        "cannot browse in real time",
+    )
+
+    has_permission_failure = any(marker in normalized for marker in permission_markers) and any(
+        marker in normalized for marker in search_channel_markers
+    )
+    has_no_tool_failure = any(phrase in normalized for phrase in no_tool_phrases)
+    has_live_confirmation_failure = any(phrase in normalized for phrase in cannot_confirm_live_phrases)
+    has_provisional_prior_without_fetch = (
+        "prior provisorio" in normalized
+        and any(marker in normalized for marker in ("sem ferramenta", "nao ha ferramenta", "nao consigo confirmar"))
+    )
+
+    if (
+        has_permission_failure
+        or has_no_tool_failure
+        or has_live_confirmation_failure
+        or has_provisional_prior_without_fetch
+    ):
+        return "busca/fetch externo indisponível ou sem permissão; source_queries não provam busca executada"
+    return None
+
+
+def _source_planning_relevance_issue(opinion: Any, source_items: list[str]) -> str | None:
+    external_search_issue = _external_search_failure_issue(opinion)
+    if external_search_issue:
+        return external_search_issue
+    opinion_text = _normalize_text(
+        " ".join(
+            [
+                str(getattr(opinion, "summary", "")),
+                str(getattr(opinion, "opening_argument", "")),
+                str(getattr(opinion, "answer", "")),
+            ]
+        )
+    )
+    combined = _normalize_text(
+        " ".join(
+            [
+                str(getattr(opinion, "summary", "")),
+                str(getattr(opinion, "opening_argument", "")),
+                str(getattr(opinion, "answer", "")),
+                " ".join(source_items),
+            ]
+        )
+    )
+    source_text = _normalize_text(" ".join(source_items))
+    off_topic_markers = (
+        "fonte tipografica",
+        "fontes tipograficas",
+        "fonte personalizada",
+        "fontes personalizadas",
+        "jersey font",
+        "jersey-font",
+        "camisa",
+        "camisas",
+        "footyheadlines",
+        "fontsport",
+    )
+    if any(marker in opinion_text for marker in off_topic_markers):
+        return "fontes fora do escopo estatístico/qualitativo do futebol competitivo"
+    if _has_opta_marker(opinion_text):
+        return "referência a benchmark reservado no planejamento sem Opta"
+    if _has_fixed_quanti_quali_allocation(opinion_text):
+        return "alocação fixa quanti/quali proibida; modelos devem decidir sem percentual fixo"
+    relevant_source_markers = (
+        "odds",
+        "sportsbook",
+        "bet365",
+        "oddsportal",
+        "polymarket",
+        "prediction",
+        "probabil",
+        "elo",
+        "rating",
+        "ranking",
+        "fifa-world-ranking",
+        "sofasc",
+        "transfermarkt",
+        "lesao",
+        "injur",
+        "corte",
+        "arbitr",
+        "var",
+        "cartao",
+        "suspens",
+        "world-cup-predictions",
+        "expected",
+        " xg",
+        "fgv",
+    )
+    if any(marker in combined for marker in off_topic_markers) and not any(
+        marker in source_text for marker in relevant_source_markers
+    ):
+        return "fontes fora do escopo estatístico/qualitativo do futebol competitivo"
+    return None
+
+
+def _source_planning_readiness_report(planning_opinions: list[Any], config: dict[str, Any]) -> dict[str, Any]:
+    require_source_plan = bool(config.get("require_agent_source_plan", True))
+    drop_all_candidates, candidates = _source_planning_drop_candidates(config)
+    entries: list[dict[str, Any]] = []
+    active_agents: list[str] = []
+    removed_agents: list[dict[str, Any]] = []
+
+    for opinion in planning_opinions:
+        agent = str(getattr(opinion, "agent", "")).strip() or "Modelo sem nome"
+        source_items = _non_opta_source_items(opinion)
+        is_candidate = drop_all_candidates or agent in candidates
+        used_fallback = bool(getattr(opinion, "used_fallback", False))
+        lacks_sources = require_source_plan and not source_items
+        external_search_issue = _external_search_failure_issue(opinion)
+        relevance_issue = external_search_issue or (
+            _source_planning_relevance_issue(opinion, source_items) if source_items else None
+        )
+        removed = (is_candidate and (used_fallback or lacks_sources)) or bool(relevance_issue)
+        if used_fallback:
+            reason = "fallback operacional: " + _truncate_for_watchdog(getattr(opinion, "summary", ""))
+        elif lacks_sources:
+            reason = "sem source_urls/source_queries não-Opta"
+        elif relevance_issue:
+            reason = relevance_issue
+        else:
+            reason = "plano de fontes próprio e verificável"
+
+        entry = {
+            "agent": agent,
+            "ready": not removed,
+            "reason": reason,
+            "used_fallback": used_fallback,
+            "source_url_count": len([url for url in getattr(opinion, "source_urls", []) if not _has_opta_marker(url)]),
+            "source_query_count": len(
+                [query for query in getattr(opinion, "source_queries", []) if not _has_opta_marker(query)]
+            ),
+            "source_items": source_items[:6],
+            "summary": _truncate_for_watchdog(getattr(opinion, "summary", "")),
+        }
+        entries.append(entry)
+        if removed:
+            removed_agents.append(entry)
+        else:
+            active_agents.append(agent)
+
+    required_count = int(config.get("minimum_source_ready_agents", DEFAULT_MINIMUM_SOURCE_READY_AGENTS))
+    ready_count = len(active_agents)
+    return {
+        "required_count": required_count,
+        "ready_count": ready_count,
+        "quorum_met": ready_count >= required_count,
+        "active_agents": active_agents,
+        "removed_agents": removed_agents,
+        "agents": entries,
+    }
+
+
+def _source_planning_quorum_error(report: dict[str, Any]) -> str:
+    active = ", ".join(report.get("active_agents", [])) or "nenhum"
+    removed_bits = [
+        f"{entry['agent']} ({entry['reason']})"
+        for entry in report.get("removed_agents", [])
+    ]
+    removed = "; ".join(removed_bits[:6]) or "nenhum removido"
+    return (
+        "Quórum insuficiente para debriefing: "
+        f"{report.get('ready_count', 0)} modelo(s) trouxeram plano de fontes próprio e verificável; "
+        f"mínimo exigido: {report.get('required_count', 0)}. "
+        f"Ativos: {active}. Removidos: {removed}."
+    )
+
+
+def _agent_slots_for_watchdog(config: dict[str, Any]) -> list[str]:
+    configured = config.get("agents")
+    if isinstance(configured, list) and configured:
+        return [
+            str(item.get("slot", "")).strip()
+            for item in configured
+            if isinstance(item, dict) and str(item.get("slot", "")).strip()
+        ]
+    return list(DEFAULT_MODEL_PRICING_USD_PER_MILLION_TOKENS)
+
+
+def _agent_source_planning_watchdog_extra(config: dict[str, Any]) -> dict[str, Any]:
+    group_matches = _default_group_matches(config)
+    knockout_matches = _default_knockout_matches(config)
+    monte_carlo_summary = monte_carlo_compact_summary(config.get("_monte_carlo_result", {"enabled": False}))
+    return {
+        "contract": {
+            "same_contract_for_all_models": True,
+            "mediator_external_fetch": False,
+            "mediator_source_selection": False,
+            "mediator_cache": False,
+            "agent_owned_fresh_search": True,
+            "agent_cache_allowed": False,
+            "agent_must_choose_sources": True,
+            "agent_must_cover_brazil_and_opponents": True,
+            "excluded_model_principal_sources": ["Opta"],
+            "opta_exclusion_timing": "antes_da_busca",
+            "opta_rule": (
+                "dados da Opta não contam no Modelo Principal; modelos não devem incluir Opta "
+                "em source_urls/source_queries nem usar como benchmark, fonte, ranking, projeção ou âncora"
+            ),
+            "required_agent_outputs": [
+                "self_identification",
+                "title_pct",
+                "summary",
+                "opening_argument",
+                "critique",
+                "adjustment",
+                "source_urls",
+                "source_queries",
+                "scenario_probabilities",
+                "team_context_signals",
+            ],
+            "team_context_signal_families": [
+                "bets/prediction markets",
+                "ratings/Elo/FIFA",
+                "Sofascore/performance de jogadores",
+                "lesões/cortes/notícias recentes",
+                "amistosos recentes",
+                "arbitragem/VAR/cartões",
+                "opinião de imprensa especializada",
+            ],
+            "team_context_signal_rule": (
+                "cada sinal precisa de team, category, rating_delta ou probability_delta_pct, "
+                "confidence, rationale e source_url/source_query; sem fonte ou delta numérico, não altera o Monte Carlo"
+            ),
+            "source_requirement": "source_urls ou source_queries auditáveis escolhidas pelo próprio modelo neste run",
+        },
+        "operational_knobs": {
+            "minimum_source_ready_agents": int(
+                config.get("minimum_source_ready_agents", DEFAULT_MINIMUM_SOURCE_READY_AGENTS)
+            ),
+            "source_planning_repair_attempts": int(
+                config.get("source_planning_repair_attempts", DEFAULT_SOURCE_PLANNING_REPAIR_ATTEMPTS)
+            ),
+            "meeting_min_participants": int(
+                config.get("meeting_min_participants", config.get("meeting_min_real_agents", 3))
+            ),
+            "meeting_quorum_rule": "maioria simples dos participantes ativos da sala",
+            "meeting_response_repair_attempts": int(config.get("meeting_response_repair_attempts", 1)),
+            "meeting_require_full_path_coverage": bool(config.get("meeting_require_full_path_coverage", True)),
+            "parallel_opponent_debriefing_enabled": bool(config.get("parallel_opponent_debriefing_enabled", False)),
+            "agent_timeout_seconds": int(config.get("agent_timeout_seconds", 90)),
+            "agent_reentry_probe_enabled": bool(config.get("agent_reentry_probe_enabled", False)),
+            "agent_reentry_probe_timeout_seconds": int(config.get("agent_reentry_probe_timeout_seconds", 180)),
+            "require_agent_source_plan": bool(config.get("require_agent_source_plan", True)),
+            "require_auditable_source_urls_for_meeting_votes": bool(
+                config.get("require_auditable_source_urls_for_meeting_votes", True)
+            ),
+            "enforce_bracket_constraints": bool(config.get("enforce_bracket_constraints", True)),
+            "bracket_uncertainty_ci_widening": bool(config.get("bracket_uncertainty_ci_widening", True)),
+        },
+        "scope": {
+            "group_name": config.get("group_name", "Grupo não configurado"),
+            "brazil_group": config.get("brazil_group"),
+            "brazil_expected_group_position": config.get("brazil_expected_group_position"),
+            "group_matches_count": len(group_matches),
+            "knockout_matches_count": len(knockout_matches),
+            "group_opponents": [str(match.get("opponent", "")) for match in group_matches],
+            "knockout_scenarios": [
+                {
+                    "phase": match.get("phase", "Mata-mata"),
+                    "opponent": match.get("opponent", ""),
+                    "most_likely": bool(match.get("most_likely", False)),
+                    "bracket_match_id": match.get("bracket_match_id"),
+                    "bracket_brazil_slot": match.get("bracket_brazil_slot"),
+                    "bracket_opponent_slots": match.get("bracket_opponent_slots"),
+                    "allowed_opponents": match.get("allowed_opponents"),
+                }
+                for match in knockout_matches
+            ],
+            "bracket_path": brazil_bracket_path(config),
+            "bracket_validation_errors": invalid_configured_knockout_opponents(config),
+            "monte_carlo": monte_carlo_summary,
+        },
+        "agents": {
+            "count": len(_agent_slots_for_watchdog(config)),
+            "slots": _agent_slots_for_watchdog(config),
+        },
+    }
+
+
+def _agent_source_planning_watchdog_detail(config: dict[str, Any]) -> str:
+    extra = _agent_source_planning_watchdog_extra(config)
+    knobs = extra["operational_knobs"]
+    agents = extra["agents"]
+    scope = extra["scope"]
+    return (
+        "contrato único distribuído; "
+        f"quorum_min={knobs['minimum_source_ready_agents']}; "
+        f"meeting_min_participants={knobs['meeting_min_participants']}; "
+        f"meeting_quorum_rule={knobs['meeting_quorum_rule']}; "
+        f"self_heal_attempts={knobs['source_planning_repair_attempts']}; "
+        f"meeting_repair_attempts={knobs['meeting_response_repair_attempts']}; "
+        f"full_path_coverage={knobs['meeting_require_full_path_coverage']}; "
+        f"parallel_opponent_room={knobs['parallel_opponent_debriefing_enabled']}; "
+        f"timeout_s={knobs['agent_timeout_seconds']}; "
+        f"reentry_probe={knobs['agent_reentry_probe_enabled']}; "
+        f"reentry_timeout_s={knobs['agent_reentry_probe_timeout_seconds']}; "
+        "mediador=não faz fetch externo/não escolhe fontes/não usa cache; "
+        "agentes=busca fresca própria sem cache com source_urls/source_queries; "
+        "Opta excluída antes da busca no Modelo Principal; "
+        f"bracket_constraints={knobs['enforce_bracket_constraints']}; "
+        f"bracket_ci_widening={knobs['bracket_uncertainty_ci_widening']}; "
+        f"agents={agents['count']}; "
+        f"group_matches={scope['group_matches_count']}; "
+        f"knockout_scenarios={scope['knockout_matches_count']}"
+    )
+
+
+def _emit_source_planning_readiness(
+    watchdog: RunWatchdog,
+    report: dict[str, Any],
+    *,
+    final: bool = True,
+    round_name: str = "source-planning",
+) -> None:
+    for entry in report.get("agents", []):
+        source_hint = ", ".join(entry.get("source_items", [])[:3]) or "sem fonte dinâmica válida"
+        status = "ativo" if entry.get("ready") else "removido"
+        watchdog.chat(
+            str(entry.get("agent", "Modelo")),
+            (
+                f"{status}: {entry.get('reason', 'sem diagnóstico')}; "
+                f"{entry.get('summary', '')} | fontes: {source_hint}"
+            ),
+            round_name=round_name,
+        )
+    status = "finish" if report.get("quorum_met") else ("fail" if final else "check")
+    watchdog.event(
+        "agent_source_quorum",
+        status,
+        detail=(
+            f"{report.get('ready_count', 0)}/{report.get('required_count', 0)} "
+            "modelo(s) prontos para debriefing"
+        ),
+        extra=report,
+    )
+
+
+def _source_planning_repair_prompt(
+    *,
+    config: dict[str, Any],
+    generated_at: datetime,
+    readiness_report: dict[str, Any],
+    attempt_index: int,
+) -> str:
+    return (
+        _source_planning_prompt(config=config, generated_at=generated_at)
+        + "\n\nRODADA DE REPARO OPERACIONAL / SELF-HEALING.\n"
+        "Você foi rechamado porque a rodada inicial não atingiu o quórum mínimo de 3 modelos com plano de fontes "
+        "próprio e verificável. Responda em JSON estrito, sem texto fora do JSON. O objetivo desta rodada não é "
+        "vencer o debate: é reparar o contrato operacional trazendo source_urls ou source_queries válidas que você "
+        "mesmo escolheu agora, sem cache, para Brasil e adversários/cenários configurados. "
+        "Se uma fonte falhou, substitua por fonte equivalente fresca; se uma API/bridge falhou por motivo fora do seu "
+        "controle e você não conseguiu executar busca/fetch, explique em summary e não declare source_urls/source_queries "
+        "como verificáveis nesta rodada. Source_queries só contam quando representam busca realmente executada por você agora. "
+        "Não invente URL, ranking, score ou método. Campos obrigatórios: self_identification, title_pct, summary, "
+        "opening_argument, critique, adjustment, source_urls, source_queries.\n\n"
+        f"Tentativa de reparo: {attempt_index}\n"
+        f"Diagnóstico anterior: {json.dumps(readiness_report, ensure_ascii=False)}\n"
+    )
+
+
+def _merge_planning_opinions(current: list[Any], repaired: list[Any], agent_specs: list[Any]) -> list[Any]:
+    by_agent = {str(opinion.agent): opinion for opinion in current}
+    for opinion in repaired:
+        by_agent[str(opinion.agent)] = opinion
+    return [
+        by_agent[spec.slot]
+        for spec in agent_specs
+        if spec.slot in by_agent
+    ]
+
+
+async def _self_heal_source_planning_quorum(
+    *,
+    config: dict[str, Any],
+    planning_opinions: list[Any],
+    source_readiness_report: dict[str, Any],
+    agent_specs: list[Any],
+    generated_at: datetime,
+    baseline_title_pct: float,
+    allow_agent_fallback: bool,
+    watchdog: RunWatchdog | None,
+    token_cost_ledger: dict[str, Any],
+) -> tuple[list[Any], dict[str, Any]]:
+    attempts = max(0, int(config.get("source_planning_repair_attempts", DEFAULT_SOURCE_PLANNING_REPAIR_ATTEMPTS)))
+    if attempts <= 0:
+        return planning_opinions, source_readiness_report
+
+    current_opinions = list(planning_opinions)
+    report = source_readiness_report
+    timeout = int(config.get("agent_timeout_seconds", 90))
+
+    for attempt_index in range(1, attempts + 1):
+        if bool(report.get("quorum_met")):
+            break
+        removed_slots = [str(entry["agent"]) for entry in report.get("removed_agents", [])]
+        repair_specs = [spec for spec in agent_specs if spec.slot in removed_slots]
+        if not repair_specs:
+            break
+        if watchdog:
+            watchdog.start(
+                "agent_source_self_heal",
+                detail=f"attempt {attempt_index}/{attempts}; retrying {', '.join(spec.slot for spec in repair_specs)}",
+                extra={"attempt": attempt_index, "agents": [spec.slot for spec in repair_specs]},
+            )
+
+        repair_prompt = _source_planning_repair_prompt(
+            config=config,
+            generated_at=generated_at,
+            readiness_report=report,
+            attempt_index=attempt_index,
+        )
+        raw_repair_opinions = await call_all_agents(
+            repair_prompt,
+            specs=repair_specs,
+            baseline_title_pct=baseline_title_pct,
+            timeout=timeout,
+            allow_local_fallback=allow_agent_fallback,
+        )
+        _record_token_costs(
+            token_cost_ledger,
+            config=config,
+            prompt=repair_prompt,
+            opinions=raw_repair_opinions,
+            stage=f"source_planning_repair_{attempt_index}",
+        )
+        repaired_opinions = _sanitize_source_planning_opinions(
+            raw_repair_opinions,
+            baseline_title_pct=baseline_title_pct,
+            config=config,
+        )
+        current_opinions = _merge_planning_opinions(current_opinions, repaired_opinions, agent_specs)
+        report = _source_planning_readiness_report(current_opinions, config)
+        if watchdog:
+            _emit_source_planning_readiness(
+                watchdog,
+                report,
+                final=False,
+                round_name=f"source-planning-repair-{attempt_index}",
+            )
+            status_detail = (
+                f"attempt {attempt_index}/{attempts}; "
+                f"{report.get('ready_count', 0)}/{report.get('required_count', 0)} ready"
+            )
+            if report.get("quorum_met"):
+                watchdog.finish("agent_source_self_heal", detail=status_detail)
+            else:
+                watchdog.event(
+                    "agent_source_self_heal",
+                    "check",
+                    detail=status_detail,
+                    extra={"attempt": attempt_index, "quorum_met": False},
+                )
+
+    return current_opinions, report
+
+
+def _drop_fallback_only_agent_slots(planning_opinions: list[Any], config: dict[str, Any]) -> list[str]:
+    report = _source_planning_readiness_report(planning_opinions, config)
+    return [str(entry["agent"]) for entry in report["removed_agents"]]
+
+
+def _agent_reentry_probe_prompt(
+    *,
+    config: dict[str, Any],
+    generated_at: datetime,
+    removed_reason: str,
+) -> str:
+    return (
+        _source_planning_prompt(config=config, generated_at=generated_at)
+        + "\n\nREENTRADA ASSÍNCRONA NA SALA DE DEBRIEFING.\n"
+        "Você saiu temporariamente da sala por timeout, fallback ou plano de fontes inválido. "
+        "A conversa principal não vai esperar por você. Para reentrar, responda em JSON estrito, "
+        "sem texto fora do JSON, com o mesmo contrato inicial: self_identification, title_pct, summary, "
+        "opening_argument, critique, adjustment, source_urls, source_queries, scenario_probabilities "
+        "e team_context_signals quando houver sinais auditáveis. "
+        "Traga fontes ou consultas próprias escolhidas neste momento, sem cache; não invente URL, ranking, "
+        "score, notícia ou método. Se não tiver fonte verificável, declare isso em summary e não peça reentrada.\n"
+        f"Motivo da saída temporária: {removed_reason or 'sem resposta externa verificável'}\n"
+    )
+
+
+async def _run_agent_reentry_probe(
+    *,
+    spec: Any,
+    config: dict[str, Any],
+    generated_at: datetime,
+    baseline_title_pct: float,
+    removed_reason: str,
+    timeout: int,
+) -> tuple[Any | None, str, str]:
+    prompt = _agent_reentry_probe_prompt(
+        config=config,
+        generated_at=generated_at,
+        removed_reason=removed_reason,
+    )
+    try:
+        raw_opinion = await call_agent(
+            spec,
+            prompt,
+            baseline_title_pct=baseline_title_pct,
+            timeout=timeout,
+            allow_local_fallback=False,
+        )
+    except Exception as exc:
+        return None, str(exc), prompt
+    sanitized = _sanitize_source_planning_opinions(
+        [raw_opinion],
+        baseline_title_pct=baseline_title_pct,
+        config=config,
+    )
+    readiness_config = {**config, "minimum_source_ready_agents": 1}
+    report = _source_planning_readiness_report(sanitized, readiness_config)
+    if bool(report.get("quorum_met")) and sanitized and not bool(getattr(sanitized[0], "used_fallback", False)):
+        return sanitized[0], "", prompt
+    reason = "não trouxe plano de fontes próprio e verificável"
+    removed = report.get("removed_agents", [])
+    if removed:
+        reason = str(removed[0].get("reason", reason))
+    return None, reason, prompt
+
+
+def _ready_reentry_slots(pending: dict[str, asyncio.Task]) -> list[str]:
+    return [slot for slot, task in pending.items() if task.done()]
+
+
+def _room_majority_quorum(*, configured_min: int, active_count: int) -> int:
+    if active_count <= 0:
+        return 0
+    _ = configured_min  # Backward-compatible parameter; quorum is majority of the active room.
+    return int(active_count) // 2 + 1
+
+
+@dataclass(frozen=True)
+class RunArtifacts:
+    bundle: ReportBundle
+    post: str
+    raw_evidence: list[EvidenceResult]
+
+
+class SourcePlanningQuorumError(RuntimeError):
+    """Raised when too few external agents bring auditable source plans."""
+
+
+class ReportCoherenceError(RuntimeError):
+    """Raised when the final report would publish internally inconsistent probabilities."""
+
+
+def load_config(path: Path | None) -> dict[str, Any]:
+    if path is None:
+        return {}
+    if path.exists():
+        config = json.loads(path.read_text(encoding="utf-8"))
+        hydrate_canonical_configs(config, base_dir=path.parent)
+        return config
+    if path.name == "worldcup_brazil.json":
+        example_path = path.with_name("worldcup_brazil.example.json")
+        if example_path.exists():
+            config = json.loads(example_path.read_text(encoding="utf-8"))
+            hydrate_canonical_configs(config, base_dir=example_path.parent)
+            return config
+    return {}
+
+
+def _apply_runtime_env_overrides(config: dict[str, Any]) -> None:
+    mapping = {
+        "http_max_attempts": "HTTP_MAX_ATTEMPTS",
+        "http_backoff_base_seconds": "HTTP_BACKOFF_BASE_SECONDS",
+        "http_backoff_max_seconds": "HTTP_BACKOFF_MAX_SECONDS",
+        "agent_bulkhead_default": "AGENT_BULKHEAD_DEFAULT",
+        "source_bulkhead_per_host": "SOURCE_BULKHEAD_PER_HOST",
+    }
+    for config_key, env_key in mapping.items():
+        if config_key in config and env_key not in os.environ:
+            os.environ[env_key] = str(config[config_key])
+    for provider, limit in dict(config.get("agent_bulkheads", {})).items():
+        suffix = re.sub(r"[^A-Z0-9]+", "_", str(provider).upper()).strip("_")
+        env_key = f"AGENT_BULKHEAD_{suffix}"
+        if env_key not in os.environ:
+            os.environ[env_key] = str(limit)
+
+
+def _default_group_matches(config: dict[str, Any]) -> list[dict[str, Any]]:
+    return list(
+        config.get(
+            "group_matches",
+            [
+                {"opponent": "Adversário 1 a definir", "venue": "A definir"},
+                {"opponent": "Adversário 2 a definir", "venue": "A definir"},
+                {"opponent": "Adversário 3 a definir", "venue": "A definir"},
+            ],
+        )
+    )
+
+
+def _default_knockout_matches(config: dict[str, Any]) -> list[dict[str, Any]]:
+    matches = list(
+        config.get(
+            "knockout_matches",
+            [
+                {
+                    "phase": "16 avos",
+                    "opponent": "Adversário mais provável a definir",
+                    "venue": "A definir",
+                    "most_likely": True,
+                    "scenario_pct": 46.0,
+                },
+                {
+                    "phase": "16 avos",
+                    "opponent": "Segundo adversário mais provável a definir",
+                    "venue": "A definir",
+                    "most_likely": False,
+                    "scenario_pct": 24.0,
+                },
+                {
+                    "phase": "Oitavas",
+                    "opponent": "Adversário mais provável a definir",
+                    "venue": "A definir",
+                    "most_likely": True,
+                    "scenario_pct": 38.0,
+                },
+                {
+                    "phase": "Oitavas",
+                    "opponent": "Segundo adversário mais provável a definir",
+                    "venue": "A definir",
+                    "most_likely": False,
+                    "scenario_pct": 22.0,
+                },
+                {
+                    "phase": "Quartas",
+                    "opponent": "Adversário mais provável a definir",
+                    "venue": "A definir",
+                    "most_likely": True,
+                    "brazil_pct": 52.0,
+                },
+                {
+                    "phase": "Quartas",
+                    "opponent": "Segundo adversário mais provável a definir",
+                    "venue": "A definir",
+                    "most_likely": False,
+                    "brazil_pct": 50.0,
+                },
+                {
+                    "phase": "Semifinal",
+                    "opponent": "Adversário mais provável a definir",
+                    "venue": "A definir",
+                    "most_likely": True,
+                    "brazil_pct": 48.0,
+                },
+                {
+                    "phase": "Semifinal",
+                    "opponent": "Segundo adversário mais provável a definir",
+                    "venue": "A definir",
+                    "most_likely": False,
+                    "brazil_pct": 46.0,
+                },
+                {
+                    "phase": "Final",
+                    "opponent": "Adversário mais provável a definir",
+                    "venue": "A definir",
+                    "most_likely": True,
+                    "brazil_pct": 49.0,
+                },
+                {
+                    "phase": "Final",
+                    "opponent": "Segundo adversário mais provável a definir",
+                    "venue": "A definir",
+                    "most_likely": False,
+                    "brazil_pct": 48.0,
+                },
+            ],
+        )
+    )
+    return annotate_knockout_matches_with_bracket(config, matches)
+
+
+def _base_probability_for_match(match: dict[str, Any], *, knockout: bool) -> float:
+    if "brazil_pct" in match:
+        return float(match["brazil_pct"])
+    return 57.0 if knockout else 62.0
+
+
+def _optional_float(match: dict[str, Any], key: str) -> float | None:
+    if key not in match or match[key] is None:
+        return None
+    return float(match[key])
+
+
+def _recent_event_impacts(config: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_events = config.get("recent_event_impacts") or []
+    if not isinstance(raw_events, list):
+        return []
+    return [event for event in raw_events if isinstance(event, dict)]
+
+
+def _event_category(event: dict[str, Any]) -> str:
+    raw = _normalize_text(str(event.get("category") or event.get("type") or "qualitative"))
+    if raw in {"statistical", "quantitative", "estatistico", "estatistica", "quantitativo", "quanti"}:
+        return "statistical"
+    return "qualitative"
+
+
+def _event_float(event: dict[str, Any], key: str, default: float = 0.0) -> float:
+    try:
+        return float(event.get(key, default) or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def _event_list(event: dict[str, Any], *keys: str) -> list[str]:
+    values: list[str] = []
+    for key in keys:
+        raw = event.get(key)
+        if raw is None:
+            continue
+        if isinstance(raw, list):
+            values.extend(str(item) for item in raw if str(item).strip())
+        else:
+            values.append(str(raw))
+    return values
+
+
+def _event_applies_to_match(event: dict[str, Any], match: dict[str, Any]) -> bool:
+    phases = {_normalize_text(value) for value in _event_list(event, "phase", "phases", "applies_to_phases")}
+    match_phase = _normalize_text(str(match.get("phase") or "Fase de grupos"))
+    if phases and match_phase not in phases:
+        return False
+
+    opponent = _normalize_text(str(match.get("opponent", "")))
+    event_teams = {_normalize_text(value) for value in _event_list(event, "team", "teams")}
+    event_opponents = {
+        _normalize_text(value)
+        for value in _event_list(event, "opponent", "opponents", "applies_to_opponents")
+    }
+    if event_opponents:
+        return opponent in event_opponents
+    if event_teams:
+        return "brasil" in event_teams or "brazil" in event_teams or opponent in event_teams
+    return True
+
+
+def _event_source_reference(event: dict[str, Any]) -> str:
+    source_url = str(event.get("source_url") or "").strip()
+    if source_url:
+        return source_url
+    source_query = str(event.get("source_query") or "").strip()
+    return source_query or "fonte não informada"
+
+
+def _event_summary(event: dict[str, Any]) -> str:
+    return str(event.get("summary") or event.get("id") or "evento recente").strip()
+
+
+def _event_detail(event: dict[str, Any]) -> str:
+    date = str(event.get("date") or "data não informada").strip()
+    summary = _event_summary(event)
+    shift = _event_float(event, "brazil_shift_pct")
+    scenario_shift = _event_float(event, "scenario_shift_pct")
+    return (
+        f"{date}: {summary}; categoria={_event_category(event)}; "
+        f"efeito Brasil={shift:+.1f} p.p.; efeito cenário={scenario_shift:+.1f} p.p.; "
+        f"source={_event_source_reference(event)}"
+    )
+
+
+def _recent_event_signals_for_match(
+    match: dict[str, Any],
+    *,
+    base_pct: float,
+    config: dict[str, Any],
+) -> tuple[list[SourceSignal], list[SourceSignal]]:
+    statistical: list[SourceSignal] = []
+    qualitative: list[SourceSignal] = []
+    for event in _recent_event_impacts(config):
+        if not _event_applies_to_match(event, match):
+            continue
+        category = _event_category(event)
+        shift = _event_float(event, "brazil_shift_pct")
+        adjusted_pct = max(1.0, min(99.0, base_pct + shift))
+        signal = SourceSignal(
+            source=f"recent event impact: {_event_summary(event)}",
+            brazil_pct=adjusted_pct,
+            opponent_pct=100 - adjusted_pct,
+            confidence=_event_float(event, "confidence", 0.66 if category == "statistical" else 0.58),
+            detail=_event_detail(event),
+        )
+        if category == "statistical":
+            statistical.append(signal)
+        else:
+            qualitative.append(signal)
+    return statistical, qualitative
+
+
+def _recent_event_rationale_fragment(match: dict[str, Any], *, config: dict[str, Any]) -> str:
+    details = [
+        _event_detail(event)
+        for event in _recent_event_impacts(config)
+        if _event_applies_to_match(event, match)
+    ]
+    if not details:
+        return ""
+    return " Eventos recentes aplicados no harness: " + "; ".join(details) + "."
+
+
+def _scenario_pct_for_match(match: dict[str, Any], *, config: dict[str, Any]) -> float | None:
+    scenario_pct = _optional_float(match, "scenario_pct")
+    if scenario_pct is None:
+        return None
+    shift = sum(
+        _event_float(event, "scenario_shift_pct")
+        for event in _recent_event_impacts(config)
+        if _event_applies_to_match(event, match)
+    )
+    return round(max(0.0, min(100.0, scenario_pct + shift)), 1)
+
+
+def _is_placeholder_opponent_name(value: Any) -> bool:
+    normalized = _normalize_text(str(value or ""))
+    return not normalized or "definir" in normalized or "adversario" in normalized
+
+
+def _widen_ci_for_bracket_uncertainty(estimate: Any, match: dict[str, Any], *, config: dict[str, Any]) -> None:
+    if not bool(config.get("bracket_uncertainty_ci_widening", True)):
+        return
+    if not _is_placeholder_opponent_name(match.get("opponent")):
+        return
+    allowed_opponents = [
+        str(candidate).strip()
+        for candidate in match.get("allowed_opponents", [])
+        if str(candidate).strip()
+    ]
+    if len(allowed_opponents) <= 1:
+        return
+    if estimate.brazil_ci_low is None or estimate.brazil_ci_high is None:
+        return
+
+    max_widen = float(config.get("bracket_uncertainty_max_ci_widen_pct", 8.0))
+    widen = min(max_widen, round(1.4 + (len(allowed_opponents) - 1) * 0.4, 1))
+    estimate.brazil_ci_low = round(max(0.0, estimate.brazil_ci_low - widen / 2.0), 1)
+    estimate.brazil_ci_high = round(min(100.0, estimate.brazil_ci_high + widen / 2.0), 1)
+
+
+def _event_impact_prompt_instruction() -> str:
+    return (
+        "Contrato de eventos por fase: aplique eventos reais ou eventos simulados de cenário até a Final "
+        "com os mesmos critérios da fase de grupos. Para cada jogo ou cenário, qualquer evento que altere "
+        "probabilidade precisa trazer date, team, category, summary, source_url ou source_query, "
+        "brazil_shift_pct, scenario_shift_pct e confidence. Eventos simulados precisam ser marcados como "
+        "hipótese de cenário, baseados em fonte/consulta auditável sobre lesões, cortes, cartões, arbitragem, "
+        "descanso, performance ou chaveamento; não transforme hipótese em fato. Se não houver lastro verificável, "
+        "declare ausência de evento relevante e use efeito 0."
+    )
+
+
+def _event_impact_criteria_for_prompt() -> dict[str, Any]:
+    return {
+        "rule": (
+            "Aplique os mesmos critérios da fase de grupos em todos os cenários até a Final; "
+            "não invente evento, fonte ou efeito."
+        ),
+        "required_fields": [
+            "date",
+            "team",
+            "category",
+            "summary",
+            "source_url",
+            "source_query",
+            "brazil_shift_pct",
+            "scenario_shift_pct",
+            "confidence",
+        ],
+        "category_values": ["statistical", "qualitative"],
+        "shift_units": "pontos percentuais",
+        "field_semantics": {
+            "date": "data do evento real ou data/base do cenário simulado",
+            "team": "Brasil, adversário ou cenário de chaveamento afetado",
+            "category": "statistical para números/performance; qualitative para lesão, corte, arbitragem, cartões, descanso ou contexto",
+            "summary": "descrição curta do fato ou da hipótese de cenário",
+            "source_url": "URL auditável quando disponível",
+            "source_query": "consulta usada quando não houver URL direta ou quando o modelo buscar no próprio canal",
+            "brazil_shift_pct": "efeito na chance do Brasil vencer/passar no confronto",
+            "scenario_shift_pct": "efeito na chance de esse confronto/caminho acontecer",
+            "confidence": "confiança de 0 a 1 no impacto estimado",
+        },
+        "simulation_guardrail": (
+            "Eventos simulados são hipóteses auditáveis de cenário, não fatos; sem source_url/source_query, use shift 0."
+        ),
+    }
+
+
+def _event_impact_scenarios_for_prompt(config: dict[str, Any]) -> list[dict[str, Any]]:
+    scenarios: list[dict[str, Any]] = []
+    criteria_fields = _event_impact_criteria_for_prompt()["required_fields"]
+    for match in _default_group_matches(config):
+        opponent = str(match.get("opponent", "")).strip()
+        if not opponent:
+            continue
+        scenarios.append(
+            {
+                "phase": "Fase de grupos",
+                "opponent": opponent,
+                "venue": match.get("venue"),
+                "scenario_pct": match.get("scenario_pct"),
+                "required_event_fields": criteria_fields,
+                "instruction": (
+                    "Busque eventos recentes para Brasil e adversário; aplique os mesmos critérios da fase de grupos."
+                ),
+            }
+        )
+    for match in _default_knockout_matches(config):
+        phase = str(match.get("phase") or "Mata-mata").strip() or "Mata-mata"
+        opponent = str(match.get("opponent", "")).strip()
+        if not opponent:
+            continue
+        scenarios.append(
+            {
+                "phase": phase,
+                "opponent": opponent,
+                "venue": match.get("venue"),
+                "most_likely": bool(match.get("most_likely", False)),
+                "scenario_pct": match.get("scenario_pct"),
+                "required_event_fields": criteria_fields,
+                "instruction": (
+                    "Projete eventos reais já conhecidos e eventos simulados de cenário até esta fase "
+                    "com os mesmos critérios da fase de grupos; se não houver fonte ou consulta auditável, "
+                    "declare ausência de evento relevante e não altere probabilidade."
+                ),
+            }
+        )
+    return scenarios
+
+
+def _market_value_config(config: dict[str, Any]) -> dict[str, Any]:
+    raw = config.get("market_value_momentum") or {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _parse_market_value_eur(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, int | float):
+        return float(value)
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    multiplier = 1.0
+    if any(token in text for token in ("m", "mi", "milhao", "milhão", "million")):
+        multiplier = 1_000_000.0
+    elif any(token in text for token in ("k", "mil", "thousand")):
+        multiplier = 1_000.0
+    cleaned = re.sub(r"[^0-9,.\-]", "", text)
+    if not cleaned:
+        return None
+    if "," in cleaned and "." in cleaned:
+        cleaned = cleaned.replace(".", "").replace(",", ".")
+    elif "," in cleaned:
+        cleaned = cleaned.replace(",", ".")
+    try:
+        return float(cleaned) * multiplier
+    except ValueError:
+        return None
+
+
+def _market_value_entry_eur(entry: dict[str, Any], *, base: str) -> float | None:
+    for key in (f"{base}_value_eur", f"{base}_eur", base):
+        if key in entry:
+            return _parse_market_value_eur(entry.get(key))
+    for key in (f"{base}_value_m_eur", f"{base}_m_eur"):
+        if key in entry:
+            value = _parse_market_value_eur(entry.get(key))
+            return value * 1_000_000 if value is not None and value < 1_000_000 else value
+    return None
+
+
+def _market_value_player_weighted_delta_eur(entry: dict[str, Any], *, percent_cap: float = 0.75) -> float:
+    old_value = _market_value_entry_eur(entry, base="old")
+    new_value = _market_value_entry_eur(entry, base="new")
+    if old_value is None or new_value is None or old_value <= 0:
+        return 0.0
+    delta = new_value - old_value
+    pct_delta = delta / old_value
+    multiplier = 1.0 + min(abs(pct_delta), max(0.0, float(percent_cap)))
+    return delta * multiplier
+
+
+def _team_market_value_entries(config: dict[str, Any], team: str) -> list[dict[str, Any]]:
+    cfg = _market_value_config(config)
+    teams = cfg.get("teams") or {}
+    normalized_team = _normalize_text(team)
+    aliases = {normalized_team}
+    if normalized_team in {"brasil", "brazil"}:
+        aliases.update({"brasil", "brazil"})
+    for name, raw_entries in dict(teams).items():
+        if _normalize_text(str(name)) not in aliases:
+            continue
+        if isinstance(raw_entries, dict):
+            raw_entries = raw_entries.get("players", [])
+        return [entry for entry in raw_entries if isinstance(entry, dict)]
+    return []
+
+
+def _format_market_value_millions(value_eur: float | None) -> str:
+    if value_eur is None:
+        return "s/d"
+    return f"{value_eur / 1_000_000:.1f}M"
+
+
+def _market_value_team_summary(config: dict[str, Any], team: str) -> dict[str, Any] | None:
+    cfg = _market_value_config(config)
+    entries = _team_market_value_entries(config, team)
+    if not entries:
+        return None
+    percent_cap = float(cfg.get("percent_multiplier_cap", 0.75))
+    players = []
+    nominal_delta = 0.0
+    weighted_delta = 0.0
+    positive_players = 0
+    for entry in entries:
+        old_value = _market_value_entry_eur(entry, base="old")
+        new_value = _market_value_entry_eur(entry, base="new")
+        if old_value is None or new_value is None or old_value <= 0:
+            continue
+        delta = new_value - old_value
+        weighted = _market_value_player_weighted_delta_eur(entry, percent_cap=percent_cap)
+        pct_delta = delta / old_value * 100.0
+        nominal_delta += delta
+        weighted_delta += weighted
+        if delta > 0:
+            positive_players += 1
+        players.append(
+            {
+                "player": str(entry.get("player") or entry.get("name") or "Jogador"),
+                "old_value_eur": old_value,
+                "new_value_eur": new_value,
+                "delta_eur": delta,
+                "pct_delta": pct_delta,
+                "weighted_delta_eur": weighted,
+                "display": (
+                    f"{entry.get('player') or entry.get('name') or 'Jogador'} "
+                    f"{_format_market_value_millions(old_value)}->{_format_market_value_millions(new_value)}"
+                ),
+            }
+        )
+    if not players:
+        return None
+    players.sort(key=lambda item: abs(float(item["weighted_delta_eur"])), reverse=True)
+    return {
+        "team": team,
+        "players_tracked": len(players),
+        "positive_players": positive_players,
+        "nominal_delta_eur": round(nominal_delta, 2),
+        "weighted_delta_eur": round(weighted_delta, 2),
+        "top_players": players[:3],
+    }
+
+
+def _market_value_momentum_report(config: dict[str, Any]) -> dict[str, Any]:
+    cfg = _market_value_config(config)
+    if not cfg.get("enabled", False):
+        return {"available": False}
+    teams = cfg.get("teams") or {}
+    summaries = {}
+    for team in dict(teams):
+        summary = _market_value_team_summary(config, str(team))
+        if summary:
+            summaries[str(team)] = summary
+    return {
+        "available": bool(summaries),
+        "source": cfg.get("source", "Transfermarkt"),
+        "rule": (
+            "Peso combina delta nominal em euros e percentual, com teto para o percentual; "
+            "um ganho 50M->55M pesa mais que 10M->13M."
+        ),
+        "teams": summaries,
+    }
+
+
+def _market_value_momentum_signal(
+    match: dict[str, Any],
+    *,
+    base_pct: float,
+    config: dict[str, Any],
+) -> SourceSignal | None:
+    cfg = _market_value_config(config)
+    if not cfg.get("enabled", False):
+        return None
+    opponent = str(match.get("opponent") or "")
+    if not opponent or "definir" in _normalize_text(opponent):
+        return None
+    brazil_summary = _market_value_team_summary(config, "Brasil")
+    opponent_summary = _market_value_team_summary(config, opponent)
+    if not brazil_summary or not opponent_summary:
+        return None
+    eur_per_point = float(cfg.get("eur_per_probability_point", 25_000_000))
+    max_shift_pct = float(cfg.get("max_shift_pct", 2.5))
+    diff = float(brazil_summary["weighted_delta_eur"]) - float(opponent_summary["weighted_delta_eur"])
+    shift = max(-max_shift_pct, min(max_shift_pct, diff / max(eur_per_point, 1.0)))
+    brazil_pct = max(1.0, min(99.0, base_pct + shift))
+    detail = (
+        "Transfermarkt market value momentum: "
+        f"Brasil {brazil_summary['positive_players']} jogadores em alta, "
+        f"delta nominal €{brazil_summary['nominal_delta_eur'] / 1_000_000:.1f}M, "
+        f"score ponderado €{brazil_summary['weighted_delta_eur'] / 1_000_000:.1f}M; "
+        f"{opponent} {opponent_summary['positive_players']} jogadores em alta, "
+        f"delta nominal €{opponent_summary['nominal_delta_eur'] / 1_000_000:.1f}M, "
+        f"score ponderado €{opponent_summary['weighted_delta_eur'] / 1_000_000:.1f}M. "
+        "Regra: delta nominal em euros pesa mais que percentual isolado; destaques: "
+        f"Brasil {', '.join(player['display'] for player in brazil_summary['top_players'])}; "
+        f"{opponent} {', '.join(player['display'] for player in opponent_summary['top_players'])}."
+    )
+    return SourceSignal(
+        source="Transfermarkt market value momentum",
+        brazil_pct=brazil_pct,
+        opponent_pct=100 - brazil_pct,
+        confidence=float(cfg.get("confidence", 0.58)),
+        detail=detail,
+    )
+
+
+def _signals_for_match(
+    match: dict[str, Any],
+    *,
+    evidence: list[EvidenceResult],
+    knockout: bool,
+    config: dict[str, Any] | None = None,
+) -> tuple[list[SourceSignal], list[SourceSignal]]:
+    config = config or {}
+    base_pct = _base_probability_for_match(match, knockout=knockout)
+    statistical = [
+        SourceSignal(
+            source=result.source.name,
+            brazil_pct=base_pct,
+            opponent_pct=100 - base_pct,
+            confidence=result.source.confidence if result.ok else result.source.confidence * 0.45,
+            detail=result.source.notes,
+        )
+        for result in evidence
+        if result.source.category == "statistical"
+    ]
+    qualitative_shift = float(match.get("qualitative_shift_pct", 0.0))
+    qualitative_pct = max(1.0, min(99.0, base_pct + qualitative_shift))
+    qualitative = [
+        SourceSignal(
+            source=result.source.name,
+            brazil_pct=qualitative_pct,
+            opponent_pct=100 - qualitative_pct,
+            confidence=result.source.confidence if result.ok else result.source.confidence * 0.35,
+            detail=result.source.notes,
+        )
+        for result in evidence
+        if result.source.category == "qualitative"
+    ]
+    market_value_signal = _market_value_momentum_signal(match, base_pct=base_pct, config=config)
+    if market_value_signal is not None:
+        qualitative.append(market_value_signal)
+    event_statistical, event_qualitative = _recent_event_signals_for_match(match, base_pct=base_pct, config=config)
+    statistical.extend(event_statistical)
+    qualitative.extend(event_qualitative)
+
+    if not statistical:
+        statistical.append(
+            SourceSignal(
+                source="baseline statistical prior",
+                brazil_pct=base_pct,
+                opponent_pct=100 - base_pct,
+                confidence=0.45,
+                detail=(
+                    "Prior estatístico local usado porque o mediador não injeta fetch externo; "
+                    "os ajustes frescos entram pela sala de modelos."
+                ),
+            )
+        )
+    if not qualitative:
+        qualitative.append(
+            SourceSignal(
+                source="baseline qualitative prior",
+                brazil_pct=qualitative_pct,
+                opponent_pct=100 - qualitative_pct,
+                confidence=0.35,
+                detail=(
+                    "Prior qualitativo local usado porque o mediador não injeta fetch externo; "
+                    "lesões, forma, arbitragem e elenco entram pela sala de modelos."
+                ),
+            )
+        )
+    return statistical, qualitative
+
+
+def _rationale(
+    match: dict[str, Any],
+    *,
+    evidence: list[EvidenceResult],
+    knockout: bool,
+    config: dict[str, Any] | None = None,
+) -> str:
+    config = config or {}
+    ok_stat = [r.source.name for r in evidence if r.ok and r.source.category == "statistical"]
+    ok_qual = [r.source.name for r in evidence if r.ok and r.source.category == "qualitative"]
+    event_fragment = _recent_event_rationale_fragment(match, config=config)
+    phase_context = (
+        "No mata-mata, a estimativa comprime vantagem técnica porque jogo único aumenta variância, "
+        "cartões e arbitragem pesam mais, e três dias completos entre partidas reduzem margem física."
+        if knockout
+        else "Na fase de grupos, a estimativa favorece estabilidade estatística porque há menor pressão de eliminação direta, "
+        "mas saldo, rotação e cartões mudam o incentivo tático."
+    )
+    custom = match.get("rationale")
+    if custom:
+        return str(custom) + event_fragment
+    if not evidence:
+        return (
+            f"{phase_context} O cálculo inicial usa priors locais como partitura de base, mas o mediador "
+            "não faz busca externa nem cache: as fontes atualizadas entram pelas falas dos modelos e pelo "
+            "consenso jogo a jogo. Os modelos usam dados quantitativos e qualitativos sem quota metodológica "
+            "fixa; a força das fontes define quais premissas movem as probabilidades."
+            f"{event_fragment}"
+        )
+    return (
+        f"{phase_context} O cálculo cruza sinais quantitativos "
+        f"({', '.join(ok_stat) if ok_stat else 'sem fonte externa estatística válida no run'}) "
+        f"e sinais qualitativos ({', '.join(ok_qual) if ok_qual else 'sem fonte externa qualitativa válida no run'}). "
+        "Não há quota fixa entre quanti e quali: só entram premissas com número, fonte/query e efeito em probabilidade."
+        f"{event_fragment}"
+    )
+
+
+def _stage_probabilities(title_pct: float, config: dict[str, Any]) -> dict[str, float]:
+    configured = config.get("stage_probabilities")
+    if configured:
+        return {key: round(float(value), 1) for key, value in configured.items()}
+    monte_carlo_result = config.get("_monte_carlo_result")
+    if (
+        isinstance(monte_carlo_result, dict)
+        and monte_carlo_result.get("enabled")
+        and bool((config.get("monte_carlo") or {}).get("use_stage_probabilities", True))
+    ):
+        stages = monte_carlo_result.get("stage_probabilities") or {}
+        return {
+            "quartas": round(float(stages.get("quartas", title_pct * 5.9)), 1),
+            "semifinal": round(float(stages.get("semifinal", title_pct * 3.7)), 1),
+            "final": round(float(stages.get("final", title_pct * 2.05)), 1),
+            "titulo": round(float(title_pct), 1),
+        }
+    return {
+        "quartas": round(min(95.0, max(0.0, title_pct * 5.9)), 1),
+        "semifinal": round(min(90.0, max(0.0, title_pct * 3.7)), 1),
+        "final": round(min(70.0, max(0.0, title_pct * 2.05)), 1),
+        "titulo": round(title_pct, 1),
+    }
+
+
+def _bounded_confidence_level(value: Any, *, default: float = 0.95) -> float:
+    try:
+        confidence_level = float(value)
+    except (TypeError, ValueError):
+        confidence_level = float(default)
+    return max(0.5, min(0.999, confidence_level))
+
+
+def _uncertainty_config(config: dict[str, Any]) -> dict[str, Any]:
+    raw = config.get("uncertainty")
+    return raw if isinstance(raw, dict) else {}
+
+
+def _confidence_level_for_report(config: dict[str, Any]) -> float:
+    uncertainty = _uncertainty_config(config)
+    if "confidence_level" in uncertainty:
+        return _bounded_confidence_level(uncertainty.get("confidence_level"))
+    monte_carlo = config.get("monte_carlo")
+    if isinstance(monte_carlo, dict) and "confidence_level" in monte_carlo:
+        return _bounded_confidence_level(monte_carlo.get("confidence_level"))
+    return 0.95
+
+
+def _z_for_confidence_level(confidence_level: float) -> float:
+    bounded = _bounded_confidence_level(confidence_level)
+    return NormalDist().inv_cdf(0.5 + bounded / 2.0)
+
+
+def _student_t_critical(confidence_level: float, df: int) -> float:
+    z = _z_for_confidence_level(confidence_level)
+    if df <= 0:
+        return z
+    if df == 1:
+        if confidence_level >= 0.99:
+            return 63.657
+        if confidence_level >= 0.95:
+            return 12.706
+    nu = float(df)
+    # Cornish-Fisher expansion: close enough for uncertainty widening; exactness is less important than honesty.
+    return z + (z**3 + z) / (4.0 * nu) + (5.0 * z**5 + 16.0 * z**3 + 3.0 * z) / (96.0 * nu**2)
+
+
+def _logit_probability(probability_pct: float) -> float:
+    p = max(0.001, min(0.999, float(probability_pct) / 100.0))
+    return math.log(p / (1.0 - p))
+
+
+def _inverse_logit_pct(value: float) -> float:
+    return 100.0 / (1.0 + math.exp(-value))
+
+
+def _interval_midpoint(interval: tuple[float, float]) -> float:
+    return (float(interval[0]) + float(interval[1])) / 2.0
+
+
+def _interval_logit_variance(
+    interval: tuple[float, float],
+    *,
+    confidence_level: float,
+) -> float | None:
+    low, high = float(interval[0]), float(interval[1])
+    if low >= high:
+        return None
+    z = _z_for_confidence_level(confidence_level)
+    if z <= 0:
+        return None
+    low_logit = _logit_probability(low)
+    high_logit = _logit_probability(high)
+    sigma = abs(high_logit - low_logit) / (2.0 * z)
+    if sigma <= 0:
+        return None
+    return sigma * sigma
+
+
+def _combine_probability_intervals_logit(
+    *,
+    center_pct: float,
+    sources: list[tuple[str, tuple[float, float]]],
+    confidence_level: float,
+    location_gap_fallback_pct: float,
+) -> tuple[tuple[float, float], dict[str, Any]]:
+    clean_sources: list[tuple[str, tuple[float, float]]] = []
+    for label, interval in sources:
+        try:
+            low, high = float(interval[0]), float(interval[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        low = max(0.0, min(100.0, low))
+        high = max(0.0, min(100.0, high))
+        if low > high:
+            low, high = high, low
+        if high - low <= 0:
+            continue
+        clean_sources.append((label, (low, high)))
+    if not clean_sources:
+        return (
+            (round(max(0.0, min(100.0, center_pct)), 1), round(max(0.0, min(100.0, center_pct)), 1)),
+            {"method": "point_only", "sources": []},
+        )
+
+    source_centers = [_interval_midpoint(interval) for _, interval in clean_sources]
+    max_location_gap = max(abs(center - float(center_pct)) for center in source_centers)
+    envelope = (
+        round(max(0.0, min(float(center_pct), *(interval[0] for _, interval in clean_sources))), 1),
+        round(min(100.0, max(float(center_pct), *(interval[1] for _, interval in clean_sources))), 1),
+    )
+    if max_location_gap > location_gap_fallback_pct:
+        return envelope, {
+            "method": "envelope_fallback",
+            "fallback_reason": "location_gap",
+            "max_location_gap_pct": round(max_location_gap, 2),
+            "location_gap_fallback_pct": round(float(location_gap_fallback_pct), 2),
+            "sources": [label for label, _ in clean_sources],
+        }
+
+    variances = [
+        variance
+        for _, interval in clean_sources
+        if (variance := _interval_logit_variance(interval, confidence_level=confidence_level)) is not None
+    ]
+    if not variances:
+        return envelope, {
+            "method": "envelope_fallback",
+            "fallback_reason": "no_valid_variance",
+            "sources": [label for label, _ in clean_sources],
+        }
+    z = _z_for_confidence_level(confidence_level)
+    center_logit = _logit_probability(center_pct)
+    sigma = math.sqrt(sum(variances))
+    combined = (
+        round(max(0.0, min(float(center_pct), _inverse_logit_pct(center_logit - z * sigma))), 1),
+        round(min(100.0, max(float(center_pct), _inverse_logit_pct(center_logit + z * sigma))), 1),
+    )
+    return combined, {
+        "method": "logit_variance_sum",
+        "fallback_reason": "",
+        "max_location_gap_pct": round(max_location_gap, 2),
+        "sources": [label for label, _ in clean_sources],
+        "variance_count": len(variances),
+    }
+
+
+def _model_probability_interval_pct(
+    probability_samples: list[float],
+    *,
+    center_pct: float,
+    confidence_level: float,
+) -> tuple[float, float] | None:
+    samples: list[float] = []
+    for value in probability_samples:
+        try:
+            probability = float(value)
+        except (TypeError, ValueError):
+            continue
+        if 0.0 < probability < 100.0:
+            samples.append(probability)
+    if len(samples) < 2:
+        return None
+    logits = [_logit_probability(value) for value in samples]
+    mean = sum(logits) / len(logits)
+    variance = sum((value - mean) ** 2 for value in logits) / max(1, len(logits) - 1)
+    if variance <= 0:
+        return None
+    standard_error = math.sqrt(variance) / math.sqrt(len(logits))
+    critical = _student_t_critical(confidence_level, len(logits) - 1)
+    low = min(_inverse_logit_pct(mean - critical * standard_error), float(center_pct))
+    high = max(_inverse_logit_pct(mean + critical * standard_error), float(center_pct))
+    return round(max(0.0, low), 1), round(min(100.0, high), 1)
+
+
+def _title_samples_for_uncertainty(opinions: list[AgentOpinion]) -> list[float]:
+    samples: list[float] = []
+    for opinion in opinions:
+        if bool(getattr(opinion, "removed_from_main", False)):
+            continue
+        summary = str(getattr(opinion, "summary", "") or "").lower()
+        if "resposta removida" in summary or "fallback operacional" in summary:
+            continue
+        if getattr(opinion, "used_fallback", False) and not (
+            getattr(opinion, "source_urls", None) or getattr(opinion, "source_queries", None)
+        ):
+            continue
+        try:
+            samples.append(float(opinion.title_pct))
+        except (TypeError, ValueError):
+            continue
+    return samples
+
+
+def _report_uncertainty_metadata(config: dict[str, Any]) -> dict[str, Any]:
+    uncertainty = _uncertainty_config(config)
+    monte_carlo = config.get("monte_carlo") if isinstance(config.get("monte_carlo"), dict) else {}
+    confidence_level = _confidence_level_for_report(config)
+    return {
+        "confidence_level": confidence_level,
+        "minimum_declared_coverage": _bounded_confidence_level(
+            uncertainty.get("minimum_declared_coverage", 0.95),
+            default=0.95,
+        ),
+        "model_dispersion_method": str(uncertainty.get("model_dispersion_method", "heuristic_dispersion")),
+        "rating_uncertainty_enabled": bool(monte_carlo.get("rating_uncertainty_enabled", False)),
+    }
+
+
+def _stage_confidence_intervals(
+    probabilities: dict[str, float],
+    *,
+    dispersion_pct: float,
+    warning_count: int,
+    config: dict[str, Any],
+    model_title_pcts: list[float] | None = None,
+) -> dict[str, tuple[float, float]]:
+    configured = config.get("stage_confidence_intervals")
+    if configured:
+        return {key: (round(float(value[0]), 1), round(float(value[1]), 1)) for key, value in configured.items()}
+
+    confidence_level = _confidence_level_for_report(config)
+    level_multiplier = _z_for_confidence_level(confidence_level) / _z_for_confidence_level(0.95)
+    base_width = min(28.0, max(5.0, 4.0 + dispersion_pct * 0.8 + warning_count * 1.3) * level_multiplier)
+    intervals: dict[str, tuple[float, float]] = {}
+    metadata: dict[str, dict[str, Any]] = {}
+    location_gap_fallback_pct = float(
+        _uncertainty_config(config).get("logit_variance_location_gap_fallback_pct", 12.0)
+    )
+    monte_carlo_result = config.get("_monte_carlo_result")
+    mc_stage_uncertainty = {}
+    if isinstance(monte_carlo_result, dict) and monte_carlo_result.get("enabled"):
+        mc_stage_uncertainty = monte_carlo_result.get("stage_uncertainty_intervals") or {}
+    mc_phase_by_key = {
+        "quartas": "Quartas",
+        "semifinal": "Semifinal",
+        "final": "Final",
+    }
+    for key, value in probabilities.items():
+        stage_multiplier = {
+            "quartas": 1.10,
+            "semifinal": 1.05,
+            "final": 1.00,
+            "titulo": 0.90,
+        }.get(key, 1.0)
+        width = base_width * stage_multiplier
+        source_intervals: list[tuple[str, tuple[float, float]]] = [
+            (
+                "operational_base",
+                (
+                    round(max(0.0, value - width / 2), 1),
+                    round(min(100.0, value + width / 2), 1),
+                ),
+            )
+        ]
+        if isinstance(monte_carlo_result, dict) and monte_carlo_result.get("enabled"):
+            phase_payload = (monte_carlo_result.get("phases") or {}).get(mc_phase_by_key.get(key, ""))
+            if isinstance(phase_payload, dict) and phase_payload.get("reach_ci"):
+                mc_low, mc_high = phase_payload["reach_ci"]
+                source_intervals.append(("monte_carlo_sampling", (float(mc_low), float(mc_high))))
+            if isinstance(mc_stage_uncertainty, dict) and key in mc_stage_uncertainty:
+                mc_low, mc_high = mc_stage_uncertainty[key]
+                source_intervals.append(("monte_carlo_epistemic", (float(mc_low), float(mc_high))))
+        if key == "titulo" and (_uncertainty_config(config).get("model_dispersion_method") == "logit_student_t"):
+            model_interval = _model_probability_interval_pct(
+                model_title_pcts or [],
+                center_pct=value,
+                confidence_level=confidence_level,
+            )
+            if model_interval:
+                source_intervals.append(("model_dispersion_t", model_interval))
+        combined, stage_metadata = _combine_probability_intervals_logit(
+            center_pct=value,
+            sources=source_intervals,
+            confidence_level=confidence_level,
+            location_gap_fallback_pct=location_gap_fallback_pct,
+        )
+        intervals[key] = combined
+        metadata[key] = stage_metadata
+    config["_stage_interval_metadata"] = metadata
+    return intervals
+
+
+def _quantitative_qualitative_decision_instruction() -> str:
+    return (
+        "Contrato de decisão quantitativa/qualitativa: números importam e devem sustentar decisões racionais, "
+        "mas análise quantitativa e análise qualitativa são ambas necessárias. Use dados quantitativos e qualitativos "
+        "para construir uma hipótese auditável que os outros modelos consigam aceitar ou contestar. "
+        "Não declare nem use percentual, razão, quota ou peso metodológico para dividir quanti e quali; "
+        "percentuais devem aparecer apenas como probabilidades de jogos, cenários, fases ou título. "
+        "Use estatística, odds, prediction markets e ratings como uma "
+        "das bases possíveis; use fatos, informações verificáveis, análises de especialistas, "
+        "lesões, cortes, cartões, arbitragem/VAR, descanso, forma e performance de jogadores para capturar fatores "
+        "que os números agregados não mostram bem. Isso é comum no futebol: o qualitativo não substitui os números, "
+        "mas pode explicar assimetrias, injustiças de resultado e mudanças recentes que ainda não entraram no preço. "
+        "Se Transfermarkt trouxer atualização curta ou quase em tempo real de valor de mercado, use como sinal de "
+        "momentum de elenco para Brasil e adversários/cenários hipotéticos: conte quantos jogadores subiram, mas "
+        "pondere a influência pelo delta nominal em euros e pela variação percentual, com o nominal dominando o "
+        "percentual isolado. Exemplo obrigatório de regra: 50M->55M pesa mais que 10M->13M, apesar do segundo ter "
+        "percentual maior."
+    )
+
+
+def _self_identification_instruction() -> str:
+    return (
+        "Identificação dinâmica obrigatória: inclua self_identification no JSON com name e version "
+        "declarados por você mesmo neste run. Não copie automaticamente o nome do slot nem o modelo configurado; "
+        "se você não souber sua versão exata, declare a versão como 'não declarado'. "
+    )
+
+
+def _meeting_full_path_instruction(config: dict[str, Any]) -> str:
+    group_opponents = ", ".join(
+        str(match.get("opponent", "")).strip()
+        for match in _default_group_matches(config)
+        if str(match.get("opponent", "")).strip()
+    )
+    phases = ", ".join(
+        dict.fromkeys(
+            str(match.get("phase", "")).strip()
+            for match in _default_knockout_matches(config)
+            if str(match.get("phase", "")).strip()
+        )
+    )
+    return (
+        "Cobertura obrigatória antes de encerrar consenso: mantenha Brasil e adversários/cenários configurados "
+        f"em foco, cubra grupo ({group_opponents}), mata-mata ({phases}) e chance de título. "
+        "Se o adversário do mata-mata estiver 'a definir', use exatamente o rótulo do JSON; não invente país. "
+        "Não use códigos de chaveamento, países, grupos ou adversários que não estejam no JSON configurado. "
+        "Nunca responda com metacomentário operacional sobre rodadas mínimas, cobertura incompleta ou modelos ruins; "
+        "se faltar cobertura, formule a próxima pergunta objetiva sobre a fase faltante. "
+    )
+
+
+def _agent_prompt(
+    *,
+    config: dict[str, Any],
+    evidence: list[EvidenceResult],
+    generated_at: datetime,
+) -> str:
+    matches = _configured_matches_for_prompt(config)
+    macro_direction = config.get(
+        "macro_direction",
+        "Brasil na Copa do Mundo de 2026: números e contexto como direcional inicial, sem viés pró-Brasil.",
+    )
+    return (
+        "Você é um dos modelos de debate para um relatório LinkedIn sobre até onde o Brasil pode ir "
+        "na Copa do Mundo de 2026. Você está construindo o Modelo Principal. Use apenas fontes de mercado, "
+        "ratings independentes, desempenho de jogadores, arbitragem e contexto de elenco. Responda em JSON estrito com as chaves: "
+        "self_identification (objeto com name e version), title_pct (número percentual), summary (até 450 caracteres), opening_argument, "
+        "critique, adjustment, risks (lista curta), upside (lista curta), source_urls (lista de URLs), "
+        "source_queries (lista de buscas), team_context_signals (lista). Antes de estimar, escolha as fontes que você usaria dentro do "
+        "direcionamento macro; priorize sportsbooks, prediction markets, ratings, notícias de elenco/lesão "
+        "performance dos jogadores via Sofascore, avaliação de arbitragem/VAR/cartões/disciplina e simulações públicas independentes. "
+        f"{_agent_owned_fresh_search_contract()} "
+        "Não use torcida. Use dados quantitativos e qualitativos conforme a força das fontes encontradas, "
+        "sem declarar percentual de divisão metodológica entre eles. "
+        f"{_opponent_research_instruction(config)} "
+        f"{_quantitative_qualitative_decision_instruction()} "
+        f"{_meeting_full_path_instruction(config)} "
+        f"{_event_impact_prompt_instruction()} "
+        f"{_self_identification_instruction()} "
+        f"{_effort_latency_instruction()} "
+        "Reconheça incerteza quando fonte externa falhar. Escreva em linguagem de LinkedIn, entendível "
+        "para gente que gosta de futebol e dados, mas explique os métodos usados sem jargão desnecessário.\n\n"
+        f"Data do run: {generated_at.isoformat()}\n"
+        f"Direcionamento macro: {macro_direction}\n"
+        f"Jogos/cenários configurados: {json.dumps(matches, ensure_ascii=False)}\n"
+    )
+
+
+def _source_planning_prompt(*, config: dict[str, Any], generated_at: datetime) -> str:
+    macro_direction = config.get(
+        "macro_direction",
+        "Brasil na Copa do Mundo de 2026: números e contexto como direcional inicial, sem viés pró-Brasil.",
+    )
+    scope = _compact_source_planning_scope(config)
+    scope_json = json.dumps(scope, ensure_ascii=False, separators=(",", ":"))
+    return (
+        "Planeje fontes frescas para a reunião de modelos do Brasil na Copa 2026; ainda não feche consenso. "
+        "JSON estrito: self_identification{name,version}, title_pct, summary, opening_argument, critique, adjustment, source_urls, source_queries, team_context_signals. "
+        f"{_agent_owned_fresh_search_contract()} "
+        f"{_effort_latency_instruction()} "
+        "Números importam; combine análise quantitativa e análise qualitativa, fatos, especialistas e futebol. "
+        "Use dados quantitativos e qualitativos para formular hipótese auditável, com número, fonte/query e efeito em probabilidade; não declare percentual, razão ou peso metodológico para dividir quanti e quali. "
+        "Pesquisa simétrica: Brasil e adversários/cenários, mesmas famílias de fontes: mercados/odds, Elo/FIFA/ratings, Sofascore/performance, lesões/cortes/cartões, arbitragem/VAR, descanso, chaveamento, elenco. "
+        "Para team_context_signals, traga sinais por seleção, inclusive adversários prováveis, com team, category, rating_delta ou probability_delta_pct, confidence, rationale e source_url/source_query. "
+        "Famílias válidas incluem bets/prediction markets, ratings, Sofascore/performance, lesões/cortes/notícias recentes, amistosos recentes, arbitragem/VAR/cartões e opinião de imprensa especializada. "
+        "Sem fonte auditável ou sem delta numérico, o sinal será ignorado pelo Monte Carlo. "
+        "Monte Carlo: quando o escopo trouxer monte_carlo.enabled=true, trate a simulação como insumo quantitativo auditável "
+        "para scenario_probabilities, adversários prováveis, caminho e IC; aceite ou conteste com fonte/query melhor. "
+        "Transfermarkt/valor de mercado: delta nominal + variação; delta nominal domina percentual isolado; 50M->55M pesa mais que 10M->13M. "
+        "Eventos: recent_event_impacts/event_impact_scenarios com os mesmos critérios da fase de grupos até a Final; exigir date, team, category, summary, source_url/source_query, brazil_shift_pct, scenario_shift_pct, confidence. "
+        "Não use benchmark reservado do comparativo separado nesta sala. Não invente fonte, URL, score, rating, método, adversário ou efeito. Identificação dinâmica: self_identification name/version declarados; se versão incerta, 'não declarado'. "
+        "Use só o escopo abaixo; linguagem auditável e entendível para LinkedIn.\n\n"
+        f"Data do run: {generated_at.isoformat()}\n"
+        f"Direção: {macro_direction}\n"
+        f"Escopo compacto: {scope_json}\n"
+    )
+
+
+def _sources_from_agent_opinions(
+    opinions: list[Any],
+    *,
+    max_sources: int,
+) -> list[EvidenceSource]:
+    sources: list[EvidenceSource] = []
+    seen: set[str] = set()
+    for opinion in opinions:
+        for url in getattr(opinion, "source_urls", []):
+            if not _valid_http_url(url) or url in seen or _has_opta_marker(url):
+                continue
+            seen.add(url)
+            host = urllib.parse.urlparse(url).netloc
+            if _has_opta_marker(host):
+                continue
+            sources.append(
+                EvidenceSource(
+                    name=f"{opinion.agent} selected: {host}",
+                    category=_category_from_url(url),
+                    url=url,
+                    confidence=0.64 if not getattr(opinion, "used_fallback", False) else 0.35,
+                    notes=f"Fonte escolhida pelo modelo {opinion.agent} na rodada de planejamento.",
+                )
+            )
+            if len(sources) >= max_sources:
+                return sources
+    return sources
+
+
+def _source_plan_by_model(opinions: list[Any]) -> dict[str, dict[str, list[str]]]:
+    return {
+        opinion.agent: {
+            "source_urls": [url for url in getattr(opinion, "source_urls", []) if not _has_opta_marker(url)],
+            "source_queries": [query for query in getattr(opinion, "source_queries", []) if not _has_opta_marker(query)],
+            "excluded_opta_items": [
+                item
+                for item in [*getattr(opinion, "source_urls", []), *getattr(opinion, "source_queries", [])]
+                if _has_opta_marker(item)
+            ],
+        }
+        for opinion in opinions
+    }
+
+
+def _reported_source_labels_from_agent_opinions(opinions: list[Any]) -> list[str]:
+    labels: list[str] = []
+    seen: set[str] = set()
+    for opinion in opinions:
+        agent = str(getattr(opinion, "agent", "Modelo")).strip() or "Modelo"
+        for url in getattr(opinion, "source_urls", []) or []:
+            rendered = str(url).strip()
+            if not _valid_http_url(rendered) or _has_opta_marker(rendered):
+                continue
+            label = f"{agent}: {rendered}"
+            if label not in seen:
+                seen.add(label)
+                labels.append(label)
+        for query in getattr(opinion, "source_queries", []) or []:
+            rendered = str(query).strip()
+            if not rendered or _has_opta_marker(rendered):
+                continue
+            label = f"{agent} busca: {rendered}"
+            if label not in seen:
+                seen.add(label)
+                labels.append(label)
+    return labels
+
+
+def _reported_event_source_labels(config: dict[str, Any]) -> list[str]:
+    labels: list[str] = []
+    seen: set[str] = set()
+    for event in _recent_event_impacts(config):
+        summary = _event_summary(event)
+        source_url = str(event.get("source_url") or "").strip()
+        source_query = str(event.get("source_query") or "").strip()
+        if source_url and _valid_http_url(source_url):
+            label = f"Evento recente: {summary} - {source_url}"
+        elif source_query:
+            label = f"Evento recente busca: {summary} - {source_query}"
+        else:
+            continue
+        if label not in seen:
+            seen.add(label)
+            labels.append(label)
+    return labels
+
+
+COMMON_NATIONAL_TEAM_MARKERS = {
+    "africa do sul",
+    "algeria",
+    "alemanha",
+    "argentina",
+    "arabia saudita",
+    "australia",
+    "austria",
+    "belgica",
+    "bosnia e herzegovina",
+    "cabo verde",
+    "canada",
+    "catar",
+    "chile",
+    "colombia",
+    "coreia do sul",
+    "costa do marfim",
+    "croacia",
+    "curacau",
+    "egito",
+    "equador",
+    "espanha",
+    "estados unidos",
+    "eua",
+    "franca",
+    "gana",
+    "holanda",
+    "ira",
+    "iraque",
+    "inglaterra",
+    "italia",
+    "japao",
+    "jordania",
+    "marrocos",
+    "marrocos",
+    "mexico",
+    "nigeria",
+    "noruega",
+    "nova zelandia",
+    "panama",
+    "paraguai",
+    "portugal",
+    "rd congo",
+    "servia",
+    "senegal",
+    "suecia",
+    "suica",
+    "tchequia",
+    "tunisia",
+    "turquia",
+    "uzbequistao",
+    "uruguai",
+    "haiti",
+    "escocia",
+}
+
+
+def _normalize_text(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value)
+    return "".join(char for char in normalized if not unicodedata.combining(char)).lower()
+
+
+def _configured_matches_for_prompt(config: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "group_matches": _default_group_matches(config),
+        "knockout_matches": _default_knockout_matches(config),
+        "monte_carlo": monte_carlo_compact_summary(config.get("_monte_carlo_result", {"enabled": False})),
+        "parallel_opponent_briefing": config.get("_parallel_opponent_briefing", {}),
+        "recent_event_impacts": _recent_event_impacts(config),
+        "event_impact_criteria": _event_impact_criteria_for_prompt(),
+        "event_impact_scenarios": _event_impact_scenarios_for_prompt(config),
+    }
+
+
+def _compact_dict(raw: dict[str, Any], keys: list[str]) -> dict[str, Any]:
+    compact: dict[str, Any] = {}
+    for key in keys:
+        value = raw.get(key)
+        if value is None or value == "":
+            continue
+        compact[key] = value
+    return compact
+
+
+def _compact_group_match_label(match: dict[str, Any]) -> str:
+    parts = [
+        str(match.get("date") or "data?"),
+        str(match.get("opponent") or "adversário?"),
+        str(match.get("venue") or "local?"),
+    ]
+    if match.get("brazil_pct") is not None:
+        parts.append(f"BR{_compact_pct(match.get('brazil_pct'))}")
+    if match.get("draw_pct") is not None:
+        parts.append(f"E{_compact_pct(match.get('draw_pct'))}")
+    return " ".join(parts)
+
+
+def _compact_pct(value: Any) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if number.is_integer():
+        return f"{int(number)}%"
+    return f"{number:.1f}%"
+
+
+def _compact_opponent_label(opponent: Any) -> str:
+    text = str(opponent or "adversário?").strip() or "adversário?"
+    normalized = _normalize_text(text)
+    if normalized.startswith("adversario mais provavel"):
+        return "mais provável a definir"
+    if normalized.startswith("segundo adversario mais provavel"):
+        return "segunda opção a definir"
+    return text
+
+
+def _compact_knockout_match_label(match: dict[str, Any]) -> str:
+    opponent = _compact_opponent_label(match.get("opponent"))
+    option = "mp" if bool(match.get("most_likely", False)) else "2a"
+    parts = [
+        str(match.get("phase") or "Mata-mata"),
+        option if opponent in {"mais provável a definir", "segunda opção a definir"} else f"{option}:{opponent}",
+    ]
+    if match.get("scenario_pct") is not None:
+        parts.append(f"cen{_compact_pct(match.get('scenario_pct'))}")
+    if match.get("brazil_pct") is not None:
+        parts.append(f"BR{_compact_pct(match.get('brazil_pct'))}")
+    if match.get("date") not in (None, "", "A definir"):
+        parts.append(f"data={match.get('date')}")
+    if match.get("venue") not in (None, "", "A definir"):
+        parts.append(f"local={match.get('venue')}")
+    return " ".join(parts)
+
+
+def _compact_source_planning_scope(config: dict[str, Any]) -> dict[str, Any]:
+    event_fields = _event_impact_criteria_for_prompt()["required_fields"]
+    event_keys = [
+        "id",
+        "date",
+        "team",
+        "teams",
+        "opponent",
+        "opponents",
+        "phase",
+        "phases",
+        "category",
+        "summary",
+        "source_url",
+        "source_query",
+        "brazil_shift_pct",
+        "scenario_shift_pct",
+        "confidence",
+    ]
+    event_scenarios = ["Fase de grupos"]
+    for match in _default_knockout_matches(config):
+        phase = str(match.get("phase") or "Mata-mata").strip() or "Mata-mata"
+        if phase not in event_scenarios:
+            event_scenarios.append(phase)
+    bracket_path = [
+        {
+            "phase": entry.get("phase"),
+            "match": entry.get("match_id"),
+            "br_slot": entry.get("brazil_slot"),
+            "opp_slots": entry.get("opponent_slots"),
+            "opp_groups": entry.get("allowed_opponent_groups"),
+            "candidates": entry.get("allowed_opponents"),
+        }
+        for entry in brazil_bracket_path(config)
+    ]
+
+    return {
+        "group_matches": [_compact_group_match_label(match) for match in _default_group_matches(config)],
+        "knockout_matches": [_compact_knockout_match_label(match) for match in _default_knockout_matches(config)],
+        "bracket_path": bracket_path,
+        "monte_carlo": monte_carlo_compact_summary(config.get("_monte_carlo_result", {"enabled": False})),
+        "recent_event_impacts": [_compact_dict(event, event_keys) for event in _recent_event_impacts(config)],
+        "event_impact_criteria": {
+            "rule": "mesmos critérios da fase de grupos até a Final; não invente evento, fonte ou efeito",
+            "required_fields": event_fields,
+            "shift_units": "pontos percentuais",
+            "simulation_guardrail": "eventos simulados são hipóteses auditáveis; sem source_url/source_query, shift 0",
+        },
+        "event_impact_scenarios": event_scenarios,
+    }
+
+
+def _configured_opponent_labels(config: dict[str, Any]) -> list[str]:
+    labels: list[str] = []
+    seen: set[str] = set()
+    for match in _default_group_matches(config):
+        opponent = str(match.get("opponent", "")).strip()
+        if not opponent:
+            continue
+        key = _normalize_text(opponent)
+        if key in seen:
+            continue
+        seen.add(key)
+        labels.append(opponent)
+    for match in _default_knockout_matches(config):
+        opponent = str(match.get("opponent", "")).strip()
+        if not opponent:
+            continue
+        key = _normalize_text(opponent)
+        if key in seen:
+            continue
+        seen.add(key)
+        phase = str(match.get("phase", "Mata-mata")).strip() or "Mata-mata"
+        labels.append(f"{phase}: {opponent}")
+    return labels
+
+
+def _opponent_research_instruction(config: dict[str, Any]) -> str:
+    labels = _configured_opponent_labels(config)
+    rendered = ", ".join(labels) if labels else "adversários/cenários configurados"
+    return (
+        "Pesquisa simétrica obrigatória: cada modelo que participa da sala deve buscar informações atualizadas "
+        f"para Brasil e adversários/cenários configurados ({rendered}), não só para o Brasil. "
+        "Use as mesmas famílias de fontes que usa para o Brasil: bets/prediction markets, sportsbooks/prediction markets, ratings/Elo/rankings, "
+        "Sofascore/performance de jogadores, Transfermarkt/valor de mercado/elenco, notícias de lesões/cortes/cartões, "
+        "amistosos recentes, opinião de imprensa especializada, arbitragem/VAR/disciplina, descanso e chaveamento. "
+        "Registre no JSON source_urls e source_queries com cobertura "
+        "de Brasil e adversários; se o adversário estiver a definir, pesquise o cenário, bloco de força, chaveamento "
+        "ou perfil provável em vez de inventar um país."
+    )
+
+
+def _meeting_scope_instruction(config: dict[str, Any]) -> str:
+    matches = _configured_matches_for_prompt(config)
+    return (
+        "Escopo obrigatório dos jogos/cenários: "
+        f"{json.dumps(matches, ensure_ascii=False)}. "
+        "Não invente adversário fora desse JSON. Se o adversário de mata-mata estiver a definir, "
+        "pergunte sobre cenário, rating efetivo, chaveamento ou bloco de força, não sobre um país específico não configurado."
+    )
+
+
+def _auditable_sources_instruction(config: dict[str, Any]) -> str:
+    allowed_urls = [str(url) for url in config.get("_allowed_fact_source_urls", []) if str(url)]
+    if not allowed_urls:
+        return (
+            "Regras de lastro factual: não invente fonte, score, rating, estudo ou método. "
+            "Toda concordância/discordância precisa trazer hipótese racional, número testável e source_urls auditáveis; "
+            "sem source_urls auditáveis, a fala será removida do consenso. "
+            "Source_urls/source_queries só contam se a busca/fetch foi realmente executada nesta chamada; "
+            "se a ferramenta externa estiver indisponível ou sem permissão, declare falha operacional e deixe fontes vazias."
+        )
+    rendered = ", ".join(allowed_urls[:10])
+    return (
+        "Regras de lastro factual: não invente fonte, score, rating, estudo ou método. "
+        "Toda concordância/discordância precisa trazer hipótese racional, número testável e source_urls auditáveis; "
+        "sem source_urls auditáveis, a fala será removida do consenso. "
+        "Source_urls/source_queries só contam se a busca/fetch foi realmente executada nesta chamada; "
+        "se a ferramenta externa estiver indisponível ou sem permissão, declare falha operacional e deixe fontes vazias. "
+        f"Use preferencialmente URLs já fetchadas nesta rodada: {rendered}."
+    )
+
+
+def _group_opponents(config: dict[str, Any]) -> set[str]:
+    return {_normalize_text(str(match["opponent"])) for match in _default_group_matches(config)}
+
+
+def _has_explicit_match_scope(config: dict[str, Any]) -> bool:
+    return bool(config.get("group_matches") or config.get("knockout_matches"))
+
+
+def _configured_opponents(config: dict[str, Any]) -> set[str]:
+    configured = {_normalize_text(str(match["opponent"])) for match in _default_group_matches(config)}
+    for match in _default_knockout_matches(config):
+        opponent = _normalize_text(str(match.get("opponent", "")))
+        if opponent and "definir" not in opponent:
+            configured.add(opponent)
+        for candidate in match.get("allowed_opponents", []) or []:
+            candidate_key = _normalize_text(str(candidate))
+            if candidate_key:
+                configured.add(candidate_key)
+    return configured
+
+
+def _mentioned_national_teams(text: str) -> set[str]:
+    normalized = _normalize_text(text)
+    return {team for team in COMMON_NATIONAL_TEAM_MARKERS if re.search(rf"\b{re.escape(team)}\b", normalized)}
+
+
+def _phase_scoped_bracket_segments(text: str, config: dict[str, Any]) -> list[tuple[dict[str, Any], str]]:
+    normalized = _normalize_text(text)
+    occurrences: list[tuple[int, int, int, dict[str, Any]]] = []
+    for index, entry in enumerate(brazil_bracket_path(config)):
+        phase = _normalize_text(str(entry.get("phase", ""))).strip()
+        if not phase:
+            continue
+        for match in re.finditer(rf"\b{re.escape(phase)}\b", normalized):
+            occurrences.append((match.start(), match.end(), index, entry))
+    if not occurrences:
+        return []
+
+    occurrences.sort(key=lambda item: (item[0], item[1]))
+    segments: list[tuple[dict[str, Any], str]] = []
+    delimiters = (".", ";", "\n", "|")
+    for start, end, _entry_index, entry in occurrences:
+        previous_positions = [normalized.rfind(delimiter, 0, start) for delimiter in delimiters]
+        segment_start = max(previous_positions) + 1
+        next_positions = [
+            position
+            for delimiter in delimiters
+            for position in [normalized.find(delimiter, end)]
+            if position != -1
+        ]
+        segment_end = min(next_positions) if next_positions else len(normalized)
+        segments.append((entry, normalized[segment_start:segment_end]))
+    return segments
+
+
+def _mentions_unconfigured_opponent(text: str, config: dict[str, Any]) -> bool:
+    if not _has_explicit_match_scope(config):
+        return False
+    allowed = _configured_opponents(config) | {"brasil"}
+    mentioned = _mentioned_national_teams(text)
+    return bool(mentioned - allowed)
+
+
+def _mentions_unconfigured_group_opponent(question: str, config: dict[str, Any]) -> bool:
+    if not config.get("group_matches"):
+        return False
+    normalized = _normalize_text(question)
+    if not re.search(r"\b(grupo|fase de grupos)\b", normalized):
+        return False
+    allowed = _group_opponents(config) | {"brasil"}
+    mentioned = _mentioned_national_teams(question)
+    return bool(mentioned - allowed)
+
+
+def _impossible_bracket_opponent_detail(text: str, config: dict[str, Any]) -> dict[str, Any] | None:
+    segments = _phase_scoped_bracket_segments(text, config)
+    if not segments:
+        return None
+    for entry, segment in segments:
+        phase = str(entry.get("phase", "")).strip()
+        mentioned = _mentioned_national_teams(segment)
+        if not mentioned:
+            continue
+        allowed = {_normalize_text(candidate) for candidate in entry.get("allowed_opponents", [])}
+        allowed.add("brasil")
+        invalid = sorted(mentioned - allowed)
+        if invalid:
+            return {
+                "phase": phase,
+                "brazil_slot": entry.get("brazil_slot", ""),
+                "opponent_slots": entry.get("opponent_slots", []),
+                "allowed_opponents": entry.get("allowed_opponents", []),
+                "invalid_opponents": invalid,
+            }
+    return None
+
+
+def _invalid_protagonist_question_reason(question: str, config: dict[str, Any]) -> str | None:
+    if _has_opta_marker(question):
+        return "benchmark reservado para a comparação separada"
+    if _has_fixed_quanti_quali_allocation(question):
+        return "alocação fixa quanti/quali proibida"
+    if _impossible_bracket_opponent_detail(question, config):
+        return "adversário impossível para o cruzamento oficial do mata-mata"
+    if _mentions_unconfigured_opponent(question, config):
+        return "adversário fora do grupo configurado ou país não definido no JSON de cenários"
+    return None
+
+
+def _sanitize_protagonist_question(question: str, *, config: dict[str, Any], protagonist: str) -> str:
+    invalid_reason = _invalid_protagonist_question_reason(question, config)
+    if invalid_reason == "benchmark reservado para a comparação separada":
+        return _ensure_consensus_request(
+            "A fala do protagonista foi invalidada pela sala por tentar usar benchmark reservado. "
+            "Modelos da sala: ignorem essa fala e sigam sem benchmark externo; qual premissa do Modelo Principal "
+            "deve mudar usando apenas odds, prediction markets, Elo/ranking, Sofascore/performance, lesões, "
+            "cartões, arbitragem, descanso ou chaveamento?"
+        )
+    if invalid_reason == "alocação fixa quanti/quali proibida":
+        return _ensure_consensus_request(
+            "A fala do protagonista foi invalidada pela sala por usar alocação fixa entre dados quantitativos "
+            "e qualitativos. Modelos da sala: ignorem essa fala; usem dados quantitativos e qualitativos sem "
+            "percentual, razão ou peso metodológico entre eles. Qual premissa auditável deve mudar usando número, "
+            "fonte/query e efeito em probabilidade?"
+        )
+    if invalid_reason == "adversário impossível para o cruzamento oficial do mata-mata":
+        detail = _impossible_bracket_opponent_detail(question, config) or {}
+        phase = str(detail.get("phase", "mata-mata"))
+        brazil_slot = str(detail.get("brazil_slot", "")).strip()
+        slots = ", ".join(str(slot) for slot in detail.get("opponent_slots", []) if str(slot))
+        candidates = ", ".join(str(candidate) for candidate in detail.get("allowed_opponents", []) if str(candidate))
+        return _ensure_consensus_request(
+            "A fala do protagonista foi invalidada pela sala por citar adversário impossível no cruzamento oficial. "
+            f"Para {phase}, Brasil {brazil_slot} só cruza com slot(s) {slots}; candidatos permitidos: {candidates}. "
+            "Modelos da sala: ignorem a fala anterior e debatam apenas esses candidatos oficiais, trazendo "
+            "scenario_probabilities e match_probabilities com fonte/query auditável."
+        )
+    if invalid_reason is None:
+        return _ensure_consensus_request(question)
+    opponents = ", ".join(match["opponent"] for match in _default_group_matches(config))
+    return _ensure_consensus_request(
+        "A fala do protagonista foi invalidada pela sala por citar adversário fora do grupo configurado. "
+        f"Modelos da sala: ignorem essa fala e restrinjam o debate aos jogos de grupo contra {opponents} "
+        "e aos cenários de mata-mata ainda a definir. Qual premissa numérica deve mudar para calibrar as chances "
+        "do Brasil sem inventar confronto?"
+    )
+
+
+def _has_implausible_title_jump(opinion: Any, *, baseline_title_pct: float, config: dict[str, Any] | None) -> bool:
+    max_shift_pct = float((config or {}).get("max_agent_title_shift_pct", 5.0))
+    if max_shift_pct <= 0:
+        return False
+    try:
+        title_pct = float(getattr(opinion, "title_pct"))
+    except (TypeError, ValueError):
+        return True
+    return abs(title_pct - float(baseline_title_pct)) > max_shift_pct
+
+
+def _auditable_source_urls(opinion: Any) -> list[str]:
+    return [
+        str(url).strip()
+        for url in (getattr(opinion, "source_urls", []) or [])
+        if _valid_http_url(str(url).strip()) and not _has_opta_marker(str(url))
+    ]
+
+
+def _looks_like_meeting_vote(opinion: Any, combined: str) -> bool:
+    normalized = _normalize_text(combined)
+    if getattr(opinion, "agrees_with_protagonist", None) is not None:
+        return True
+    return any(
+        marker in normalized
+        for marker in (
+            "concordo",
+            "concordamos",
+            "aceito",
+            "aceitamos",
+            "discordo",
+            "discordamos",
+        )
+    )
+
+
+def _has_rational_hypothesis(combined: str) -> bool:
+    normalized = _normalize_text(combined)
+    fact_terms = (
+        "odds",
+        "sportsbook",
+        "mercado",
+        "prediction",
+        "elo",
+        "rating",
+        "ranking",
+        "fifa",
+        "sofascore",
+        "fbref",
+        "xg",
+        "lesao",
+        "cartao",
+        "arbitragem",
+        "var",
+        "descanso",
+        "chaveamento",
+        "probabilidade",
+        "p.p",
+    )
+    has_numeric_claim = bool(re.search(r"\d", normalized))
+    has_fact_term = any(term in normalized for term in fact_terms)
+    return len(normalized) >= 80 and has_numeric_claim and has_fact_term
+
+
+def _has_unsupported_meeting_vote(
+    opinion: Any,
+    *,
+    combined: str,
+    config: dict[str, Any] | None,
+) -> bool:
+    if not _looks_like_meeting_vote(opinion, combined):
+        return False
+    cfg = config or {}
+    source_urls = _auditable_source_urls(opinion)
+    if bool(cfg.get("require_auditable_source_urls_for_meeting_votes", True)) and not source_urls:
+        return True
+    allowed_urls = {str(url) for url in cfg.get("_allowed_fact_source_urls", []) if str(url)}
+    if allowed_urls and source_urls and not any(url in allowed_urls for url in source_urls):
+        return True
+    return not _has_rational_hypothesis(combined)
+
+
+def _sanitize_main_meeting_opinions(
+    opinions: list[Any],
+    *,
+    baseline_title_pct: float,
+    config: dict[str, Any] | None = None,
+) -> list[Any]:
+    sanitized: list[Any] = []
+    for opinion in opinions:
+        combined = " ".join(
+            str(item or "")
+            for item in (
+                getattr(opinion, "summary", ""),
+                getattr(opinion, "opening_argument", ""),
+                getattr(opinion, "question", ""),
+                getattr(opinion, "answer", ""),
+                getattr(opinion, "critique", ""),
+                getattr(opinion, "adjustment", ""),
+                getattr(opinion, "proposed_next_question", ""),
+                getattr(opinion, "leadership_rationale", ""),
+                " ".join(getattr(opinion, "source_urls", []) or []),
+                " ".join(getattr(opinion, "source_queries", []) or []),
+            )
+        )
+        has_reserved_benchmark = _has_opta_marker(combined)
+        has_impossible_bracket_opponent = bool(config and _impossible_bracket_opponent_detail(combined, config))
+        has_unconfigured_group_opponent = bool(config and _mentions_unconfigured_opponent(combined, config))
+        has_unusable_payload = any(
+            marker in _normalize_text(combined)
+            for marker in (
+                "resposta em json parcial",
+                "sem resposta parseavel",
+                "sem resposta externa utilizavel",
+            )
+        )
+        external_search_issue = _external_search_failure_issue(opinion)
+        has_fixed_quanti_quali_allocation = _has_fixed_quanti_quali_allocation(combined)
+        has_implausible_title_jump = _has_implausible_title_jump(
+            opinion,
+            baseline_title_pct=baseline_title_pct,
+            config=config,
+        )
+        has_unsupported_meeting_vote = _has_unsupported_meeting_vote(
+            opinion,
+            combined=combined,
+            config=config,
+        )
+        if (
+            not has_reserved_benchmark
+            and not has_impossible_bracket_opponent
+            and not has_unconfigured_group_opponent
+            and not has_unusable_payload
+            and not external_search_issue
+            and not has_fixed_quanti_quali_allocation
+            and not has_implausible_title_jump
+            and not has_unsupported_meeting_vote
+        ):
+            sanitized.append(opinion)
+            continue
+        if has_reserved_benchmark:
+            removal_reason = "tentar usar benchmark reservado"
+        elif has_impossible_bracket_opponent:
+            removal_reason = "citar adversário impossível para o cruzamento oficial"
+        elif has_unconfigured_group_opponent:
+            removal_reason = "citar adversário de grupo fora do JSON configurado"
+        elif has_unusable_payload:
+            removal_reason = "devolver resposta parcial ou sem campos auditáveis"
+        elif external_search_issue:
+            removal_reason = external_search_issue
+        elif has_fixed_quanti_quali_allocation:
+            removal_reason = "usar alocação fixa quanti/quali proibida"
+        elif has_unsupported_meeting_vote:
+            removal_reason = "responder concordância/discordância sem hipótese auditável"
+        else:
+            removal_reason = "inconsistência quantitativa no title_pct"
+        sanitized.append(
+            replace(
+                opinion,
+                title_pct=round(float(baseline_title_pct), 1),
+                summary=(
+                    f"Resposta removida do Modelo Principal por {removal_reason}; "
+                    "não conta como consenso do Modelo Principal."
+                ),
+                opening_argument="",
+                question="",
+                answer=(
+                    f"Resposta removida do Modelo Principal por {removal_reason}; "
+                    "o debate principal deve usar apenas fontes não reservadas ao comparativo separado "
+                    "e adversários/cenários do JSON configurado."
+                ),
+                critique="",
+                adjustment="",
+                source_urls=[
+                    url for url in (getattr(opinion, "source_urls", []) or []) if not _has_opta_marker(url)
+                ],
+                source_queries=[
+                    query for query in (getattr(opinion, "source_queries", []) or []) if not _has_opta_marker(query)
+                ],
+                match_probabilities={},
+                scenario_probabilities={},
+                agrees_with_protagonist=None,
+                leadership_bid=False,
+                proposed_next_question="",
+                leadership_rationale="",
+                used_fallback=True,
+                removed_from_main=True,
+                removal_reason=removal_reason,
+            )
+        )
+    return sanitized
+
+
+def _sanitize_source_planning_opinions(
+    opinions: list[Any],
+    *,
+    baseline_title_pct: float,
+    config: dict[str, Any] | None = None,
+) -> list[Any]:
+    sanitized: list[Any] = []
+    for opinion in opinions:
+        source_urls = [
+            str(url).strip()
+            for url in (getattr(opinion, "source_urls", []) or [])
+            if str(url).strip() and not _has_opta_marker(str(url))
+        ]
+        source_queries = [
+            str(query).strip()
+            for query in (getattr(opinion, "source_queries", []) or [])
+            if str(query).strip() and not _has_opta_marker(str(query))
+        ]
+        combined = " ".join(
+            str(item or "")
+            for item in (
+                getattr(opinion, "summary", ""),
+                getattr(opinion, "opening_argument", ""),
+                getattr(opinion, "answer", ""),
+                getattr(opinion, "critique", ""),
+                getattr(opinion, "adjustment", ""),
+            )
+        )
+        has_unusable_payload = any(
+            marker in _normalize_text(combined)
+            for marker in (
+                "resposta em json parcial",
+                "sem resposta parseavel",
+                "sem resposta externa utilizavel",
+            )
+        )
+        external_search_issue = _external_search_failure_issue(opinion)
+        has_implausible_title_jump = _has_implausible_title_jump(
+            opinion,
+            baseline_title_pct=baseline_title_pct,
+            config=config,
+        )
+        has_parseable_sources = bool(source_urls or source_queries)
+        if (
+            bool(getattr(opinion, "used_fallback", False))
+            or bool(external_search_issue)
+            or (has_unusable_payload and not has_parseable_sources)
+        ):
+            reason = (
+                external_search_issue
+                or (
+                    "devolver resposta parcial ou sem campos auditáveis"
+                    if has_unusable_payload
+                    else "falha operacional sem resposta externa verificável"
+                )
+            )
+            original_summary = str(getattr(opinion, "summary", "") or "").strip()
+            rendered_summary = (
+                f"Resposta removida do planejamento de fontes por {reason}; "
+                "não conta para o quórum de debriefing."
+            )
+            if original_summary:
+                rendered_summary = f"{rendered_summary} Motivo original: {original_summary}"
+            sanitized.append(
+                replace(
+                    opinion,
+                    title_pct=round(float(baseline_title_pct), 1),
+                    summary=rendered_summary,
+                    opening_argument="",
+                    question="",
+                    answer="Resposta removida do planejamento de fontes; o modelo precisa trazer fontes próprias.",
+                    critique="",
+                    adjustment="",
+                    source_urls=source_urls,
+                    source_queries=source_queries,
+                    match_probabilities={},
+                    scenario_probabilities={},
+                    agrees_with_protagonist=None,
+                    leadership_bid=False,
+                    proposed_next_question="",
+                    leadership_rationale="",
+                    used_fallback=True,
+                    removed_from_main=True,
+                    removal_reason=reason,
+                )
+            )
+            continue
+        if has_unusable_payload and has_parseable_sources:
+            sanitized.append(
+                replace(
+                    opinion,
+                    title_pct=round(float(baseline_title_pct), 1),
+                    summary=(
+                        f"{getattr(opinion, 'summary', '')} "
+                        "[payload parcial, mas fontes auditáveis foram extraídas e preservadas para o quórum.]"
+                    ).strip(),
+                    source_urls=source_urls,
+                    source_queries=source_queries,
+                    used_fallback=False,
+                    removed_from_main=False,
+                    removal_reason="",
+                )
+            )
+            continue
+        if has_implausible_title_jump:
+            sanitized.append(
+                replace(
+                    opinion,
+                    title_pct=round(float(baseline_title_pct), 1),
+                    summary=(
+                        f"{getattr(opinion, 'summary', '')} "
+                        "[title_pct neutralizado no planejamento por salto quantitativo implausível; "
+                        "fontes preservadas para quórum se forem auditáveis.]"
+                    ).strip(),
+                    source_urls=source_urls,
+                    source_queries=source_queries,
+                    used_fallback=False,
+                    removed_from_main=False,
+                    removal_reason="",
+                )
+            )
+            continue
+        sanitized.append(
+            replace(
+                opinion,
+                source_urls=source_urls,
+                source_queries=source_queries,
+                used_fallback=False,
+                removed_from_main=False,
+                removal_reason="",
+            )
+        )
+    return sanitized
+
+
+def _ensure_consensus_request(question: str) -> str:
+    lowered = question.lower()
+    has_consensus_ask = "concord" in lowered and "discord" in lowered
+    has_disagreement_rule = "se discord" in lowered and "protagonismo" in lowered
+    if has_consensus_ask and has_disagreement_rule:
+        return question
+    suffix = (
+        " Ao responder, cada modelo deve dizer explicitamente se concorda ou discorda do racional do protagonista; "
+        "se discordar, precisa apontar o ajuste numérico e a fonte/premissa que justifica assumir o protagonismo. "
+        "Se concordar, não fique passivo: proponha uma próxima pergunta melhor apenas quando houver mérito auditável, "
+        "sem inventar discordância."
+    )
+    return question.rstrip() + suffix
+
+
+def _initial_protagonist_score(opinion: Any) -> tuple[float, int, int, int, str]:
+    source_items = _non_opta_source_items(opinion)
+    source_urls = [
+        str(url).strip()
+        for url in (getattr(opinion, "source_urls", []) or [])
+        if str(url).strip() and not _has_opta_marker(str(url))
+    ]
+    source_queries = [
+        str(query).strip()
+        for query in (getattr(opinion, "source_queries", []) or [])
+        if str(query).strip() and not _has_opta_marker(str(query))
+    ]
+    scenario_probabilities = dict(getattr(opinion, "scenario_probabilities", {}) or {})
+    team_context_signals = list(getattr(opinion, "team_context_signals", []) or [])
+    text = " ".join(
+        str(getattr(opinion, attr, "") or "")
+        for attr in ("summary", "opening_argument", "answer", "critique", "adjustment")
+    )
+    normalized = _normalize_text(text)
+
+    if getattr(opinion, "used_fallback", False):
+        base = 0.0
+    else:
+        base = 100.0
+    score = base
+    score += min(len(source_urls), 8) * 3.0
+    score += min(len(source_queries), 6) * 4.0
+    if source_urls and source_queries:
+        score += 10.0
+    score += min(len(scenario_probabilities), 5) * 4.0
+    score += min(len(team_context_signals), 5) * 5.0
+    if len(normalized) >= 160:
+        score += 8.0
+    if "grupo" in normalized and ("mata-mata" in normalized or "chaveamento" in normalized):
+        score += 8.0
+    if any(
+        marker in normalized
+        for marker in (
+            "resposta em json parcial",
+            "sem resposta parseavel",
+            "sem resposta externa utilizavel",
+        )
+    ):
+        score -= 70.0
+    return (
+        score,
+        min(len(source_items), 12),
+        len(source_queries),
+        len(normalized),
+        str(getattr(opinion, "agent", "")),
+    )
+
+
+def _initial_protagonist(opinions: list[Any]) -> str:
+    if not opinions:
+        return "GPT 5.5"
+    winner = max(opinions, key=_initial_protagonist_score)
+    return winner.agent
+
+
+def _fallback_question(protagonist: str, previous_turn: dict[str, Any] | None) -> str:
+    if previous_turn:
+        return _ensure_consensus_request(
+            f"{protagonist}: qual premissa da rodada anterior deve mudar para reduzir a dispersão "
+            "sem deixar uma única fonte, odds ou ranking dominarem sozinhos?"
+        )
+    return _ensure_consensus_request(
+        f"{protagonist}: olhando as fontes escolhidas por cada modelo, qual é a probabilidade do Brasil "
+        "em cada jogo e qual fonte mais ameaça distorcer o consenso?"
+    )
+
+
+def _agent_spec_by_slot(agent_specs: list[Any]) -> dict[str, Any]:
+    return {spec.slot: spec for spec in agent_specs}
+
+
+async def _protagonist_question(
+    *,
+    config: dict[str, Any],
+    protagonist: str,
+    previous_turn: dict[str, Any] | None,
+    generated_at: datetime,
+    agent_specs: list[Any],
+    baseline_title_pct: float,
+    allow_agent_fallback: bool,
+    timeout: int,
+) -> tuple[str, Any, str | None]:
+    by_slot = _agent_spec_by_slot(agent_specs)
+    spec = by_slot.get(protagonist)
+    if spec is None:
+        question = _fallback_question(protagonist, previous_turn)
+        return _sanitize_protagonist_question(question, config=config, protagonist=protagonist), None, None
+    opinion = await call_agent(
+        spec,
+        _protagonist_question_prompt(
+            config=config,
+            protagonist=protagonist,
+            previous_turn=previous_turn,
+            generated_at=generated_at,
+        ),
+        baseline_title_pct=baseline_title_pct,
+        timeout=timeout,
+        allow_local_fallback=allow_agent_fallback,
+    )
+    question = opinion.question or _fallback_question(protagonist, previous_turn)
+    invalid_reason = _invalid_protagonist_question_reason(question, config)
+    return _sanitize_protagonist_question(question, config=config, protagonist=protagonist), opinion, invalid_reason
+
+
+def _next_peer_after_invalid_protagonist_question(turn: dict[str, Any], *, current_protagonist: str) -> str:
+    candidates = [
+        response
+        for response in turn.get("responses", [])
+        if (
+            (not bool(response.get("used_fallback", False)) or int(response.get("source_count", 0) or 0) > 0)
+            and str(response.get("agent", "")) != current_protagonist
+        )
+    ]
+    if not candidates:
+        return current_protagonist
+    winner = max(
+        candidates,
+        key=lambda response: (
+            float(response.get("support_score", 0.0)),
+            len(str(response.get("answer", ""))),
+            str(response.get("agent", "")),
+        ),
+    )
+    return str(winner.get("agent", current_protagonist))
+
+
+async def _run_model_meeting(
+    *,
+    config: dict[str, Any],
+    planning_opinions: list[Any],
+    generated_at: datetime,
+    agent_specs: list[Any],
+    baseline_title_pct: float,
+    allow_agent_fallback: bool,
+    watchdog: RunWatchdog | None,
+    token_cost_ledger: dict[str, Any] | None = None,
+    reentry_candidate_specs: list[Any] | None = None,
+    reentry_removed_reasons: dict[str, str] | None = None,
+) -> tuple[Any, list[Any], list[dict[str, Any]], list[Any]]:
+    agent_specs = list(agent_specs)
+    planning_opinions = list(planning_opinions)
+    protagonist = _initial_protagonist(planning_opinions)
+    previous_turn: dict[str, Any] | None = None
+    all_opinions: list[Any] = []
+    meeting_transcript: list[dict[str, Any]] = []
+    final_consensus = None
+    final_opinions: list[Any] = []
+    max_rounds = int(config.get("meeting_max_rounds", 9))
+    min_rounds = int(config.get("meeting_min_rounds", 6))
+    configured_min_participants = int(config.get("meeting_min_participants", config.get("meeting_min_real_agents", 3)))
+    threshold = float(config.get("meeting_consensus_threshold_pct", 2.5))
+    require_peer_acceptance = bool(config.get("meeting_require_peer_acceptance", True))
+    timeout = int(config.get("agent_timeout_seconds", 90))
+    protagonist_timeout = int(config.get("protagonist_timeout_seconds", timeout))
+    breaker_threshold = max(1, int(config.get("meeting_slot_breaker_threshold", 3)))
+    stability_delta_pp = float(config.get("meeting_stability_delta_pp", 1.0))
+    stability_rounds_required = max(1, int(config.get("meeting_stability_rounds", 2)))
+    active_slots = _slots_from_specs(agent_specs)
+    reentry_enabled = bool(config.get("agent_reentry_probe_enabled", False))
+    reentry_timeout = int(config.get("agent_reentry_probe_timeout_seconds", 180))
+    reentry_removed_reasons = dict(reentry_removed_reasons or {})
+    reentry_candidates = {
+        str(getattr(spec, "slot", "")): spec
+        for spec in (reentry_candidate_specs or [])
+        if str(getattr(spec, "slot", "")).strip() and str(getattr(spec, "slot", "")) not in active_slots
+    }
+    pending_reentry_tasks: dict[str, asyncio.Task] = {}
+    room_quorum = _room_majority_quorum(
+        configured_min=configured_min_participants,
+        active_count=len(active_slots),
+    )
+    protagonist_counts: dict[str, int] = {slot: 0 for slot in active_slots}
+    consecutive_invalid: dict[str, int] = {slot: 0 for slot in active_slots}
+    stable_rounds = 0
+    previous_consensus_title: float | None = None
+
+    if watchdog:
+        watchdog.start("model_meeting", detail=f"starting dynamic meeting with protagonist {protagonist}")
+
+    def schedule_reentry_probes(round_index: int) -> None:
+        if not reentry_enabled:
+            return
+        for slot, spec in list(reentry_candidates.items()):
+            if slot in active_slots or slot in pending_reentry_tasks:
+                continue
+            reason = reentry_removed_reasons.get(slot, "sem resposta externa verificável")
+            pending_reentry_tasks[slot] = asyncio.create_task(
+                _run_agent_reentry_probe(
+                    spec=spec,
+                    config=config,
+                    generated_at=generated_at,
+                    baseline_title_pct=baseline_title_pct,
+                    removed_reason=reason,
+                    timeout=reentry_timeout,
+                )
+            )
+            if watchdog:
+                watchdog.event(
+                    "agent_reentry_probe",
+                    "start",
+                    detail=f"round={round_index}; agent={slot}; timeout_s={reentry_timeout}; reason={reason}",
+                    extra={
+                        "round": round_index,
+                        "agent": slot,
+                        "timeout_seconds": reentry_timeout,
+                        "removed_reason": reason,
+                    },
+                )
+
+    def collect_finished_reentry_probes(round_index: int) -> None:
+        nonlocal active_slots, room_quorum
+        for slot in _ready_reentry_slots(pending_reentry_tasks):
+            task = pending_reentry_tasks.pop(slot)
+            try:
+                opinion, reason, prompt = task.result()
+            except Exception as exc:
+                opinion, reason, prompt = None, str(exc), ""
+            if opinion is None:
+                if watchdog:
+                    watchdog.event(
+                        "agent_reentry_probe",
+                        "fail",
+                        detail=f"round={round_index}; agent={slot}; {reason}",
+                        extra={"round": round_index, "agent": slot, "reason": reason},
+                    )
+                continue
+            spec = reentry_candidates.pop(slot, None)
+            if spec is None or slot in active_slots:
+                continue
+            agent_specs.append(spec)
+            planning_opinions.append(opinion)
+            active_slots = _slots_from_specs(agent_specs)
+            room_quorum = _room_majority_quorum(
+                configured_min=configured_min_participants,
+                active_count=len(active_slots),
+            )
+            protagonist_counts.setdefault(slot, 0)
+            consecutive_invalid[slot] = 0
+            if token_cost_ledger is not None:
+                _record_token_costs(
+                    token_cost_ledger,
+                    config=config,
+                    prompt=prompt,
+                    opinions=[opinion],
+                    stage=f"agent_reentry_probe_round_{round_index}",
+                )
+            if watchdog:
+                watchdog.chat(
+                    slot,
+                    (
+                        "reentrou na sala por probe assíncrono com plano de fontes próprio; "
+                        f"fontes={', '.join(_non_opta_source_items(opinion)[:3]) or 'fonte auditável'}"
+                    ),
+                    round_name="agent-reentry",
+                )
+                watchdog.event(
+                    "agent_reentry_probe",
+                    "finish",
+                    detail=f"round={round_index}; agent={slot}; reentered active debate",
+                    extra={
+                        "round": round_index,
+                        "agent": slot,
+                        "active_slots": active_slots,
+                    },
+                )
+
+    for round_index in range(1, max_rounds + 1):
+        collect_finished_reentry_probes(round_index)
+        schedule_reentry_probes(round_index)
+        protagonist_counts[protagonist] = protagonist_counts.get(protagonist, 0) + 1
+        question, question_opinion, invalid_question_reason = await _protagonist_question(
+            config=config,
+            protagonist=protagonist,
+            previous_turn=previous_turn,
+            generated_at=generated_at,
+            agent_specs=agent_specs,
+            baseline_title_pct=baseline_title_pct,
+            allow_agent_fallback=allow_agent_fallback,
+            timeout=protagonist_timeout,
+        )
+        if question_opinion is not None:
+            if token_cost_ledger is not None:
+                _record_token_costs(
+                    token_cost_ledger,
+                    config=config,
+                    prompt=_protagonist_question_prompt(
+                        config=config,
+                        protagonist=protagonist,
+                        previous_turn=previous_turn,
+                        generated_at=generated_at,
+                    ),
+                    opinions=[question_opinion],
+                    stage=f"meeting_round_{round_index}_question",
+                )
+        if question_opinion is not None:
+            protagonist_position = _sanitize_main_meeting_opinions(
+                [question_opinion],
+                baseline_title_pct=baseline_title_pct,
+                config=config,
+            )[0]
+        else:
+            protagonist_position = AgentOpinion(
+                agent=protagonist,
+                title_pct=round(float(baseline_title_pct), 1),
+                summary="Protagonista manteve a tese da pergunta; posição sintética criada por ausência de resposta parseável.",
+                question=question,
+                answer=question,
+                agrees_with_protagonist=True,
+                used_fallback=True,
+            )
+        all_opinions.append(protagonist_position)
+
+        if watchdog:
+            watchdog.meeting_question(round_index=round_index, protagonist=protagonist, question=question)
+
+        responder_specs = [spec for spec in agent_specs if getattr(spec, "slot", None) != protagonist]
+        response_prompt = _meeting_response_prompt(
+            config=config,
+            round_index=round_index,
+            protagonist=protagonist,
+            question=question,
+            previous_turn=previous_turn,
+            generated_at=generated_at,
+        )
+        raw_opinions = await call_all_agents(
+            response_prompt,
+            specs=responder_specs,
+            baseline_title_pct=baseline_title_pct,
+            timeout=timeout,
+            allow_local_fallback=allow_agent_fallback,
+        )
+        if token_cost_ledger is not None:
+            _record_token_costs(
+                token_cost_ledger,
+                config=config,
+                prompt=response_prompt,
+                opinions=raw_opinions,
+                stage=f"meeting_round_{round_index}_responses",
+            )
+        opinions = _sanitize_main_meeting_opinions(
+            raw_opinions,
+            baseline_title_pct=baseline_title_pct,
+            config=config,
+        )
+        opinions, repair_opinions = await _repair_invalid_meeting_responses(
+            config=config,
+            round_index=round_index,
+            protagonist=protagonist,
+            question=question,
+            previous_turn=previous_turn,
+            generated_at=generated_at,
+            responder_specs=responder_specs,
+            raw_opinions=raw_opinions,
+            sanitized_opinions=opinions,
+            baseline_title_pct=baseline_title_pct,
+            allow_agent_fallback=allow_agent_fallback,
+            timeout=timeout,
+        )
+        if watchdog and repair_opinions:
+            repaired_agents = ", ".join(opinion.agent for opinion in repair_opinions)
+            watchdog.event(
+                "model_room",
+                "repair",
+                detail=f"targeted moderator feedback sent to {repaired_agents}",
+                extra={"round": round_index, "agents": [opinion.agent for opinion in repair_opinions]},
+            )
+        all_opinions.extend(opinions)
+        consensus_opinions = [protagonist_position, *opinions]
+        consensus = build_consensus(consensus_opinions, agent_slots=active_slots)
+        turn = build_meeting_turn(
+            round_index=round_index,
+            protagonist=protagonist,
+            question=question,
+            opinions=opinions,
+            consensus_title_pct=consensus.title_pct,
+            protagonist_counts=protagonist_counts,
+        )
+        if invalid_question_reason:
+            turn["invalidated_protagonist_question"] = {
+                "agent": protagonist,
+                "reason": invalid_question_reason,
+                "action": (
+                    "fala excluída da influência; modelos pares seguem o debate sem usar o adversário/benchmark inválido"
+                ),
+            }
+            if turn["next_protagonist"] == protagonist:
+                turn["next_protagonist"] = _next_peer_after_invalid_protagonist_question(
+                    turn,
+                    current_protagonist=protagonist,
+                )
+        turn["coverage"] = _meeting_coverage_report([*meeting_transcript, turn], config)
+        meeting_transcript.append(turn)
+        if watchdog:
+            if invalid_question_reason:
+                watchdog.event(
+                    "model_room",
+                    "invalidation",
+                    detail=f"{protagonist}: {invalid_question_reason}",
+                    extra={
+                        "round": round_index,
+                        "agent": protagonist,
+                        "action": "excluded_from_influence_continue_meeting",
+                    },
+                )
+            for response in turn["responses"]:
+                watchdog.meeting_response(
+                    round_index=round_index,
+                    agent=response["agent"],
+                    answer=response["answer"],
+                    support_score=response["support_score"],
+                )
+            dissenter_count = sum(1 for response in turn["responses"] if response.get("disagreed"))
+            if turn["next_protagonist"] != protagonist:
+                next_response = next(
+                    (
+                        response
+                        for response in turn["responses"]
+                        if response.get("agent") == turn["next_protagonist"]
+                    ),
+                    {},
+                )
+                if next_response.get("disagreed"):
+                    reason = f"assume protagonismo por discordância da rodada {round_index}; dissenters={dissenter_count}"
+                elif next_response.get("leadership_bid"):
+                    reason = (
+                        f"assume protagonismo por mérito com aceite na rodada {round_index}; "
+                        f"pergunta proposta={next_response.get('proposed_next_question', '')}"
+                    )
+                else:
+                    reason = f"assume protagonismo por melhor resposta da rodada {round_index}; dissenters={dissenter_count}"
+            elif dissenter_count:
+                reason = (
+                    f"mantém protagonismo por critério de desempate da rodada {round_index}; "
+                    f"dissenters={dissenter_count}"
+                )
+            else:
+                reason = f"mantém protagonismo porque não houve discordância útil na rodada {round_index}"
+            watchdog.chat(
+                turn["next_protagonist"],
+                reason,
+                round_name="leader-change",
+            )
+
+        for vote_opinion in (protagonist_position, *opinions):
+            vote_slot = str(getattr(vote_opinion, "agent", "")).strip()
+            if not vote_slot or vote_slot not in active_slots:
+                continue
+            if _counts_as_consensus_participant(vote_opinion):
+                consecutive_invalid[vote_slot] = 0
+            else:
+                consecutive_invalid[vote_slot] = consecutive_invalid.get(vote_slot, 0) + 1
+        for broken_slot in [
+            slot for slot in list(active_slots) if consecutive_invalid.get(slot, 0) >= breaker_threshold
+        ]:
+            if len(active_slots) - 1 < configured_min_participants:
+                if watchdog:
+                    watchdog.event(
+                        "model_room",
+                        "breaker_skipped",
+                        detail=(
+                            f"{broken_slot} atingiu {consecutive_invalid.get(broken_slot, 0)} respostas inválidas "
+                            "consecutivas, mas a remoção quebraria o mínimo de participantes da sala"
+                        ),
+                        extra={"round": round_index, "agent": broken_slot, "active_slots": active_slots},
+                    )
+                continue
+            removed_spec = next(
+                (spec for spec in agent_specs if str(getattr(spec, "slot", "")) == broken_slot),
+                None,
+            )
+            breaker_reason = (
+                f"circuit breaker: {consecutive_invalid.get(broken_slot, 0)} respostas consecutivas sem voto válido "
+                "(removida da sala principal ou fallback sem fonte auditável)"
+            )
+            agent_specs = [spec for spec in agent_specs if str(getattr(spec, "slot", "")) != broken_slot]
+            active_slots = _slots_from_specs(agent_specs)
+            room_quorum = _room_majority_quorum(
+                configured_min=configured_min_participants,
+                active_count=len(active_slots),
+            )
+            consecutive_invalid[broken_slot] = 0
+            if reentry_enabled and removed_spec is not None and broken_slot not in reentry_candidates:
+                reentry_candidates[broken_slot] = removed_spec
+                reentry_removed_reasons[broken_slot] = breaker_reason
+            if turn["next_protagonist"] == broken_slot:
+                turn["next_protagonist"] = _next_peer_after_invalid_protagonist_question(
+                    turn,
+                    current_protagonist=broken_slot,
+                )
+            if watchdog:
+                watchdog.event(
+                    "model_room",
+                    "circuit_breaker",
+                    detail=(
+                        f"{broken_slot}: {breaker_reason}; sai das próximas rodadas e só volta por reentrada "
+                        "assíncrona com fontes próprias"
+                    ),
+                    extra={"round": round_index, "agent": broken_slot, "active_slots": active_slots},
+                )
+
+        final_consensus = consensus
+        final_opinions = consensus_opinions
+        protagonist_source_count = len(getattr(protagonist_position, "source_urls", []) or []) + len(
+            getattr(protagonist_position, "source_queries", []) or []
+        )
+        protagonist_counts_for_quorum = (
+            not bool(getattr(protagonist_position, "used_fallback", False)) or protagonist_source_count > 0
+        )
+        minimum_peer_acceptances = max(0, room_quorum - int(protagonist_counts_for_quorum))
+        consensus_ready = consensus_reached(
+            consensus,
+            round_index=round_index,
+            minimum_rounds=min_rounds,
+            threshold_pct=threshold,
+            minimum_participants=configured_min_participants,
+            minimum_peer_acceptances=minimum_peer_acceptances,
+            last_turn=turn,
+            require_peer_acceptance=require_peer_acceptance,
+        )
+        require_full_coverage = bool(config.get("meeting_require_full_path_coverage", True))
+        coverage_complete = bool(turn.get("coverage", {}).get("complete", False))
+        coverage_ok = coverage_complete or not require_full_coverage
+        majority_accepts = _enough_peer_acceptances(turn, required_acceptances=minimum_peer_acceptances)
+        title_stable = (
+            previous_consensus_title is not None
+            and abs(float(consensus.title_pct) - float(previous_consensus_title)) <= stability_delta_pp
+        )
+        if round_index >= min_rounds and coverage_ok and majority_accepts and title_stable:
+            stable_rounds += 1
+        else:
+            stable_rounds = 0
+        previous_consensus_title = float(consensus.title_pct)
+        if consensus_ready and coverage_ok:
+            break
+        if stable_rounds >= stability_rounds_required:
+            if watchdog:
+                watchdog.event(
+                    "model_room",
+                    "early_exit",
+                    detail=(
+                        f"consenso estável por {stable_rounds} rodadas (Δ título ≤ {stability_delta_pp} p.p.) "
+                        "com cobertura e aceitação da maioria; sala encerra antes do teto para evitar re-litigação"
+                    ),
+                    extra={
+                        "round": round_index,
+                        "consensus_title_pct": consensus.title_pct,
+                        "stable_rounds": stable_rounds,
+                    },
+                )
+            break
+        if watchdog and consensus_ready and require_full_coverage and not coverage_complete:
+            watchdog.event(
+                "model_room",
+                "coverage_missing",
+                detail="consensus numerically ready but full path coverage is incomplete",
+                extra=turn.get("coverage", {}),
+            )
+        protagonist = turn["next_protagonist"]
+        previous_turn = turn
+        if pending_reentry_tasks:
+            await asyncio.sleep(0)
+
+    for slot, task in list(pending_reentry_tasks.items()):
+        if task.done():
+            continue
+        task.cancel()
+        if watchdog:
+            watchdog.event(
+                "agent_reentry_probe",
+                "cancel",
+                detail=f"agent={slot}; meeting ended before async probe completed",
+                extra={"agent": slot},
+            )
+
+    if watchdog:
+        watchdog.finish(
+            "model_meeting",
+            detail=f"completed {len(meeting_transcript)} rounds; final title={final_consensus.title_pct:.1f}%",
+        )
+    return final_consensus, final_opinions, meeting_transcript, all_opinions
+
+
+def _apply_meeting_match_probabilities(estimates: list[Any], opinions: list[Any]) -> None:
+    for estimate in estimates:
+        candidates = _opinion_match_probability_values(
+            opinions,
+            phase=str(getattr(estimate, "phase", "")),
+            opponent=str(getattr(estimate, "opponent", "")),
+            estimate_scenario_pct=getattr(estimate, "scenario_pct", None),
+        )
+        if estimate.draw_pct is not None:
+            candidates = [pct for pct in candidates if pct <= 100.0 - float(estimate.draw_pct)]
+        if not candidates:
+            continue
+        brazil_pct = round(sum(candidates) / len(candidates), 1)
+        _set_estimate_brazil_probability(estimate, brazil_pct)
+
+
+def _team_context_signal_has_auditable_source(signal: dict[str, Any]) -> bool:
+    for key in ("source_url", "source_query", "source", "source_urls", "source_queries"):
+        value = signal.get(key)
+        if isinstance(value, list) and any(str(item).strip() and not _has_opta_marker(str(item)) for item in value):
+            return True
+        if isinstance(value, str) and value.strip() and not _has_opta_marker(value):
+            return True
+    return False
+
+
+def _team_context_signal_has_numeric_effect(signal: dict[str, Any]) -> bool:
+    keys = (
+        "rating_delta",
+        "rating_delta_points",
+        "elo_delta",
+        "elo_delta_points",
+        "market_rating_delta",
+        "context_rating_delta",
+        "probability_delta_pct",
+        "win_probability_delta_pct",
+        "advancement_probability_delta_pct",
+        "scenario_probability_delta_pct",
+    )
+    for key in keys:
+        if key not in signal:
+            continue
+        try:
+            float(signal[key])
+            return True
+        except (TypeError, ValueError):
+            return False
+    return False
+
+
+def _apply_agent_team_context_to_monte_carlo_config(config: dict[str, Any], opinions: list[Any]) -> dict[str, Any]:
+    mc_config = config.setdefault("monte_carlo", {})
+    if not isinstance(mc_config, dict):
+        mc_config = {}
+        config["monte_carlo"] = mc_config
+    team_context = mc_config.setdefault("team_context", {})
+    if not isinstance(team_context, dict):
+        team_context = {}
+        mc_config["team_context"] = team_context
+
+    applied = 0
+    ignored = 0
+    families: set[str] = set()
+    teams: set[str] = set()
+    for opinion in opinions:
+        if bool(getattr(opinion, "used_fallback", False)):
+            continue
+        agent = str(getattr(opinion, "agent", "")).strip() or "Modelo"
+        for raw_signal in getattr(opinion, "team_context_signals", []) or []:
+            if not isinstance(raw_signal, dict):
+                ignored += 1
+                continue
+            signal = dict(raw_signal)
+            team = str(signal.get("team") or signal.get("selection") or signal.get("country") or "").strip()
+            category = str(signal.get("category") or signal.get("family") or signal.get("source_family") or "").strip()
+            if (
+                not team
+                or not category
+                or not _team_context_signal_has_numeric_effect(signal)
+                or not _team_context_signal_has_auditable_source(signal)
+            ):
+                ignored += 1
+                continue
+            signal["team"] = team
+            signal["category"] = category
+            signal["agent"] = agent
+            team_context.setdefault(team, []).append(signal)
+            applied += 1
+            teams.add(team)
+            families.add(category)
+
+    return {
+        "applied_signal_count": applied,
+        "ignored_signal_count": ignored,
+        "teams_with_context_count": len(teams),
+        "source_families": sorted(families),
+    }
+
+
+def _apply_monte_carlo_knockout_scenarios(estimates: list[Any], monte_carlo_result: dict[str, Any]) -> None:
+    if not monte_carlo_result.get("enabled"):
+        return
+    phases = monte_carlo_result.get("phases") or {}
+    for phase, payload in phases.items():
+        phase_estimates = [
+            estimate
+            for estimate in estimates
+            if str(getattr(estimate, "phase", "")) == str(phase)
+            and _is_placeholder_opponent_name(getattr(estimate, "opponent", ""))
+        ]
+        if not phase_estimates:
+            continue
+        opponents = list(payload.get("opponents", []))[: len(phase_estimates)]
+        if not opponents:
+            continue
+        phase_estimates.sort(key=lambda estimate: 0 if bool(getattr(estimate, "most_likely", False)) else 1)
+        for estimate, opponent_payload in zip(phase_estimates, opponents, strict=False):
+            estimate.opponent = str(opponent_payload.get("opponent") or estimate.opponent)
+            if opponent_payload.get("scenario_pct") is not None:
+                estimate.scenario_pct = round(float(opponent_payload["scenario_pct"]), 1)
+            if opponent_payload.get("brazil_pct") is not None:
+                _set_estimate_brazil_probability(estimate, float(opponent_payload["brazil_pct"]))
+
+
+def _opinion_probability_values(
+    opinions: list[Any],
+    *,
+    field: str,
+    phase: str,
+    opponent: str,
+) -> list[float]:
+    values: list[float] = []
+    phase_key = _normalize_text(phase)
+    opponent_key = _normalize_text(opponent)
+    for opinion in opinions:
+        mapping = getattr(opinion, field, {}) or {}
+        for key, value in mapping.items():
+            normalized_key = _normalize_text(str(key))
+            if phase_key not in normalized_key or opponent_key not in normalized_key:
+                continue
+            try:
+                pct = float(value)
+            except (TypeError, ValueError):
+                continue
+            if 0.0 <= pct <= 100.0:
+                values.append(pct)
+    return values
+
+
+def _probability_key_matches(*, key: str, phase: str, opponent: str) -> bool:
+    normalized_key = _normalize_text(str(key)).replace("_", " ")
+    phase_key = _normalize_text(phase).replace("_", " ")
+    opponent_key = _normalize_text(opponent).replace("_", " ")
+    if not opponent_key or opponent_key not in normalized_key:
+        return False
+    if not _is_knockout_estimate(phase):
+        return True
+    return phase_key in normalized_key or "brasil" in normalized_key
+
+
+def _float_probability(value: Any) -> float | None:
+    try:
+        pct = float(str(value).strip().rstrip("%"))
+    except (TypeError, ValueError):
+        return None
+    if 0.0 <= pct <= 100.0:
+        return pct
+    return None
+
+
+def _same_probability_value(left: float, right: Any, *, tolerance: float = 0.15) -> bool:
+    right_pct = _float_probability(right)
+    return right_pct is not None and abs(float(left) - right_pct) <= tolerance
+
+
+def _is_knockout_estimate(phase: str) -> bool:
+    return _normalize_text(phase) not in {"fase de grupos", "grupo", "group", "group stage"}
+
+
+def _is_contaminated_match_probability(
+    opinion: Any,
+    *,
+    key: str,
+    value: float,
+    phase: str,
+    opponent: str,
+    estimate_scenario_pct: float | None = None,
+) -> bool:
+    if not _is_knockout_estimate(phase):
+        return False
+    scenario_probabilities = dict(getattr(opinion, "scenario_probabilities", {}) or {})
+    for scenario_key, scenario_value in scenario_probabilities.items():
+        if not _probability_key_matches(key=str(scenario_key), phase=phase, opponent=opponent):
+            continue
+        if _same_probability_value(value, scenario_value):
+            return True
+    return estimate_scenario_pct is not None and _same_probability_value(value, estimate_scenario_pct)
+
+
+def _opinion_match_probability_values(
+    opinions: list[Any],
+    *,
+    phase: str,
+    opponent: str,
+    estimate_scenario_pct: float | None = None,
+) -> list[float]:
+    values: list[float] = []
+    for opinion in opinions:
+        for key, value in dict(getattr(opinion, "match_probabilities", {}) or {}).items():
+            if not _probability_key_matches(key=str(key), phase=phase, opponent=opponent):
+                continue
+            pct = _float_probability(value)
+            if pct is None:
+                continue
+            if _is_contaminated_match_probability(
+                opinion,
+                key=str(key),
+                value=pct,
+                phase=phase,
+                opponent=opponent,
+                estimate_scenario_pct=estimate_scenario_pct,
+            ):
+                continue
+            values.append(pct)
+    return values
+
+
+def _set_estimate_brazil_probability(estimate: Any, brazil_pct: float) -> None:
+    old_low = getattr(estimate, "brazil_ci_low", None)
+    old_high = getattr(estimate, "brazil_ci_high", None)
+    ci_width = None
+    if old_low is not None and old_high is not None:
+        try:
+            ci_width = max(0.0, float(old_high) - float(old_low))
+        except (TypeError, ValueError):
+            ci_width = None
+    brazil_pct = round(float(brazil_pct), 1)
+    estimate.brazil_pct = brazil_pct
+    if estimate.draw_pct is None:
+        estimate.opponent_pct = round(100.0 - brazil_pct, 1)
+    else:
+        estimate.opponent_pct = round(max(0.0, 100.0 - brazil_pct - float(estimate.draw_pct)), 1)
+    if ci_width is not None:
+        estimate.brazil_ci_low = round(max(0.0, brazil_pct - ci_width / 2.0), 1)
+        estimate.brazil_ci_high = round(min(100.0, brazil_pct + ci_width / 2.0), 1)
+
+
+def _validate_report_coherence(
+    *,
+    stage_probabilities: dict[str, float],
+    knockout_estimates: list[Any],
+    monte_carlo_result: dict[str, Any] | None,
+) -> None:
+    errors: list[str] = []
+    stage_order = ("quartas", "semifinal", "final", "titulo")
+    for previous_key, next_key in zip(stage_order, stage_order[1:]):
+        if previous_key not in stage_probabilities or next_key not in stage_probabilities:
+            continue
+        previous_value = float(stage_probabilities[previous_key])
+        next_value = float(stage_probabilities[next_key])
+        if next_value > previous_value + 0.15:
+            errors.append(
+                f"funil incoerente: {next_key}={next_value:.1f}% maior que {previous_key}={previous_value:.1f}%"
+            )
+
+    for estimate in knockout_estimates:
+        phase = str(getattr(estimate, "phase", ""))
+        if not _is_knockout_estimate(phase):
+            continue
+        scenario_pct = getattr(estimate, "scenario_pct", None)
+        if scenario_pct is None:
+            continue
+        brazil_pct = _float_probability(getattr(estimate, "brazil_pct", None))
+        if brazil_pct is None or not _same_probability_value(brazil_pct, scenario_pct):
+            continue
+        opponent = str(getattr(estimate, "opponent", "") or "")
+        monte_carlo_payload = _monte_carlo_phase_opponents(monte_carlo_result, phase).get(_normalize_text(opponent))
+        monte_carlo_brazil_pct = None
+        if monte_carlo_payload and monte_carlo_payload.get("brazil_pct") is not None:
+            monte_carlo_brazil_pct = _float_probability(monte_carlo_payload.get("brazil_pct"))
+        if monte_carlo_brazil_pct is None or abs(monte_carlo_brazil_pct - brazil_pct) > 5.0:
+            mc_fragment = (
+                f"; Monte Carlo condicional={monte_carlo_brazil_pct:.1f}%"
+                if monte_carlo_brazil_pct is not None
+                else ""
+            )
+            errors.append(
+                f"{phase} vs {opponent}: brazil_pct={brazil_pct:.1f}% ecoa scenario_pct={float(scenario_pct):.1f}%"
+                f"{mc_fragment}"
+            )
+    if errors:
+        raise ReportCoherenceError("Gate de coerência pré-render falhou: " + " | ".join(errors))
+
+
+def _monte_carlo_phase_opponents(monte_carlo_result: dict[str, Any] | None, phase: str) -> dict[str, dict[str, Any]]:
+    if not monte_carlo_result or not monte_carlo_result.get("enabled"):
+        return {}
+    phase_payload = (monte_carlo_result.get("phases") or {}).get(phase) or {}
+    opponents: dict[str, dict[str, Any]] = {}
+    for row in phase_payload.get("opponents", []) or []:
+        opponent = str(row.get("opponent") or "").strip()
+        if opponent:
+            opponents[_normalize_text(opponent)] = dict(row)
+    return opponents
+
+
+def _monte_carlo_path_gate_min_iterations(config: dict[str, Any]) -> int:
+    mc_config = config.get("monte_carlo") if isinstance(config.get("monte_carlo"), dict) else {}
+    return int(mc_config.get("path_gate_min_iterations", 10000))
+
+
+def _monte_carlo_path_gate_min_rating_coverage_pct(config: dict[str, Any]) -> float:
+    mc_config = config.get("monte_carlo") if isinstance(config.get("monte_carlo"), dict) else {}
+    return float(mc_config.get("path_gate_min_rating_coverage_pct", 65.0))
+
+
+def _weighted_scenario_with_monte_carlo(
+    scenario_values: list[float],
+    *,
+    monte_carlo_payload: dict[str, Any] | None,
+    prior_weight: float,
+) -> float | None:
+    mc_value = None
+    if monte_carlo_payload and monte_carlo_payload.get("scenario_pct") is not None:
+        try:
+            mc_value = float(monte_carlo_payload["scenario_pct"])
+        except (TypeError, ValueError):
+            mc_value = None
+    if scenario_values and mc_value is not None:
+        return (sum(scenario_values) + mc_value * prior_weight) / (len(scenario_values) + prior_weight)
+    if scenario_values:
+        return sum(scenario_values) / len(scenario_values)
+    if mc_value is not None:
+        return mc_value
+    return None
+
+
+def _apply_meeting_knockout_scenarios(
+    estimates: list[Any],
+    opinions: list[Any],
+    *,
+    config: dict[str, Any],
+    monte_carlo_result: dict[str, Any] | None = None,
+) -> None:
+    path_by_phase = {entry["phase"]: entry for entry in brazil_bracket_path(config)}
+    if not path_by_phase:
+        return
+    mc_config = config.get("monte_carlo") if isinstance(config.get("monte_carlo"), dict) else {}
+    monte_carlo_reliable = monte_carlo_path_gate_is_reliable(
+        monte_carlo_result or {},
+        min_iterations=_monte_carlo_path_gate_min_iterations(config),
+        min_rating_coverage_pct=_monte_carlo_path_gate_min_rating_coverage_pct(config),
+    )
+    monte_carlo_prior_weight = float(
+        mc_config.get(
+            "path_gate_reliable_prior_weight" if monte_carlo_reliable else "path_gate_unreliable_prior_weight",
+            2.0 if monte_carlo_reliable else 0.35,
+        )
+    )
+
+    for phase, bracket_entry in path_by_phase.items():
+        phase_estimates = [
+            estimate
+            for estimate in estimates
+            if str(getattr(estimate, "phase", "")) == phase
+        ]
+        if not phase_estimates:
+            continue
+        monte_carlo_candidates = _monte_carlo_phase_opponents(monte_carlo_result, phase)
+        rankings: list[dict[str, Any]] = []
+        for opponent in bracket_entry.get("allowed_opponents", []):
+            opponent_key = _normalize_text(str(opponent))
+            monte_carlo_payload = monte_carlo_candidates.get(opponent_key)
+            if monte_carlo_reliable and monte_carlo_candidates and monte_carlo_payload is None:
+                continue
+            scenario_values = _opinion_probability_values(
+                opinions,
+                field="scenario_probabilities",
+                phase=phase,
+                opponent=str(opponent),
+            )
+            monte_carlo_scenario_pct = None
+            if monte_carlo_payload and monte_carlo_payload.get("scenario_pct") is not None:
+                monte_carlo_scenario_pct = _float_probability(monte_carlo_payload.get("scenario_pct"))
+            match_values = _opinion_match_probability_values(
+                opinions,
+                phase=phase,
+                opponent=str(opponent),
+                estimate_scenario_pct=monte_carlo_scenario_pct,
+            )
+            if not scenario_values and not match_values and not monte_carlo_payload:
+                continue
+            scenario_avg = _weighted_scenario_with_monte_carlo(
+                scenario_values,
+                monte_carlo_payload=monte_carlo_payload,
+                prior_weight=monte_carlo_prior_weight,
+            )
+            brazil_pct = round(sum(match_values) / len(match_values), 1) if match_values else None
+            if brazil_pct is None and monte_carlo_payload and monte_carlo_payload.get("brazil_pct") is not None:
+                try:
+                    brazil_pct = round(float(monte_carlo_payload["brazil_pct"]), 1)
+                except (TypeError, ValueError):
+                    brazil_pct = None
+            rankings.append(
+                {
+                    "opponent": str(opponent),
+                    "scenario_pct": round(scenario_avg, 1) if scenario_avg is not None else None,
+                    "brazil_pct": brazil_pct,
+                    "mentions": len(scenario_values) + len(match_values) + int(bool(monte_carlo_payload)),
+                }
+            )
+        rankings.sort(key=lambda item: (item["scenario_pct"] or 0.0, item["mentions"]), reverse=True)
+        if not rankings:
+            continue
+
+        phase_estimates.sort(key=lambda estimate: 0 if bool(getattr(estimate, "most_likely", False)) else 1)
+        for estimate, ranking in zip(phase_estimates, rankings, strict=False):
+            estimate.opponent = ranking["opponent"]
+            if ranking["scenario_pct"] is not None:
+                estimate.scenario_pct = ranking["scenario_pct"]
+            if ranking["brazil_pct"] is not None:
+                _set_estimate_brazil_probability(estimate, ranking["brazil_pct"])
+
+
+def _parallel_opponent_debriefing_enabled(config: dict[str, Any]) -> bool:
+    return bool(config.get("parallel_opponent_debriefing_enabled", False))
+
+
+def _opponent_debriefing_config(config: dict[str, Any]) -> dict[str, Any]:
+    knockout_matches: list[dict[str, Any]] = []
+    for entry in brazil_bracket_path(config):
+        allowed_opponents = [
+            str(opponent).strip()
+            for opponent in entry.get("allowed_opponents", [])
+            if str(opponent).strip()
+        ]
+        if not allowed_opponents:
+            continue
+        knockout_matches.append(
+            {
+                "phase": entry.get("phase"),
+                "opponent": "Adversário provável a definir pela sala paralela",
+                "most_likely": True,
+                "bracket_match_id": entry.get("match_id"),
+                "bracket_brazil_slot": entry.get("brazil_slot"),
+                "bracket_opponent_slots": entry.get("opponent_slots"),
+                "allowed_opponent_groups": entry.get("allowed_opponent_groups"),
+                "allowed_opponents": allowed_opponents,
+            }
+        )
+    if not knockout_matches:
+        knockout_matches = [dict(match) for match in _default_knockout_matches(config)]
+
+    return {
+        **config,
+        "_meeting_room": "opponent_path",
+        "group_matches": [],
+        "knockout_matches": knockout_matches,
+        "macro_direction": (
+            "Sala paralela de debriefing para adversários prováveis do cruzamento do Brasil. "
+            "Simule 16 avos, Oitavas, Quartas, Semifinal e Final dentro do bracket oficial; "
+            "para cada candidato permitido, estime scenario_probabilities e match_probabilities com as "
+            "mesmas famílias de dados usadas para o Brasil: bets/prediction markets, ratings, Monte Carlo, "
+            "Sofascore/performance, lesões/cortes/notícias, amistosos recentes, arbitragem/VAR/cartões, descanso "
+            "e imprensa especializada. A sala não decide a chance final do Brasil sozinha; ela acelera e melhora "
+            "a escolha dos adversários prováveis que a sala principal usará."
+        ),
+    }
+
+
+def _knockout_estimates_as_config_matches(estimates: list[Any]) -> list[dict[str, Any]]:
+    matches: list[dict[str, Any]] = []
+    for estimate in estimates:
+        matches.append(
+            {
+                "phase": str(getattr(estimate, "phase", "")),
+                "opponent": str(getattr(estimate, "opponent", "")),
+                "most_likely": bool(getattr(estimate, "most_likely", False)),
+                "brazil_pct": float(getattr(estimate, "brazil_pct", 0.0)),
+                "opponent_pct": float(getattr(estimate, "opponent_pct", 0.0)),
+                "scenario_pct": getattr(estimate, "scenario_pct", None),
+                "date": getattr(estimate, "match_date", None),
+                "venue": getattr(estimate, "venue", None),
+                "allowed_opponents": list(getattr(estimate, "allowed_opponents", []) or []),
+            }
+        )
+    return matches
+
+
+def _parallel_opponent_briefing_for_prompt(result: dict[str, Any], estimates: list[Any]) -> dict[str, Any]:
+    if not result.get("enabled") or result.get("failed"):
+        return {
+            "enabled": bool(result.get("enabled", False)),
+            "failed": bool(result.get("failed", False)),
+            "error": str(result.get("error", "")),
+        }
+    top_by_phase: dict[str, list[dict[str, Any]]] = {}
+    for estimate in estimates:
+        phase = str(getattr(estimate, "phase", ""))
+        if not phase:
+            continue
+        top_by_phase.setdefault(phase, []).append(
+            {
+                "opponent": str(getattr(estimate, "opponent", "")),
+                "scenario_pct": getattr(estimate, "scenario_pct", None),
+                "brazil_pct": getattr(estimate, "brazil_pct", None),
+                "most_likely": bool(getattr(estimate, "most_likely", False)),
+            }
+        )
+    return {
+        "enabled": True,
+        "rounds": int(result.get("rounds", 0) or 0),
+        "participants": list(result.get("participants", [])),
+        "top_by_phase": top_by_phase,
+        "rule": "sala principal deve usar estes adversários prováveis já reconciliados com bracket/Monte Carlo",
+    }
+
+
+async def _run_parallel_opponent_debriefing(
+    *,
+    config: dict[str, Any],
+    planning_opinions: list[Any],
+    generated_at: datetime,
+    agent_specs: list[Any],
+    baseline_title_pct: float,
+    allow_agent_fallback: bool,
+    token_cost_ledger: dict[str, Any],
+) -> dict[str, Any]:
+    opponent_config = _opponent_debriefing_config(config)
+    consensus, final_opinions, transcript, all_opinions = await _run_model_meeting(
+        config=opponent_config,
+        planning_opinions=planning_opinions,
+        generated_at=generated_at,
+        agent_specs=agent_specs,
+        baseline_title_pct=baseline_title_pct,
+        allow_agent_fallback=allow_agent_fallback,
+        watchdog=None,
+        token_cost_ledger=token_cost_ledger,
+    )
+    return {
+        "enabled": True,
+        "consensus": consensus,
+        "final_opinions": final_opinions,
+        "meeting_transcript": transcript,
+        "all_opinions": all_opinions,
+        "rounds": len(transcript),
+        "participants": _slots_from_specs(agent_specs),
+    }
+
+
+def _agent_debate_prompt(
+    *,
+    config: dict[str, Any],
+    evidence: list[EvidenceResult],
+    generated_at: datetime,
+    opening_opinions: list[Any],
+) -> str:
+    opening_lines = [
+        (
+            f"- {opinion.agent}: título={opinion.title_pct:.1f}%; "
+            f"tese={opinion.summary}; crítica={opinion.critique or 'não informada'}"
+        )
+        for opinion in opening_opinions
+    ]
+    return (
+        _agent_prompt(config=config, evidence=evidence, generated_at=generated_at)
+        + "\n\nRodada 1 dos outros modelos:\n"
+        + "\n".join(opening_lines)
+        + "\n\nAgora faça a Rodada 2: critique explicitamente pelo menos uma premissa de outro modelo, "
+        "diga se move sua probabilidade de título para cima/baixo/igual e responda em JSON estrito "
+        "com self_identification, title_pct, summary, opening_argument, critique e adjustment."
+    )
+
+
+def _protagonist_question_prompt(
+    *,
+    config: dict[str, Any],
+    protagonist: str,
+    previous_turn: dict[str, Any] | None,
+    generated_at: datetime,
+) -> str:
+    previous_context = json.dumps(previous_turn or {}, ensure_ascii=False)[:3500]
+    macro_direction = config.get(
+        "macro_direction",
+        "Brasil na Copa do Mundo de 2026: números e contexto como direcional inicial, sem viés pró-Brasil.",
+    )
+    return (
+        f"Você é {protagonist}, o protagonista atual da sala de reunião dos modelos. "
+        "Esta é uma reunião de debriefing multi-turn: não trate a sala como uma lista fixa de falas, "
+        "porque cada modelo pode falar várias vezes, responder objeções e voltar ao protagonismo. "
+        "Faça a próxima pergunta aos outros modelos para reduzir a discordância e chegar "
+        "ao consenso sobre o percentual do Brasil jogo a jogo e até onde ele deve ir no Modelo Principal. "
+        "A reunião só deve convergir quando o consenso tiver maioria simples entre os participantes ativos da sala, "
+        "não porque um contador fixo de falas terminou. "
+        f"{_agent_owned_fresh_search_contract()} "
+        f"{_effort_latency_instruction()} "
+        f"{_self_identification_instruction()} "
+        "Responda em JSON estrito com: self_identification, question, title_pct, summary, answer, source_urls, source_queries, scenario_probabilities. "
+        "title_pct deve ser sempre um número da chance de título do Brasil, nunca um objeto; "
+        "probabilidades jogo a jogo devem ir somente em match_probabilities quando forem necessárias; "
+        "probabilidade de um confronto específico acontecer deve ir em scenario_probabilities. "
+        "Se uma premissa por seleção deve afetar a simulação de adversários, inclua team_context_signals com team, category, rating_delta ou probability_delta_pct, confidence, rationale e source_url/source_query. "
+        "Na sua question, exponha sua opinião/racional em uma frase e pergunte explicitamente se os outros modelos "
+        "concordam ou discordam dela, se concordam integralmente e se a sala pode sair com consenso para avançar "
+        "para as próximas etapas. "
+        "A pergunta precisa citar uma premissa concreta a testar usando odds, prediction markets, "
+        "Elo/ranking, Monte Carlo, Sofascore/performance de jogadores, lesões, cortes, cartões, arbitragem/VAR, descanso ou chaveamento. "
+        f"{_opponent_research_instruction(config)} "
+        f"{_quantitative_qualitative_decision_instruction()} "
+        f"{_meeting_full_path_instruction(config)} "
+        f"{_event_impact_prompt_instruction()} "
+        f"{_auditable_sources_instruction(config)} "
+        "Não faça comparação com benchmarks externos nesta sala; esse passo acontece em prompt separado depois. "
+        f"{_meeting_scope_instruction(config)}\n\n"
+        f"Data: {generated_at.isoformat()}\n"
+        f"Direcionamento macro: {macro_direction}\n"
+        f"Rodada anterior: {previous_context}\n"
+    )
+
+
+def _meeting_response_prompt(
+    *,
+    config: dict[str, Any],
+    round_index: int,
+    protagonist: str,
+    question: str,
+    previous_turn: dict[str, Any] | None,
+    generated_at: datetime,
+) -> str:
+    previous_context = json.dumps(previous_turn or {}, ensure_ascii=False)[:3500]
+    matches = _configured_matches_for_prompt(config)
+    return (
+        "Você está na sala de reunião de debriefing dos modelos. Responda à pergunta do protagonista com rigor e clareza. "
+        "Não trate a sala como uma lista fixa de falas: você pode falar várias vezes ao longo da reunião, "
+        "mudar sua posição, contestar uma premissa anterior ou aceitar uma tese melhor. "
+        "O objetivo é formar um consenso aceito por maioria simples dos participantes ativos, não encerrar por quantidade fixa de mensagens. "
+        f"{_agent_owned_fresh_search_contract()} "
+        f"{_effort_latency_instruction()} "
+        f"{_self_identification_instruction()} "
+        "Responda em JSON estrito com: self_identification, title_pct, summary, answer, critique, adjustment, source_urls, source_queries, "
+        "match_probabilities, scenario_probabilities, team_context_signals, agrees_with_protagonist, leadership_bid, proposed_next_question, leadership_rationale, consensus_check_question. "
+        "agrees_with_protagonist deve ser booleano: true se você aceita "
+        "o racional numérico do protagonista, false se discorda e quer assumir o protagonismo. "
+        "Não fique passivo: mesmo quando aceitar o argumento do protagonista, dispute a liderança por mérito se tiver "
+        "uma próxima pergunta melhor, fonte nova ou teste numérico auditável que ajude a sala. Nesse caso, mantenha "
+        "agrees_with_protagonist=true, use leadership_bid=true, preencha proposed_next_question e explique em "
+        "leadership_rationale. Não invente discordância para virar protagonista: se o argumento for válido, aceite. "
+        "Use leadership_bid=false quando sua contribuição não melhorar a próxima rodada. "
+        "No fim da sua answer e no campo consensus_check_question, faça uma pergunta direta aos demais modelos: "
+        "se eles concordam integralmente com a sua opinião e se a sala pode sair com consenso para avançar para as próximas etapas. "
+        "title_pct deve ser sempre um número da chance de título do Brasil, nunca um objeto. "
+        "Em match_probabilities, use chaves descritivas como 'Grupo: Marrocos', "
+        "'16 avos: Uruguai' ou 'Oitavas: Uruguai' e valores percentuais de chance do Brasil vencer/passar. "
+        "Em scenario_probabilities, use chaves como '16 avos: Holanda' para a chance daquele confronto acontecer; "
+        "só use candidatos permitidos por allowed_opponents/bracket_opponent_slots. "
+        "Em team_context_signals, registre sinais por seleção com team, category, rating_delta ou probability_delta_pct, confidence, rationale e source_url/source_query; "
+        "use as mesmas famílias de dados do Brasil para adversários: bets/prediction markets, ratings, Sofascore/performance, lesões/cortes/notícias recentes, amistosos recentes, arbitragem/VAR/cartões e imprensa especializada. "
+        "A decisão não é do orquestrador: ela deve sair do debate. Este é o Modelo Principal: use sportsbooks, "
+        "prediction markets, ratings independentes, Monte Carlo, Sofascore/performance de jogadores, lesões, cortes, cartões, "
+        "arbitragem/VAR, descanso e chaveamento. Não faça comparação com benchmarks externos nesta resposta; "
+        "esse passo acontece em prompt separado depois. "
+        f"{_opponent_research_instruction(config)} "
+        f"{_quantitative_qualitative_decision_instruction()} "
+        f"{_meeting_full_path_instruction(config)} "
+        f"{_event_impact_prompt_instruction()} "
+        f"{_auditable_sources_instruction(config)} "
+        "Use linguagem entendível para LinkedIn, mas explique o método usado. "
+        f"{_meeting_scope_instruction(config)}\n\n"
+        f"Rodada: {round_index}\n"
+        f"Protagonista: {protagonist}\n"
+        f"Pergunta: {question}\n"
+        f"Data: {generated_at.isoformat()}\n"
+        f"Jogos/cenários: {json.dumps(matches, ensure_ascii=False)}\n"
+        f"Rodada anterior: {previous_context}\n"
+    )
+
+
+def _is_repairable_meeting_removal(raw_opinion: Any, sanitized_opinion: Any) -> bool:
+    if bool(getattr(raw_opinion, "used_fallback", False)):
+        return False
+    if not bool(getattr(sanitized_opinion, "used_fallback", False)):
+        return False
+    if bool(getattr(sanitized_opinion, "removed_from_main", False)):
+        return True
+    summary = str(getattr(sanitized_opinion, "summary", "") or "")
+    return "Resposta removida do Modelo Principal" in summary
+
+
+def _meeting_response_repair_prompt(
+    *,
+    config: dict[str, Any],
+    round_index: int,
+    protagonist: str,
+    question: str,
+    previous_turn: dict[str, Any] | None,
+    raw_opinion: Any,
+    sanitized_opinion: Any,
+    generated_at: datetime,
+) -> str:
+    matches = _configured_matches_for_prompt(config)
+    previous_context = json.dumps(previous_turn or {}, ensure_ascii=False)[:2200]
+    bad_text = json.dumps(
+        {
+            "summary": getattr(raw_opinion, "summary", ""),
+            "answer": getattr(raw_opinion, "answer", ""),
+            "critique": getattr(raw_opinion, "critique", ""),
+            "adjustment": getattr(raw_opinion, "adjustment", ""),
+        },
+        ensure_ascii=False,
+    )[:2200]
+    feedback = str(getattr(sanitized_opinion, "summary", "") or "")
+    return (
+        "Sua resposta anterior foi removida pelo moderador por violar o contrato operacional da sala. "
+        "Este feedback é dirigido apenas a você; os outros modelos não precisam repetir a rodada. "
+        "Repare a resposta agora em JSON estrito com: self_identification, title_pct, summary, answer, "
+        "critique, adjustment, source_urls, source_queries, match_probabilities, scenario_probabilities, agrees_with_protagonist, "
+        "leadership_bid, proposed_next_question, leadership_rationale, consensus_check_question. "
+        "Não cite adversário de grupo fora do JSON. Para mata-mata sem adversário definido, use apenas a fase "
+        "e os rótulos configurados, como '16 avos: Adversário mais provável a definir'. "
+        "Não invente fonte, URL, score, rating, lesão, suspensão, arbitragem, adversário ou método. "
+        "Se você não conseguiu executar busca/fetch nesta chamada, diga isso em summary e deixe source_urls/source_queries "
+        "vazios; consulta planejada não conta como fonte verificável. "
+        "Se concordar ou discordar, apresente hipótese auditável com número e fonte/query. "
+        "No fim da answer e em consensus_check_question, pergunte diretamente se os demais concordam integralmente "
+        "e se a sala pode sair com consenso para avançar para as próximas etapas. "
+        "Não use benchmark reservado nem Opta no Modelo Principal. "
+        "Se não houver evidência para mover uma probabilidade, diga isso e mantenha shift 0.\n\n"
+        f"Data: {generated_at.isoformat()}\n"
+        f"Rodada: {round_index}\n"
+        f"Protagonista: {protagonist}\n"
+        f"Pergunta original: {question}\n"
+        f"Feedback do moderador: {feedback}\n"
+        f"Sua resposta anterior removida: {bad_text}\n"
+        f"Jogos/cenários permitidos: {json.dumps(matches, ensure_ascii=False)}\n"
+        f"Rodada anterior: {previous_context}\n"
+    )
+
+
+def _meeting_coverage_report(meeting_transcript: list[dict[str, Any]], config: dict[str, Any]) -> dict[str, Any]:
+    combined_parts: list[str] = []
+    for turn in meeting_transcript:
+        combined_parts.append(str(turn.get("question", "")))
+        for response in turn.get("responses", []):
+            combined_parts.append(str(response.get("answer", "")))
+    text = _normalize_text(" ".join(combined_parts))
+
+    group_opponents = [
+        str(match.get("opponent", "")).strip()
+        for match in _default_group_matches(config)
+        if str(match.get("opponent", "")).strip()
+    ]
+    knockout_phases = list(
+        dict.fromkeys(
+            str(match.get("phase", "")).strip()
+            for match in _default_knockout_matches(config)
+            if str(match.get("phase", "")).strip()
+        )
+    )
+    missing_group = [
+        opponent
+        for opponent in group_opponents
+        if _normalize_text(opponent) not in text
+    ]
+    missing_phases = [
+        phase
+        for phase in knockout_phases
+        if _normalize_text(phase) not in text
+    ]
+    title_covered = any(token in text for token in ("titulo", "campeao", "campea", "chance de titulo"))
+    return {
+        "complete": not missing_group and not missing_phases and title_covered,
+        "missing_group_opponents": missing_group,
+        "missing_knockout_phases": missing_phases,
+        "title_covered": title_covered,
+    }
+
+
+async def _repair_invalid_meeting_responses(
+    *,
+    config: dict[str, Any],
+    round_index: int,
+    protagonist: str,
+    question: str,
+    previous_turn: dict[str, Any] | None,
+    generated_at: datetime,
+    responder_specs: list[Any],
+    raw_opinions: list[Any],
+    sanitized_opinions: list[Any],
+    baseline_title_pct: float,
+    allow_agent_fallback: bool,
+    timeout: int,
+) -> tuple[list[Any], list[Any]]:
+    attempts = max(0, int(config.get("meeting_response_repair_attempts", 1)))
+    if attempts <= 0:
+        return sanitized_opinions, []
+
+    spec_by_slot = _agent_spec_by_slot(responder_specs)
+    repaired_by_agent: dict[str, Any] = {}
+    raw_repairs: list[Any] = []
+
+    for raw_opinion, sanitized_opinion in zip(raw_opinions, sanitized_opinions, strict=False):
+        if not _is_repairable_meeting_removal(raw_opinion, sanitized_opinion):
+            continue
+        spec = spec_by_slot.get(str(getattr(raw_opinion, "agent", "")))
+        if spec is None:
+            continue
+        repair_prompt = _meeting_response_repair_prompt(
+            config=config,
+            round_index=round_index,
+            protagonist=protagonist,
+            question=question,
+            previous_turn=previous_turn,
+            raw_opinion=raw_opinion,
+            sanitized_opinion=sanitized_opinion,
+            generated_at=generated_at,
+        )
+        repaired = await call_agent(
+            spec,
+            repair_prompt,
+            baseline_title_pct=baseline_title_pct,
+            timeout=timeout,
+            allow_local_fallback=allow_agent_fallback,
+        )
+        raw_repairs.append(repaired)
+        checked = _sanitize_main_meeting_opinions(
+            [repaired],
+            baseline_title_pct=baseline_title_pct,
+            config=config,
+        )[0]
+        if not bool(getattr(checked, "used_fallback", False)):
+            repaired_by_agent[checked.agent] = checked
+
+    if not repaired_by_agent:
+        return sanitized_opinions, raw_repairs
+
+    merged = [
+        repaired_by_agent.get(str(getattr(opinion, "agent", "")), opinion)
+        for opinion in sanitized_opinions
+    ]
+    return merged, raw_repairs
+
+
+def _compose_debate_transcript(opening_opinions: list[Any], final_consensus: Any) -> list[str]:
+    lines = [
+        (
+            f"Rodada 1 - {opinion.agent}: {opinion.summary} "
+            f"Projeção inicial de título: {opinion.title_pct:.1f}%."
+        )
+        for opinion in opening_opinions
+    ]
+    for line in final_consensus.debate_transcript:
+        if line.startswith("Rodada 1"):
+            lines.append(line.replace("Rodada 1", "Rodada 2 - ajuste pós-crítica", 1))
+        elif line.startswith("Rodada 2"):
+            lines.append(line.replace("Rodada 2", "Rodada 3 - crítica final", 1))
+        elif line.startswith("Rodada 3"):
+            lines.append(line.replace("Rodada 3", "Rodada 4 - ajustes finais", 1))
+        else:
+            lines.append(line)
+    return lines
+
+
+def calculate_model_influence(opening_opinions: list[Any], final_opinions: list[Any], consensus: Any) -> dict[str, float]:
+    final_by_agent = {opinion.agent: opinion for opinion in final_opinions}
+    opening_by_agent: dict[str, list[Any]] = {}
+    for opinion in opening_opinions:
+        opening_by_agent.setdefault(opinion.agent, []).append(opinion)
+    scores: dict[str, float] = {}
+    for agent, final in final_by_agent.items():
+        opening_items = opening_by_agent.get(agent, [])
+        source_url_count = sum(len(getattr(opinion, "source_urls", [])) for opinion in opening_items)
+        source_query_count = sum(len(getattr(opinion, "source_queries", [])) for opinion in opening_items)
+        score = 1.0
+        if getattr(final, "removed_from_main", False):
+            scores[agent] = 0.05
+            continue
+        if getattr(final, "used_fallback", False):
+            score *= 0.35
+        if source_url_count:
+            score += min(0.6, source_url_count * 0.15)
+        if source_query_count:
+            score += min(0.4, source_query_count * 0.10)
+        if getattr(final, "critique", ""):
+            score += 0.25
+        if getattr(final, "adjustment", ""):
+            score += 0.20
+        distance = abs(float(final.title_pct) - float(consensus.title_pct))
+        score += max(0.0, 0.8 - distance * 0.08)
+        scores[agent] = max(score, 0.05)
+
+    total = sum(scores.values()) or 1.0
+    normalized = {agent: round(score / total * 100, 1) for agent, score in scores.items()}
+    drift = round(100.0 - sum(normalized.values()), 1)
+    if normalized and drift:
+        top_agent = max(normalized, key=normalized.get)
+        normalized[top_agent] = round(normalized[top_agent] + drift, 1)
+    return normalized
+
+
+def _phase_labels_for_consensus_questions(config: dict[str, Any] | None) -> list[str]:
+    if not config:
+        return []
+    phases = ["Fase de grupos"]
+    phases.extend(
+        dict.fromkeys(
+            str(match.get("phase", "")).strip()
+            for match in _default_knockout_matches(config)
+            if str(match.get("phase", "")).strip()
+        )
+    )
+    return phases
+
+
+def _contains_phrase(text: str, phrase: str) -> bool:
+    normalized_text = _normalize_text(text)
+    normalized_phrase = _normalize_text(phrase).strip()
+    if not normalized_phrase:
+        return False
+    return bool(re.search(rf"\b{re.escape(normalized_phrase)}\b", normalized_text))
+
+
+def _turn_text(turn: dict[str, Any]) -> str:
+    parts = [str(turn.get("question", ""))]
+    for response in turn.get("responses", []):
+        parts.append(str(response.get("answer", "")))
+    return " ".join(parts)
+
+
+def _turn_mentions_consensus_phase(turn: dict[str, Any], phase: str, config: dict[str, Any] | None) -> bool:
+    text = _turn_text(turn)
+    normalized = _normalize_text(text)
+    if phase == "Fase de grupos":
+        if re.search(r"\b(grupo|fase de grupos)\b", normalized):
+            return True
+        if not config:
+            return False
+        return any(
+            _contains_phrase(text, str(match.get("opponent", "")))
+            for match in _default_group_matches(config)
+            if str(match.get("opponent", "")).strip()
+        )
+    return _contains_phrase(text, phase)
+
+
+def _consensus_questions_by_phase(
+    meeting_transcript: list[dict[str, Any]],
+    config: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for phase in _phase_labels_for_consensus_questions(config):
+        selected_turn = None
+        for turn in meeting_transcript:
+            if _turn_mentions_consensus_phase(turn, phase, config):
+                selected_turn = turn
+        if not selected_turn:
+            continue
+        entries.append(
+            {
+                "phase": phase,
+                "round": int(selected_turn.get("round", 0)),
+                "protagonist": str(selected_turn.get("protagonist", "")).strip(),
+                "question": str(selected_turn.get("question", "")).strip(),
+            }
+        )
+    return entries
+
+
+def calculate_model_participation(
+    meeting_transcript: list[dict[str, Any]],
+    *,
+    config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    by_model: dict[str, dict[str, int]] = {}
+    total_messages = 0
+    total_questions = 0
+    total_responses = 0
+    protagonist_counts: dict[str, int] = {}
+    rounds: list[dict[str, Any]] = []
+
+    def entry(agent: str) -> dict[str, int]:
+        return by_model.setdefault(agent, {"messages": 0, "questions": 0, "responses": 0})
+
+    for turn in meeting_transcript:
+        protagonist = str(turn.get("protagonist", "")).strip()
+        participants: list[str] = []
+        seen_participants: set[str] = set()
+        if protagonist:
+            stats = entry(protagonist)
+            stats["messages"] += 1
+            stats["questions"] += 1
+            protagonist_counts[protagonist] = protagonist_counts.get(protagonist, 0) + 1
+            total_messages += 1
+            total_questions += 1
+            participants.append(protagonist)
+            seen_participants.add(protagonist)
+        for response in turn.get("responses", []):
+            agent = str(response.get("agent", "")).strip()
+            if not agent:
+                continue
+            if agent not in seen_participants:
+                participants.append(agent)
+                seen_participants.add(agent)
+            stats = entry(agent)
+            stats["messages"] += 1
+            stats["responses"] += 1
+            total_messages += 1
+            total_responses += 1
+        if protagonist or participants:
+            rounds.append(
+                {
+                    "round": int(turn.get("round", len(rounds) + 1)),
+                    "protagonist": protagonist,
+                    "protagonist_count": protagonist_counts.get(protagonist, 0) if protagonist else 0,
+                    "participants": participants,
+                }
+            )
+
+    last_turn = meeting_transcript[-1] if meeting_transcript else {}
+    last_participants = rounds[-1]["participants"] if rounds else []
+
+    return {
+        "total_messages": total_messages,
+        "total_questions": total_questions,
+        "total_responses": total_responses,
+        "total_rounds": len(meeting_transcript),
+        "protagonist_counts": protagonist_counts,
+        "rounds": rounds,
+        "last_consensus_round": int(last_turn.get("round", 0)) if last_turn else 0,
+        "last_consensus_protagonist": str(last_turn.get("protagonist", "")).strip() if last_turn else "",
+        "last_consensus_question": str(last_turn.get("question", "")).strip() if last_turn else "",
+        "last_consensus_participants": last_participants,
+        "consensus_questions_by_phase": _consensus_questions_by_phase(meeting_transcript, config),
+        "by_model": by_model,
+    }
+
+
+def _model_predictions_no_opta(opinions: list[Any]) -> dict[str, dict[str, Any]]:
+    predictions: dict[str, dict[str, Any]] = {}
+    for opinion in opinions:
+        predictions[opinion.agent] = {
+            "title_pct": round(float(opinion.title_pct), 1),
+            "summary": opinion.summary,
+            "answer": opinion.answer,
+            "source_urls": [url for url in getattr(opinion, "source_urls", []) if not _has_opta_marker(url)],
+            "source_queries": [query for query in getattr(opinion, "source_queries", []) if not _has_opta_marker(query)],
+            "match_probabilities": dict(getattr(opinion, "match_probabilities", {})),
+            "scenario_probabilities": dict(getattr(opinion, "scenario_probabilities", {})),
+            "used_fallback": bool(getattr(opinion, "used_fallback", False)),
+            "removed_from_main": bool(getattr(opinion, "removed_from_main", False)),
+            "removal_reason": str(getattr(opinion, "removal_reason", "") or ""),
+        }
+    return predictions
+
+
+def _model_self_identification(opinions: list[Any]) -> dict[str, dict[str, str]]:
+    identities: dict[str, dict[str, str]] = {}
+    for opinion in opinions:
+        agent = str(getattr(opinion, "agent", "")).strip()
+        if not agent:
+            continue
+        name = str(getattr(opinion, "self_declared_name", "") or "").strip()
+        version = str(getattr(opinion, "self_declared_version", "") or "").strip()
+        if not name and not version:
+            continue
+        identities[agent] = {
+            "name": name,
+            "version": version,
+            "source": "declarado pelo próprio modelo no JSON da rodada",
+        }
+    return identities
+
+
+async def build_report_bundle(
+    *,
+    config: dict[str, Any],
+    source_memory: SourceMemory,
+    generated_at: datetime | None = None,
+    allow_agent_fallback: bool = True,
+    watchdog: RunWatchdog | None = None,
+) -> RunArtifacts:
+    _apply_runtime_env_overrides(config)
+    generated_at = generated_at or datetime.now(timezone.utc)
+    baseline_title_pct = float(config.get("baseline_title_pct", 11.0))
+    agent_specs = load_agent_specs_from_config(config)
+    token_cost_ledger = _new_token_cost_ledger(config)
+    monte_carlo_result = run_brazil_monte_carlo(config)
+    config["_monte_carlo_result"] = monte_carlo_result
+    if watchdog and monte_carlo_result.get("enabled"):
+        watchdog.event(
+            "monte_carlo",
+            "finish",
+            detail=(
+                f"{monte_carlo_result.get('iterations')} tournament simulations; "
+                f"seed={monte_carlo_result.get('seed')}; "
+                f"rating_coverage={monte_carlo_result.get('rating_coverage_pct')}%"
+            ),
+            extra=monte_carlo_compact_summary(monte_carlo_result),
+        )
+    planning_opinions = []
+    if watchdog:
+        watchdog.start(
+            "agent_source_planning",
+            detail=_agent_source_planning_watchdog_detail(config),
+            extra=_agent_source_planning_watchdog_extra(config),
+        )
+    source_planning_prompt = _source_planning_prompt(config=config, generated_at=generated_at)
+    raw_planning_opinions = await call_all_agents(
+        source_planning_prompt,
+        specs=agent_specs,
+        baseline_title_pct=baseline_title_pct,
+        timeout=int(config.get("agent_timeout_seconds", 90)),
+        allow_local_fallback=allow_agent_fallback,
+    )
+    _record_token_costs(
+        token_cost_ledger,
+        config=config,
+        prompt=source_planning_prompt,
+        opinions=raw_planning_opinions,
+        stage="source_planning",
+    )
+    planning_opinions = _sanitize_source_planning_opinions(
+        raw_planning_opinions,
+        baseline_title_pct=baseline_title_pct,
+        config=config,
+    )
+    source_readiness_report = _source_planning_readiness_report(planning_opinions, config)
+    if watchdog:
+        _emit_source_planning_readiness(watchdog, source_readiness_report, final=False)
+    if not bool(source_readiness_report["quorum_met"]):
+        planning_opinions, source_readiness_report = await _self_heal_source_planning_quorum(
+            config=config,
+            planning_opinions=planning_opinions,
+            source_readiness_report=source_readiness_report,
+            agent_specs=agent_specs,
+            generated_at=generated_at,
+            baseline_title_pct=baseline_title_pct,
+            allow_agent_fallback=allow_agent_fallback,
+            watchdog=watchdog,
+            token_cost_ledger=token_cost_ledger,
+        )
+    removed_agent_slots = [str(entry["agent"]) for entry in source_readiness_report["removed_agents"]]
+    active_agent_specs = [spec for spec in agent_specs if spec.slot not in removed_agent_slots]
+    reentry_candidate_specs = (
+        [spec for spec in agent_specs if spec.slot in removed_agent_slots]
+        if bool(config.get("agent_reentry_probe_enabled", False))
+        else []
+    )
+    active_planning_opinions = [
+        opinion for opinion in planning_opinions if opinion.agent not in removed_agent_slots
+    ]
+    if watchdog:
+        _emit_source_planning_readiness(watchdog, source_readiness_report, final=True)
+    if not bool(source_readiness_report["quorum_met"]):
+        raise SourcePlanningQuorumError(_source_planning_quorum_error(source_readiness_report))
+    if watchdog:
+        watchdog.finish("agent_source_planning", detail="source planning round completed without moderator fetch")
+    removed_reason_by_agent = {
+        str(entry.get("agent", "")): str(entry.get("reason", ""))
+        for entry in source_readiness_report.get("removed_agents", [])
+    }
+    for agent in removed_agent_slots:
+        _token_cost_entry(token_cost_ledger, agent)["removed_from_decision"] = True
+        if watchdog:
+            reason = removed_reason_by_agent.get(agent, "não trouxe plano de fontes próprio e verificável")
+            watchdog.chat(
+                agent,
+                f"removido da jogada: {reason}; sem resposta auditável, não entra no pool ativo da sala",
+                round_name="agent-removal",
+            )
+
+    team_context_report = _apply_agent_team_context_to_monte_carlo_config(config, active_planning_opinions)
+    if watchdog:
+        watchdog.event(
+            "team_context_signals",
+            "finish",
+            detail=(
+                f"{team_context_report['applied_signal_count']} signal(s) applied from active agents; "
+                f"{team_context_report['ignored_signal_count']} ignored"
+            ),
+            extra=team_context_report,
+        )
+    if team_context_report["applied_signal_count"] or team_context_report["ignored_signal_count"]:
+        monte_carlo_result = run_brazil_monte_carlo(config)
+        config["_monte_carlo_result"] = monte_carlo_result
+        if watchdog and monte_carlo_result.get("enabled"):
+            watchdog.event(
+                "monte_carlo",
+                "finish",
+                detail=(
+                    "context-adjusted simulation after agent source planning; "
+                    f"{monte_carlo_result.get('iterations')} tournament simulations; "
+                    f"seed={monte_carlo_result.get('seed')}; "
+                    f"rating_coverage={monte_carlo_result.get('rating_coverage_pct')}%"
+                ),
+                extra=monte_carlo_compact_summary(monte_carlo_result),
+            )
+
+    evidence: list[EvidenceResult] = []
+    warnings: list[str] = [
+        f"Configuração de bracket inválida: {error}"
+        for error in invalid_configured_knockout_opponents(config)
+    ]
+
+    if watchdog:
+        watchdog.start("estimate_matches", detail="building directional quant/qual match estimates with confidence intervals")
+        recent_events = _recent_event_impacts(config)
+        if recent_events:
+            watchdog.event(
+                "recent_event_harness",
+                "finish",
+                detail=f"{len(recent_events)} recent event impact(s) loaded into match estimates and model prompts",
+                extra={
+                    "events": [
+                        {
+                            "id": event.get("id"),
+                            "date": event.get("date"),
+                            "team": event.get("team"),
+                            "category": event.get("category"),
+                            "summary": event.get("summary"),
+                            "source": _event_source_reference(event),
+                            "brazil_shift_pct": event.get("brazil_shift_pct"),
+                            "scenario_shift_pct": event.get("scenario_shift_pct"),
+                        }
+                        for event in recent_events
+                    ]
+                },
+            )
+    report_confidence_level = _confidence_level_for_report(config)
+    group_estimates = []
+    for match in _default_group_matches(config):
+        statistical, qualitative = _signals_for_match(match, evidence=evidence, knockout=False, config=config)
+        group_estimates.append(
+            blend_match_estimate(
+                brazil="Brasil",
+                opponent=str(match["opponent"]),
+                phase="Fase de grupos",
+                statistical=statistical,
+                qualitative=qualitative,
+                rationale=_rationale(match, evidence=evidence, knockout=False, config=config),
+                draw_pct=_optional_float(match, "draw_pct"),
+                match_date=match.get("date"),
+                venue=match.get("venue"),
+                confidence_level=report_confidence_level,
+            )
+        )
+
+    knockout_estimates = []
+    for match in _default_knockout_matches(config):
+        statistical, qualitative = _signals_for_match(match, evidence=evidence, knockout=True, config=config)
+        estimate = blend_match_estimate(
+            brazil="Brasil",
+            opponent=str(match["opponent"]),
+            phase=str(match.get("phase", "Mata-mata")),
+            statistical=statistical,
+            qualitative=qualitative,
+            rationale=_rationale(match, evidence=evidence, knockout=True, config=config),
+            match_date=match.get("date"),
+            most_likely=bool(match.get("most_likely", True)),
+            venue=match.get("venue"),
+            scenario_pct=_scenario_pct_for_match(match, config=config),
+            confidence_level=report_confidence_level,
+        )
+        _widen_ci_for_bracket_uncertainty(estimate, match, config=config)
+        knockout_estimates.append(estimate)
+    _apply_monte_carlo_knockout_scenarios(knockout_estimates, monte_carlo_result)
+    mc_config_for_ci = config.get("monte_carlo") if isinstance(config.get("monte_carlo"), dict) else {}
+    for estimate in knockout_estimates:
+        widen_ci_for_monte_carlo_path_uncertainty(
+            estimate,
+            monte_carlo_result,
+            max_widen_pct=float(mc_config_for_ci.get("max_ci_widen_pct", 8.0)),
+            min_iterations=int(mc_config_for_ci.get("path_gate_min_iterations", 10000)),
+            min_rating_coverage_pct=float(mc_config_for_ci.get("path_gate_min_rating_coverage_pct", 65.0)),
+            max_narrow_pct=float(mc_config_for_ci.get("path_gate_max_ci_narrow_pct", 3.0)),
+            narrow_uncertainty_threshold_pct=float(
+                mc_config_for_ci.get("path_gate_narrow_uncertainty_threshold_pct", 35.0)
+            ),
+        )
+
+    if watchdog:
+        watchdog.finish("estimate_matches", detail=f"{len(group_estimates) + len(knockout_estimates)} scenarios estimated")
+
+    meeting_config = {
+        **config,
+        "_meeting_room": "main_brazil",
+        "_allowed_fact_source_urls": [],
+    }
+    opponent_debriefing_task = None
+    opponent_debriefing_result: dict[str, Any] = {"enabled": False}
+    if _parallel_opponent_debriefing_enabled(config) and active_agent_specs:
+        opponent_debriefing_task = asyncio.create_task(
+            _run_parallel_opponent_debriefing(
+                config=meeting_config,
+                planning_opinions=active_planning_opinions,
+                generated_at=generated_at,
+                agent_specs=active_agent_specs,
+                baseline_title_pct=baseline_title_pct,
+                allow_agent_fallback=allow_agent_fallback,
+                token_cost_ledger=token_cost_ledger,
+            )
+        )
+        if watchdog:
+            watchdog.start(
+                "opponent_model_meeting",
+                detail=(
+                    "side debriefing room started for likely bracket opponents before main Brazil meeting; "
+                    "same agents, same source/bracket rules; main room waits for reconciled top-2"
+                ),
+            )
+    if opponent_debriefing_task is not None:
+        try:
+            opponent_debriefing_result = await opponent_debriefing_task
+            opponent_opinions = [
+                *opponent_debriefing_result.get("final_opinions", []),
+                *opponent_debriefing_result.get("all_opinions", []),
+            ]
+            _apply_meeting_knockout_scenarios(
+                knockout_estimates,
+                opponent_opinions,
+                config=config,
+                monte_carlo_result=monte_carlo_result,
+            )
+            _apply_meeting_match_probabilities(knockout_estimates, opponent_opinions)
+            meeting_config["knockout_matches"] = _knockout_estimates_as_config_matches(knockout_estimates)
+            meeting_config["_parallel_opponent_briefing"] = _parallel_opponent_briefing_for_prompt(
+                opponent_debriefing_result,
+                knockout_estimates,
+            )
+            if watchdog:
+                for turn in opponent_debriefing_result.get("meeting_transcript", []):
+                    watchdog.event(
+                        "opponent_model_room",
+                        "question",
+                        detail=str(turn.get("question", "")),
+                        extra={
+                            "round": int(turn.get("round", 0)),
+                            "protagonist": str(turn.get("protagonist", "")),
+                        },
+                    )
+                    for response in turn.get("responses", []):
+                        watchdog.event(
+                            "opponent_model_room",
+                            "response",
+                            detail=str(response.get("answer", "")),
+                            extra={
+                                "round": int(turn.get("round", 0)),
+                                "agent": str(response.get("agent", "")),
+                                "support_score": response.get("support_score"),
+                            },
+                        )
+                watchdog.finish(
+                    "opponent_model_meeting",
+                    detail=f"completed {opponent_debriefing_result.get('rounds', 0)} side opponent round(s); main room receives reconciled bracket top-2",
+                    extra={
+                        "participants": opponent_debriefing_result.get("participants", []),
+                        "rounds": opponent_debriefing_result.get("rounds", 0),
+                        "knockout_matches_for_main_room": meeting_config.get("knockout_matches", []),
+                    },
+                )
+        except Exception as exc:
+            opponent_debriefing_result = {"enabled": True, "failed": True, "error": str(exc)}
+            meeting_config["_parallel_opponent_briefing"] = _parallel_opponent_briefing_for_prompt(
+                opponent_debriefing_result,
+                knockout_estimates,
+            )
+            warnings.append(f"Sala paralela de adversários falhou sem afetar o consenso principal: {exc}.")
+            if watchdog:
+                watchdog.fail("opponent_model_meeting", detail=str(exc))
+    meeting_config["knockout_matches"] = _knockout_estimates_as_config_matches(knockout_estimates)
+    meeting_config.setdefault(
+        "_parallel_opponent_briefing",
+        _parallel_opponent_briefing_for_prompt(opponent_debriefing_result, knockout_estimates),
+    )
+    consensus, opinions, meeting_transcript, meeting_opinions = await _run_model_meeting(
+        config=meeting_config,
+        planning_opinions=active_planning_opinions,
+        generated_at=generated_at,
+        agent_specs=active_agent_specs,
+        baseline_title_pct=baseline_title_pct,
+        allow_agent_fallback=allow_agent_fallback,
+        watchdog=watchdog,
+        token_cost_ledger=token_cost_ledger,
+        reentry_candidate_specs=reentry_candidate_specs,
+        reentry_removed_reasons=removed_reason_by_agent,
+    )
+    _apply_meeting_knockout_scenarios(
+        knockout_estimates,
+        opinions,
+        config=config,
+        monte_carlo_result=monte_carlo_result,
+    )
+    _apply_meeting_match_probabilities([*group_estimates, *knockout_estimates], opinions)
+    if removed_agent_slots:
+        warnings.append(
+            "Removidos da jogada por não trazer plano de fontes próprio e verificável: "
+            + ", ".join(removed_agent_slots)
+            + "."
+        )
+    configured_min_participants = int(config.get("meeting_min_participants", config.get("meeting_min_real_agents", 3)))
+    if len(active_agent_specs) < configured_min_participants:
+        warnings.append(
+            "Quórum reduzido na sala: "
+            f"{len(active_agent_specs)} participante(s) ativo(s) com fontes próprias contra mínimo configurado de "
+            f"{configured_min_participants}; consenso calculado pela maioria simples dos participantes ativos."
+        )
+    if any(opinion.used_fallback for opinion in opinions):
+        warnings.append("Um ou mais agentes usaram fallback local; confira chaves/API/webfetch antes de publicar.")
+    used_sources = list(
+        dict.fromkeys(
+            [
+                *_reported_source_labels_from_agent_opinions([*active_planning_opinions, *meeting_opinions, *opinions]),
+                *_reported_event_source_labels(config),
+            ]
+        )
+    )
+    if not used_sources:
+        warnings.append(
+            "Nenhum modelo reportou source_urls/source_queries auditáveis; revise APIs/bridges antes de publicar."
+        )
+
+    stage_probabilities = _stage_probabilities(consensus.title_pct, config)
+    stage_confidence_intervals = _stage_confidence_intervals(
+        stage_probabilities,
+        dispersion_pct=consensus.dispersion_pct,
+        warning_count=len(warnings),
+        config=config,
+        model_title_pcts=_title_samples_for_uncertainty(opinions),
+    )
+    if watchdog:
+        watchdog.start("report_coherence", detail="validating funnel monotonicity and scenario/match probability separation")
+    try:
+        _validate_report_coherence(
+            stage_probabilities=stage_probabilities,
+            knockout_estimates=knockout_estimates,
+            monte_carlo_result=monte_carlo_result,
+        )
+    except ReportCoherenceError as exc:
+        if watchdog:
+            watchdog.fail("report_coherence", detail=str(exc))
+        raise
+    if watchdog:
+        watchdog.finish("report_coherence", detail="report probability coherence checks passed")
+    final_rationale = config.get(
+        "final_rationale",
+        (
+            "Quando cruzamos sportsbooks, prediction markets, ratings e avaliação qualitativa da semana, "
+            "o retrato atual é de seleção candidata, mas não de favorita automática: a chance de título "
+            "fica muito mais sensível ao cruzamento de quartas/semifinal do que à fase de grupos."
+        ),
+    )
+
+    bundle = ReportBundle(
+        generated_at_iso=generated_at.isoformat(),
+        group_matches=group_estimates,
+        knockout_matches=knockout_estimates,
+        stage_probabilities=stage_probabilities,
+        final_rationale=final_rationale,
+        sources=used_sources,
+        agent_summaries=consensus.agent_summaries,
+        warnings=warnings,
+        custom_hashtag=str(config.get("custom_hashtag", DEFAULT_CUSTOM_HASHTAG)),
+        group_name=str(config.get("group_name", "GRUPO A")),
+        group_summary=str(config.get("group_summary", "")),
+        stage_confidence_intervals=stage_confidence_intervals,
+        debate_transcript=[],
+        meeting_transcript=meeting_transcript,
+        source_plan_by_model=_source_plan_by_model(active_planning_opinions),
+        model_influence_pct=calculate_model_influence([*active_planning_opinions, *meeting_opinions], opinions, consensus),
+        model_participation=calculate_model_participation(meeting_transcript, config=config),
+        agent_effort_profiles=agent_effort_profiles(active_agent_specs),
+        model_token_costs=token_cost_ledger,
+        model_predictions_no_opta=_model_predictions_no_opta(opinions),
+        model_self_identification=_model_self_identification([*active_planning_opinions, *meeting_opinions, *opinions]),
+        metadata={
+            "agent_title_consensus_pct": consensus.title_pct,
+            "agent_opening_consensus_pct": meeting_transcript[0]["consensus_title_pct"] if meeting_transcript else consensus.title_pct,
+            "agent_dispersion_pct": consensus.dispersion_pct,
+            "uncertainty": _report_uncertainty_metadata(config),
+            "stage_interval_metadata": config.get("_stage_interval_metadata", {}),
+            "monte_carlo": monte_carlo_compact_summary(monte_carlo_result),
+            "meeting_rounds": len(meeting_transcript),
+            "meeting_transcript": meeting_transcript,
+            "parallel_opponent_debriefing": {
+                "enabled": bool(opponent_debriefing_result.get("enabled", False)),
+                "failed": bool(opponent_debriefing_result.get("failed", False)),
+                "rounds": int(opponent_debriefing_result.get("rounds", 0) or 0),
+                "participants": list(opponent_debriefing_result.get("participants", [])),
+                "meeting_transcript": list(opponent_debriefing_result.get("meeting_transcript", [])),
+                "error": str(opponent_debriefing_result.get("error", "")),
+            },
+            "removed_agent_slots": removed_agent_slots,
+            "agent_source_planning": {
+                opinion.agent: {
+                    "source_urls": opinion.source_urls,
+                    "source_queries": opinion.source_queries,
+                }
+                for opinion in planning_opinions
+            },
+            "mediator_role": {
+                "external_fetch": False,
+                "source_cache": False,
+                "source_selection": False,
+                "description": (
+                    "Mediador distribui contrato único, registra a sala e renderiza; "
+                    "cada modelo faz sua própria busca fresca e reporta source_urls/source_queries."
+                ),
+            },
+            "selected_sources": [],
+            "agent_reported_sources": used_sources,
+            "model_self_identification": _model_self_identification([*active_planning_opinions, *meeting_opinions, *opinions]),
+            "recent_event_impacts": _recent_event_impacts(config),
+            "market_value_momentum": _market_value_momentum_report(config),
+        },
+    )
+    if watchdog:
+        watchdog.start("render_post", detail="rendering LinkedIn post with debate and confidence intervals")
+    artifacts = RunArtifacts(bundle=bundle, post=render_linkedin_post(bundle), raw_evidence=evidence)
+    if watchdog:
+        watchdog.finish("render_post", detail=f"post has {len(artifacts.post.splitlines())} lines")
+    return artifacts
+
+
+def build_report_bundle_sync(**kwargs: Any) -> RunArtifacts:
+    return asyncio.run(build_report_bundle(**kwargs))
