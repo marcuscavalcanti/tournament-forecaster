@@ -226,6 +226,7 @@ def test_match_estimate_json_exposes_debate_relevant_match_fields() -> None:
 
 def test_agent_source_harness_uses_source_planning_sanitizer(tmp_path: Path, monkeypatch) -> None:
     async def fake_call_all_agents(*args, **kwargs):
+        assert kwargs["timeout"] == 77
         return [
             AgentOpinion(
                 agent="GPT 5.5",
@@ -253,6 +254,7 @@ def test_agent_source_harness_uses_source_planning_sanitizer(tmp_path: Path, mon
             {
                 "baseline_title_pct": 8.0,
                 "model_preflight_enabled": False,
+                "doctor_agent_timeout_seconds": 77,
                 "minimum_source_ready_agents": 3,
                 "require_agent_source_plan": True,
                 "agents": [

@@ -104,6 +104,7 @@
   "model_preflight_timeout_seconds": 180,
   "doctor_preflight_timeout_seconds": 90,
   "agent_timeout_seconds": 240,
+  "doctor_agent_timeout_seconds": 120,
   "protagonist_timeout_seconds": 210,
   "agent_reentry_probe_enabled": true,
   "agent_reentry_probe_timeout_seconds": 180,

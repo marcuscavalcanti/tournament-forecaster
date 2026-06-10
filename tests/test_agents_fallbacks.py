@@ -253,7 +253,7 @@ def test_call_remote_agent_uses_full_agent_timeout_for_claude_cli(monkeypatch) -
         captured["timeout"] = kwargs.get("timeout")
         return Result()
 
-    monkeypatch.setattr("worldcup_brazil.agents.subprocess.run", fake_run)
+    monkeypatch.setattr("worldcup_brazil.agents._run_browser_subprocess", fake_run)
     spec = AgentSpec(
         slot="Opus 4.8",
         provider="anthropic",
@@ -438,12 +438,12 @@ def test_call_browser_command_agent_passes_prompt_as_argument_for_codex_bridge(m
 
     def fake_run(command, **kwargs):
         captured["command"] = command
-        captured["input"] = kwargs.get("input")
+        captured["input"] = kwargs.get("input_text")
         captured["env"] = kwargs.get("env")
         return Result()
 
     monkeypatch.setenv("CODEX_THREAD_ID", "parent-thread")
-    monkeypatch.setattr("worldcup_brazil.agents.subprocess.run", fake_run)
+    monkeypatch.setattr("worldcup_brazil.agents._run_browser_subprocess", fake_run)
     spec = AgentSpec(
         slot="GPT 5.5",
         provider="openai",
@@ -485,10 +485,10 @@ def test_call_browser_command_agent_json_encodes_prompt_and_extracts_openai_cli_
 
     def fake_run(command, **kwargs):
         captured["command"] = command
-        captured["input"] = kwargs.get("input")
+        captured["input"] = kwargs.get("input_text")
         return Result()
 
-    monkeypatch.setattr("worldcup_brazil.agents.subprocess.run", fake_run)
+    monkeypatch.setattr("worldcup_brazil.agents._run_browser_subprocess", fake_run)
     spec = AgentSpec(
         slot="GPT 5.5",
         provider="openai",
@@ -537,7 +537,7 @@ def test_call_browser_command_agent_extracts_claude_stream_json_result(monkeypat
         stdout = stream
         stderr = ""
 
-    monkeypatch.setattr("worldcup_brazil.agents.subprocess.run", lambda *args, **kwargs: Result())
+    monkeypatch.setattr("worldcup_brazil.agents._run_browser_subprocess", lambda *args, **kwargs: Result())
     spec = AgentSpec(
         slot="Opus 4.8",
         provider="anthropic",
@@ -576,7 +576,7 @@ def test_call_browser_command_agent_falls_back_from_openai_cli_to_codex_bridge(m
             return Result(1, stderr="openai cli unavailable")
         return Result(0, stdout='{"title_pct": 8.0, "summary": "codex fallback ok"}')
 
-    monkeypatch.setattr("worldcup_brazil.agents.subprocess.run", fake_run)
+    monkeypatch.setattr("worldcup_brazil.agents._run_browser_subprocess", fake_run)
     spec = AgentSpec(
         slot="GPT 5.5",
         provider="openai",
@@ -631,10 +631,10 @@ def test_agent_preflight_reports_status_method_and_self_declared_version(monkeyp
 
     def fake_run(command, **kwargs):
         captured["command"] = command
-        captured["input"] = kwargs.get("input")
+        captured["input"] = kwargs.get("input_text")
         return Result()
 
-    monkeypatch.setattr("worldcup_brazil.agents.subprocess.run", fake_run)
+    monkeypatch.setattr("worldcup_brazil.agents._run_browser_subprocess", fake_run)
     spec = AgentSpec(
         slot="GPT 5.5",
         provider="openai",
@@ -673,7 +673,7 @@ def test_agent_preflight_contract_rejects_ping_without_sources(monkeypatch) -> N
         stdout = json.dumps(payload)
         stderr = ""
 
-    monkeypatch.setattr("worldcup_brazil.agents.subprocess.run", lambda *_args, **_kwargs: Result())
+    monkeypatch.setattr("worldcup_brazil.agents._run_browser_subprocess", lambda *_args, **_kwargs: Result())
     spec = AgentSpec(
         slot="GPT 5.5",
         provider="openai",
@@ -711,7 +711,7 @@ def test_agent_preflight_contract_accepts_structured_source_plan(monkeypatch) ->
         captured["prompt"] = json.loads(command[6])
         return Result()
 
-    monkeypatch.setattr("worldcup_brazil.agents.subprocess.run", fake_run)
+    monkeypatch.setattr("worldcup_brazil.agents._run_browser_subprocess", fake_run)
     spec = AgentSpec(
         slot="GPT 5.5",
         provider="openai",
@@ -885,9 +885,9 @@ def test_call_agent_converts_browser_command_timeout_to_local_fallback(monkeypat
 
     def fake_run(*args, **kwargs):
         calls["timeout"] = kwargs.get("timeout")
-        raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs.get("timeout"))
+        raise RuntimeError(f"Opus 4.8 browser_command timed out after {kwargs.get('timeout')}s")
 
-    monkeypatch.setattr("worldcup_brazil.agents.subprocess.run", fake_run)
+    monkeypatch.setattr("worldcup_brazil.agents._run_browser_subprocess", fake_run)
     spec = AgentSpec(
         slot="Opus 4.8",
         provider="anthropic",
@@ -914,7 +914,7 @@ def test_call_agent_reports_claude_cli_auth_failure_as_runner_auth_issue(monkeyp
         stdout = ""
         stderr = "Not logged in · Please run /login"
 
-    monkeypatch.setattr("worldcup_brazil.agents.subprocess.run", lambda *_args, **_kwargs: Result())
+    monkeypatch.setattr("worldcup_brazil.agents._run_browser_subprocess", lambda *_args, **_kwargs: Result())
     spec = AgentSpec(
         slot="Opus 4.8",
         provider="anthropic",
@@ -1046,7 +1046,7 @@ def test_call_remote_agent_tries_gemini_lite_model_before_removing_from_room(mon
             ]
         }
 
-    monkeypatch.setattr("worldcup_brazil.agents.subprocess.run", fake_run)
+    monkeypatch.setattr("worldcup_brazil.agents._run_browser_subprocess", fake_run)
     monkeypatch.setattr("worldcup_brazil.agents._post_json", fake_post_json)
     spec = AgentSpec(
         slot="Gemini Pro",

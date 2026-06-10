@@ -19,7 +19,6 @@ from worldcup_brazil.pipeline import (
     _apply_runtime_env_overrides,
     _sanitize_source_planning_opinions,
     _specs_after_preflight_exclusion,
-    _source_planning_prompt,
     _source_planning_readiness_report,
     load_config,
 )
@@ -49,6 +48,33 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _doctor_source_planning_prompt(config: dict, generated_at: datetime) -> str:
+    group_matches = [
+        f"{match.get('opponent')} ({match.get('venue', 'local indefinido')})"
+        for match in config.get("group_matches", [])
+    ]
+    knockout_phases = [
+        f"{match.get('phase')}: {match.get('opponent')}"
+        for match in config.get("knockout_matches", [])[:10]
+    ]
+    return (
+        "Doctor rápido do pipeline World Cup 2026. Não feche consenso; apenas prove que você consegue "
+        "chegar munido de fontes próprias e frescas para a sala. Responda SOMENTE JSON válido com campos: "
+        "self_identification{name,version}, title_pct, summary, opening_argument, critique, adjustment, "
+        "source_urls, source_queries, team_context_signals. Regras: sem cache; o mediador não busca dados; "
+        "cada modelo escolhe as próprias fontes; dados da Opta não contam e não devem aparecer em "
+        "source_urls/source_queries; não invente URL, ranking, lesão, odd, score ou método. Use fontes "
+        "quantitativas e qualitativas como achar melhor, sem percentual fixo entre elas. Cubra Brasil e "
+        "adversários/cenários com pelo menos 3 famílias entre odds/mercados, Elo/FIFA/ratings, "
+        "Sofascore/performance, lesões/cortes/cartões, arbitragem/VAR, descanso/logística, imprensa "
+        "especializada e Transfermarkt. Inclua pelo menos 2 source_urls HTTP ou 2 source_queries específicas "
+        "não-Opta. "
+        f"Data do run: {generated_at.isoformat()}. "
+        f"Grupo: {config.get('group_name', 'Grupo não informado')} contra {', '.join(group_matches) or 'não informado'}. "
+        f"Cenários de mata-mata configurados: {', '.join(knockout_phases) or 'não informado'}."
+    )
+
+
 async def run_harness(args: argparse.Namespace) -> int:
     load_env_file(args.env_file)
     load_env_file(args.shell_env_file)
@@ -76,12 +102,12 @@ async def run_harness(args: argparse.Namespace) -> int:
         ):
             config["_preflight_failed_slots"] = preflight_failed_slots
             agent_specs = _specs_after_preflight_exclusion(agent_specs, config)
-    prompt = _source_planning_prompt(config=config, generated_at=generated_at)
+    prompt = _doctor_source_planning_prompt(config=config, generated_at=generated_at)
     raw_opinions = await call_all_agents(
         prompt,
         specs=agent_specs,
         baseline_title_pct=baseline_title_pct,
-        timeout=int(config.get("agent_timeout_seconds", 90)),
+        timeout=int(config.get("doctor_agent_timeout_seconds", config.get("agent_timeout_seconds", 90))),
         allow_local_fallback=not args.strict_agents,
     )
     planning_opinions = _sanitize_source_planning_opinions(

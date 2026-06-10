@@ -760,6 +760,27 @@ def _run_browser_command(
         for arg in raw_command
     ]
     env = _browser_command_env(command)
+    result = _run_browser_subprocess(
+        command,
+        input_text=None if uses_placeholder else prompt,
+        env=env,
+        timeout=timeout,
+        slot=slot,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
+        raise RuntimeError(_browser_command_failure_detail(slot, command, detail))
+    return _extract_browser_command_output(command, result.stdout.strip())
+
+
+def _run_browser_subprocess(
+    command: list[str],
+    *,
+    input_text: str | None,
+    env: dict[str, str],
+    timeout: int,
+    slot: str,
+) -> subprocess.CompletedProcess[str]:
     process: subprocess.Popen[str] | None = None
     try:
         process = subprocess.Popen(
@@ -771,7 +792,7 @@ def _run_browser_command(
             env=env,
             start_new_session=True,
         )
-        stdout, stderr = process.communicate(input=None if uses_placeholder else prompt, timeout=timeout)
+        stdout, stderr = process.communicate(input=input_text, timeout=timeout)
     except subprocess.TimeoutExpired as exc:
         if process is not None:
             try:
@@ -780,10 +801,7 @@ def _run_browser_command(
                 process.kill()
             process.communicate()
         raise RuntimeError(f"{slot} browser_command timed out after {timeout}s") from exc
-    if process.returncode != 0:
-        detail = stderr.strip() or stdout.strip() or f"exit {process.returncode}"
-        raise RuntimeError(_browser_command_failure_detail(slot, command, detail))
-    return _extract_browser_command_output(command, stdout.strip())
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 
 def _call_browser_command_agent(spec: AgentSpec, prompt: str, *, timeout: int) -> str:
