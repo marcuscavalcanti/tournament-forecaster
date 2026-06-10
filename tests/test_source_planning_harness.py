@@ -131,6 +131,7 @@ def test_opta_exclusion_acknowledgement_is_not_treated_as_using_opta() -> None:
     assert _has_opta_marker("Sem Opta: busco Sofascore, odds e ratings independentes.") is False
     assert _has_opta_marker("Opta foi excluída antes da busca.") is False
     assert _has_opta_marker("Opta excluída do Modelo Principal; uso odds e Elo.") is False
+    assert _has_opta_marker("Dados da Opta ficam excluídos como fonte, benchmark, ranking ou âncora.") is False
     assert _has_opta_marker("Uso Opta Power Rankings como fonte.") is True
     assert _has_opta_marker("https://theanalyst.com/opta/world-cup-2026") is True
 

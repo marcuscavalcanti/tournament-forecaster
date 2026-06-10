@@ -6,6 +6,7 @@ import asyncio
 import json
 
 from worldcup_brazil import cli
+from worldcup_brazil.agents import AgentPreflightResult
 from worldcup_brazil.consensus import AgentOpinion
 from worldcup_brazil.pipeline import ReportCoherenceError, SourcePlanningQuorumError
 import scripts.run_agent_source_harness as source_harness
@@ -251,6 +252,7 @@ def test_agent_source_harness_uses_source_planning_sanitizer(tmp_path: Path, mon
         json.dumps(
             {
                 "baseline_title_pct": 8.0,
+                "model_preflight_enabled": False,
                 "minimum_source_ready_agents": 3,
                 "require_agent_source_plan": True,
                 "agents": [
@@ -291,3 +293,93 @@ def test_agent_source_harness_uses_source_planning_sanitizer(tmp_path: Path, mon
     assert result == 0
     assert report["ready_count"] == 3
     assert report["active_agents"] == ["GPT 5.5", "DeepSeek V4 Pro", "Gemini Pro"]
+
+
+def test_agent_source_harness_excludes_failed_preflight_slots_before_planning(tmp_path: Path, monkeypatch) -> None:
+    async def fake_preflights(specs, *, timeout, contract):
+        assert timeout == 30
+        assert contract is True
+        return [
+            AgentPreflightResult(
+                slot=spec.slot,
+                provider=spec.provider,
+                configured_model=spec.model,
+                runtime_model=spec.model,
+                method="mock",
+                ok=spec.slot != "Gemini Pro",
+                error="" if spec.slot != "Gemini Pro" else "HTTP Error 429: Too Many Requests",
+            )
+            for spec in specs
+        ]
+
+    async def fake_call_all_agents(prompt, *, specs, baseline_title_pct, timeout, allow_local_fallback):
+        assert [spec.slot for spec in specs] == ["GPT 5.5", "DeepSeek V4 Pro", "Perplexity Pro"]
+        return [
+            AgentOpinion(
+                agent=spec.slot,
+                title_pct=8.0,
+                summary="Plano com fonte verificável.",
+                source_urls=[f"https://example.com/{spec.slot.lower().split()[0]}"],
+            )
+            for spec in specs
+        ]
+
+    config = tmp_path / "config.json"
+    config.write_text(
+        json.dumps(
+            {
+                "baseline_title_pct": 8.0,
+                "model_preflight_enabled": True,
+                "model_preflight_contract_enabled": True,
+                "doctor_preflight_timeout_seconds": 30,
+                "exclude_slots_failing_preflight": True,
+                "minimum_source_ready_agents": 3,
+                "require_agent_source_plan": True,
+                "agents": [
+                    {"slot": "GPT 5.5", "provider": "openai", "model": "gpt-5.5", "env_api_key": None, "endpoint": "x"},
+                    {
+                        "slot": "DeepSeek V4 Pro",
+                        "provider": "openai-compatible",
+                        "model": "deepseek-v4-pro",
+                        "env_api_key": None,
+                        "endpoint": "x",
+                    },
+                    {
+                        "slot": "Perplexity Pro",
+                        "provider": "openai-compatible",
+                        "model": "sonar-pro",
+                        "env_api_key": None,
+                        "endpoint": "x",
+                    },
+                    {
+                        "slot": "Gemini Pro",
+                        "provider": "google-gemini",
+                        "model": "gemini-flash-latest",
+                        "env_api_key": None,
+                        "endpoint": "x/{model}",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(source_harness, "run_agent_preflights", fake_preflights)
+    monkeypatch.setattr(source_harness, "call_all_agents", fake_call_all_agents)
+    args = argparse.Namespace(
+        config=config,
+        env_file=tmp_path / ".env",
+        shell_env_file=tmp_path / ".zshrc",
+        output=tmp_path / "report.json",
+        strict_agents=False,
+        no_model_preflight=False,
+        now="2026-06-08T10:00:00+00:00",
+        json=False,
+    )
+
+    result = asyncio.run(source_harness.run_harness(args))
+    report = json.loads(args.output.read_text(encoding="utf-8"))
+
+    assert result == 0
+    assert report["preflight_failed_slots"] == ["Gemini Pro"]
+    assert report["active_agent_slots_after_preflight"] == ["GPT 5.5", "DeepSeek V4 Pro", "Perplexity Pro"]
+    assert report["ready_count"] == 3

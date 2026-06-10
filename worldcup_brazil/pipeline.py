@@ -97,7 +97,10 @@ def _is_negated_opta_mention(lowered: str, *, start: int, end: int) -> bool:
         suffix,
     ):
         return True
-    if re.search(r"^\W*(?:foi\W+)?(?:proibid\w*|vedad\w*|excluid\w*|reservad\w*)", suffix):
+    if re.search(
+        r"^\W*(?:(?:foi|foram|fica\w*|esta\w*)\W+)?(?:\w+\W+){0,2}?(?:proibid\w*|vedad\w*|excluid\w*|reservad\w*)",
+        suffix,
+    ):
         return True
     return False
 

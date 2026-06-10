@@ -78,8 +78,7 @@ def test_default_agent_specs_use_local_claude_cli_when_anthropic_api_key_is_miss
         "claude-opus-4-8",
         "--effort",
         "high",
-        "--allowedTools",
-        "WebSearch,WebFetch",
+        "--allowedTools=WebSearch,WebFetch",
         "{prompt}",
     ]
     assert specs["Opus 4.8"].prefer_bridge is True

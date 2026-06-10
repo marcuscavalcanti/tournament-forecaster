@@ -13,11 +13,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from worldcup_brazil.agents import call_all_agents, load_agent_specs_from_config
+from worldcup_brazil.agents import call_all_agents, load_agent_specs_from_config, run_agent_preflights
 from worldcup_brazil.cli import load_env_file
 from worldcup_brazil.pipeline import (
     _apply_runtime_env_overrides,
     _sanitize_source_planning_opinions,
+    _specs_after_preflight_exclusion,
     _source_planning_prompt,
     _source_planning_readiness_report,
     load_config,
@@ -42,6 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--shell-env-file", type=Path, default=Path.home() / ".zshrc")
     parser.add_argument("--output", type=Path, default=Path("outputs/agent_source_harness_latest.json"))
     parser.add_argument("--strict-agents", action="store_true")
+    parser.add_argument("--no-model-preflight", action="store_true", help="Skip preflight exclusion in the harness.")
     parser.add_argument("--now", help="ISO timestamp override for deterministic harness runs.")
     parser.add_argument("--json", action="store_true", help="Print the full JSON report to stdout.")
     return parser
@@ -55,6 +57,25 @@ async def run_harness(args: argparse.Namespace) -> int:
     _apply_runtime_env_overrides(config)
     baseline_title_pct = float(config.get("baseline_title_pct", 11.0))
     agent_specs = load_agent_specs_from_config(config)
+    original_agent_slots = [spec.slot for spec in agent_specs]
+    preflight_results = []
+    preflight_failed_slots: list[str] = []
+    if not getattr(args, "no_model_preflight", False) and bool(config.get("model_preflight_enabled", True)):
+        timeout = int(config.get("doctor_preflight_timeout_seconds", config.get("model_preflight_timeout_seconds", 180)))
+        contract_preflight = bool(config.get("model_preflight_contract_enabled", True))
+        preflight_results = await run_agent_preflights(
+            agent_specs,
+            timeout=timeout,
+            contract=contract_preflight,
+        )
+        preflight_failed_slots = [result.slot for result in preflight_results if not result.ok]
+        if (
+            preflight_failed_slots
+            and not args.strict_agents
+            and bool(config.get("exclude_slots_failing_preflight", True))
+        ):
+            config["_preflight_failed_slots"] = preflight_failed_slots
+            agent_specs = _specs_after_preflight_exclusion(agent_specs, config)
     prompt = _source_planning_prompt(config=config, generated_at=generated_at)
     raw_opinions = await call_all_agents(
         prompt,
@@ -73,7 +94,25 @@ async def run_harness(args: argparse.Namespace) -> int:
         **report,
         "generated_at_iso": generated_at.isoformat(),
         "config": str(args.config),
-        "agent_slots": [spec.slot for spec in agent_specs],
+        "agent_slots": original_agent_slots,
+        "active_agent_slots_after_preflight": [spec.slot for spec in agent_specs],
+        "preflight_failed_slots": preflight_failed_slots,
+        "preflight_results": [
+            {
+                "slot": result.slot,
+                "provider": result.provider,
+                "configured_model": result.configured_model,
+                "runtime_model": result.runtime_model,
+                "method": result.method,
+                "ok": result.ok,
+                "declared_name": result.declared_name,
+                "declared_version": result.declared_version,
+                "message": result.message,
+                "error": result.error,
+                "elapsed_ms": result.elapsed_ms,
+            }
+            for result in preflight_results
+        ],
         "prompt_chars": len(prompt),
     }
 
@@ -86,6 +125,11 @@ async def run_harness(args: argparse.Namespace) -> int:
         active = ", ".join(report["active_agents"]) or "nenhum"
         print(f"quorum: {report['ready_count']}/{report['required_count']} ready")
         print(f"active: {active}")
+        if preflight_results:
+            ok_count = sum(1 for result in preflight_results if result.ok)
+            print(f"preflight: {ok_count}/{len(preflight_results)} ok")
+            if preflight_failed_slots:
+                print(f"preflight_removed: {', '.join(preflight_failed_slots)}")
         print(f"report: {args.output}")
         for entry in report["removed_agents"]:
             print(f"removed: {entry['agent']} - {entry['reason']}")

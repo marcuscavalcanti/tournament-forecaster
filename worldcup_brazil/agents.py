@@ -5,6 +5,7 @@ import json
 import os
 import random
 import re
+import signal
 import shlex
 import shutil
 import subprocess
@@ -169,7 +170,7 @@ def _local_claude_cli_command() -> list[str] | None:
         effort,
     ]
     if allowed_tools.strip():
-        command.extend(["--allowedTools", allowed_tools.strip()])
+        command.append(f"--allowedTools={allowed_tools.strip()}")
     command.append("{prompt}")
     return command
 
@@ -759,22 +760,30 @@ def _run_browser_command(
         for arg in raw_command
     ]
     env = _browser_command_env(command)
+    process: subprocess.Popen[str] | None = None
     try:
-        result = subprocess.run(
+        process = subprocess.Popen(
             command,
-            input=None if uses_placeholder else prompt,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            capture_output=True,
             env=env,
-            timeout=timeout,
-            check=False,
+            start_new_session=True,
         )
+        stdout, stderr = process.communicate(input=None if uses_placeholder else prompt, timeout=timeout)
     except subprocess.TimeoutExpired as exc:
+        if process is not None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except OSError:
+                process.kill()
+            process.communicate()
         raise RuntimeError(f"{slot} browser_command timed out after {timeout}s") from exc
-    if result.returncode != 0:
-        detail = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
+    if process.returncode != 0:
+        detail = stderr.strip() or stdout.strip() or f"exit {process.returncode}"
         raise RuntimeError(_browser_command_failure_detail(slot, command, detail))
-    return _extract_browser_command_output(command, result.stdout.strip())
+    return _extract_browser_command_output(command, stdout.strip())
 
 
 def _call_browser_command_agent(spec: AgentSpec, prompt: str, *, timeout: int) -> str:

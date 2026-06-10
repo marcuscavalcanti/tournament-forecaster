@@ -113,8 +113,8 @@ def test_claude_cli_command_grants_web_search_tools(monkeypatch) -> None:
     monkeypatch.delenv("CLAUDE_CLI_ALLOWED_TOOLS", raising=False)
     monkeypatch.setattr("worldcup_brazil.agents.shutil.which", lambda name: "/usr/local/bin/claude")
     command = _local_claude_cli_command()
-    assert "--allowedTools" in command
-    assert "WebSearch,WebFetch" in command
+    assert "--allowedTools=WebSearch,WebFetch" in command
+    assert "--allowedTools" not in command
 
 
 def test_preflight_failed_slots_are_excluded_from_run() -> None:
@@ -219,4 +219,29 @@ def test_empty_allowed_tools_env_disables_claude_flag(monkeypatch) -> None:
     monkeypatch.setenv("CLAUDE_CLI_ALLOWED_TOOLS", "")
     monkeypatch.setattr("worldcup_brazil.agents.shutil.which", lambda name: "/usr/local/bin/claude")
     command = _local_claude_cli_command()
+    assert not any(arg.startswith("--allowedTools") for arg in command)
+
+
+def test_compliance_statement_about_opta_is_not_flagged() -> None:
+    """Regressão do make doctor de 10/jun (pós-22463ed): o plano do GPT dizia
+    'Opta fica explicitamente excluída do Modelo Principal' — declaração de
+    conformidade — e foi removido por 'benchmark reservado'. Advérbio intercalado
+    entre o verbo e o particípio agora é tolerado na detecção de negação."""
+    from worldcup_brazil.pipeline import _has_opta_marker
+
+    assert _has_opta_marker("Opta fica explicitamente excluída do Modelo Principal.") is False
+    assert _has_opta_marker("A Opta está totalmente vedada nesta sala.") is False
+    assert _has_opta_marker("usei o ranking da Opta como âncora do título") is True
+
+
+def test_claude_cli_prompt_placeholder_survives_variadic_allowed_tools(monkeypatch) -> None:
+    """Regressão do make doctor de 10/jun (pós-22463ed): '--allowedTools X {prompt}'
+    em dois argumentos fazia a opção variádica engolir o {prompt} — claude CLI
+    respondia 'Input must be provided either through stdin or as a prompt argument'.
+    A flag deve ir em forma '--allowedTools=...' e o {prompt} deve ser o último arg."""
+    monkeypatch.delenv("CLAUDE_CLI_ALLOWED_TOOLS", raising=False)
+    monkeypatch.setattr("worldcup_brazil.agents.shutil.which", lambda name: "/usr/local/bin/claude")
+    command = _local_claude_cli_command()
+    assert command[-1] == "{prompt}"
     assert "--allowedTools" not in command
+    assert any(arg.startswith("--allowedTools=") for arg in command)

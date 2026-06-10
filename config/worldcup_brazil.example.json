@@ -102,6 +102,7 @@
   "model_preflight_enabled": true,
   "model_preflight_contract_enabled": true,
   "model_preflight_timeout_seconds": 180,
+  "doctor_preflight_timeout_seconds": 90,
   "agent_timeout_seconds": 240,
   "protagonist_timeout_seconds": 210,
   "agent_reentry_probe_enabled": true,
