@@ -755,17 +755,7 @@ def test_post_json_retries_http_429_with_exponential_backoff(monkeypatch) -> Non
     monkeypatch.delenv("HTTP_BACKOFF_BASE_SECONDS", raising=False)
     monkeypatch.delenv("HTTP_BACKOFF_MAX_SECONDS", raising=False)
 
-    class Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def read(self):
-            return b'{"ok": true}'
-
-    def fake_urlopen(request, timeout):
+    def fake_post_once(url, headers, body, *, timeout):
         calls["count"] += 1
         if calls["count"] == 1:
             raise urllib.error.HTTPError(
@@ -775,9 +765,9 @@ def test_post_json_retries_http_429_with_exponential_backoff(monkeypatch) -> Non
                 hdrs=None,
                 fp=io.BytesIO(b"rate limited"),
             )
-        return Response()
+        return {"ok": True}
 
-    monkeypatch.setattr("worldcup_brazil.agents.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("worldcup_brazil.agents._post_json_once", fake_post_once)
     monkeypatch.setattr("worldcup_brazil.agents.time.sleep", lambda seconds: sleeps.append(seconds))
     monkeypatch.setattr("worldcup_brazil.agents.random.uniform", lambda _low, _high: 0.0)
 
@@ -792,7 +782,7 @@ def test_post_json_does_not_retry_http_404(monkeypatch) -> None:
     monkeypatch.delenv("HTTP_BACKOFF_BASE_SECONDS", raising=False)
     monkeypatch.delenv("HTTP_BACKOFF_MAX_SECONDS", raising=False)
 
-    def fake_urlopen(request, timeout):
+    def fake_post_once(url, headers, body, *, timeout):
         calls["count"] += 1
         raise urllib.error.HTTPError(
             url="https://api.example.test",
@@ -802,7 +792,7 @@ def test_post_json_does_not_retry_http_404(monkeypatch) -> None:
             fp=io.BytesIO(b"missing"),
         )
 
-    monkeypatch.setattr("worldcup_brazil.agents.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("worldcup_brazil.agents._post_json_once", fake_post_once)
     monkeypatch.setattr("worldcup_brazil.agents.time.sleep", lambda _seconds: None)
 
     try:
@@ -812,6 +802,37 @@ def test_post_json_does_not_retry_http_404(monkeypatch) -> None:
     else:
         raise AssertionError("expected HTTPError")
     assert calls["count"] == 1
+
+
+def test_call_agent_hard_timeout_returns_operational_fallback(monkeypatch) -> None:
+    def stuck_remote(*_args, **_kwargs):
+        import time
+
+        time.sleep(2)
+        return '{"title_pct": 8.0, "summary": "late"}'
+
+    monkeypatch.setattr("worldcup_brazil.agents._call_remote_agent", stuck_remote)
+    spec = AgentSpec(
+        slot="DeepSeek V4 Pro",
+        provider="openai-compatible",
+        model="deepseek-v4-pro",
+        env_api_key="DEEPSEEK_API_KEY",
+        endpoint="https://api.deepseek.com/chat/completions",
+    )
+
+    opinion = asyncio.run(
+        call_agent(
+            spec,
+            "prompt",
+            baseline_title_pct=7.0,
+            timeout=1,
+            allow_local_fallback=True,
+        )
+    )
+
+    assert opinion.used_fallback is True
+    assert opinion.removed_from_main is True
+    assert "hard timeout after 1s" in opinion.summary
 
 
 def test_call_all_agents_uses_provider_bulkheads_without_serializing_other_providers(monkeypatch) -> None:
@@ -877,6 +898,42 @@ def test_call_all_agents_uses_provider_bulkheads_without_serializing_other_provi
     assert max_running_by_provider[perplexity_key] == 1
     assert max_running_by_provider[gemini_key] == 1
     assert ("start", "Gemini Pro") in order[:2]
+
+
+def test_call_all_agents_emits_progress_events(monkeypatch) -> None:
+    events = []
+
+    async def fake_call_agent(spec, prompt, *, baseline_title_pct, timeout, allow_local_fallback):
+        await asyncio.sleep(0)
+        return __import__("worldcup_brazil.consensus").consensus.AgentOpinion(
+            agent=spec.slot,
+            title_pct=8.0,
+            summary="ok",
+        )
+
+    monkeypatch.setattr("worldcup_brazil.agents.call_agent", fake_call_agent)
+    spec = AgentSpec(
+        slot="DeepSeek V4 Pro",
+        provider="openai-compatible",
+        model="deepseek-v4-pro",
+        env_api_key="DEEPSEEK_API_KEY",
+        endpoint="https://api.deepseek.com/chat/completions",
+    )
+
+    opinions = asyncio.run(
+        call_all_agents(
+            "prompt",
+            specs=[spec],
+            baseline_title_pct=8.0,
+            timeout=10,
+            progress_callback=events.append,
+        )
+    )
+
+    assert [opinion.agent for opinion in opinions] == ["DeepSeek V4 Pro"]
+    assert events[0]["status"] == "start"
+    assert events[-1]["status"] == "finish"
+    assert events[-1]["agent"] == "DeepSeek V4 Pro"
 
 
 def test_call_agent_converts_browser_command_timeout_to_local_fallback(monkeypatch) -> None:

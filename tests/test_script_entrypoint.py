@@ -314,7 +314,7 @@ def test_agent_source_harness_excludes_failed_preflight_slots_before_planning(tm
             for spec in specs
         ]
 
-    async def fake_call_all_agents(prompt, *, specs, baseline_title_pct, timeout, allow_local_fallback):
+    async def fake_call_all_agents(prompt, *, specs, baseline_title_pct, timeout, allow_local_fallback, progress_callback=None):
         assert [spec.slot for spec in specs] == ["GPT 5.5", "DeepSeek V4 Pro", "Perplexity Pro"]
         return [
             AgentOpinion(

@@ -148,6 +148,7 @@ def test_apply_runtime_env_overrides_sets_retry_and_bulkhead_knobs_without_overw
         "HTTP_MAX_ATTEMPTS",
         "HTTP_BACKOFF_BASE_SECONDS",
         "HTTP_BACKOFF_MAX_SECONDS",
+        "HTTP_CONNECT_TIMEOUT_SECONDS",
         "AGENT_BULKHEAD_DEFAULT",
         "SOURCE_BULKHEAD_PER_HOST",
     ]
@@ -156,6 +157,7 @@ def test_apply_runtime_env_overrides_sets_retry_and_bulkhead_knobs_without_overw
         monkeypatch.setenv("HTTP_MAX_ATTEMPTS", "5")
         monkeypatch.delenv("HTTP_BACKOFF_BASE_SECONDS", raising=False)
         monkeypatch.delenv("HTTP_BACKOFF_MAX_SECONDS", raising=False)
+        monkeypatch.delenv("HTTP_CONNECT_TIMEOUT_SECONDS", raising=False)
         monkeypatch.delenv("AGENT_BULKHEAD_DEFAULT", raising=False)
         monkeypatch.delenv("SOURCE_BULKHEAD_PER_HOST", raising=False)
 
@@ -164,6 +166,7 @@ def test_apply_runtime_env_overrides_sets_retry_and_bulkhead_knobs_without_overw
                 "http_max_attempts": 4,
                 "http_backoff_base_seconds": 0.5,
                 "http_backoff_max_seconds": 8.0,
+                "http_connect_timeout_seconds": 4.0,
                 "agent_bulkhead_default": 2,
                 "source_bulkhead_per_host": 1,
             }
@@ -172,6 +175,7 @@ def test_apply_runtime_env_overrides_sets_retry_and_bulkhead_knobs_without_overw
         assert os.environ["HTTP_MAX_ATTEMPTS"] == "5"
         assert os.environ["HTTP_BACKOFF_BASE_SECONDS"] == "0.5"
         assert os.environ["HTTP_BACKOFF_MAX_SECONDS"] == "8.0"
+        assert os.environ["HTTP_CONNECT_TIMEOUT_SECONDS"] == "4.0"
         assert os.environ["AGENT_BULKHEAD_DEFAULT"] == "2"
         assert os.environ["SOURCE_BULKHEAD_PER_HOST"] == "1"
     finally:

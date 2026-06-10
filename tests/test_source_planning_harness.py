@@ -385,7 +385,7 @@ def test_source_planning_self_heals_by_retrying_only_unready_agents(
 ) -> None:
     calls: list[list[str]] = []
 
-    async def fake_call_all_agents(prompt, *, specs, baseline_title_pct, timeout, allow_local_fallback):
+    async def fake_call_all_agents(prompt, *, specs, baseline_title_pct, timeout, allow_local_fallback, progress_callback=None):
         calls.append([spec.slot for spec in specs])
         if len(calls) == 1:
             return [
@@ -734,13 +734,112 @@ def test_parallel_opponent_debriefing_runs_side_room_and_updates_bracket_scenari
     assert round_of_32[1].scenario_pct == 26.0
 
 
+def test_parallel_opponent_debriefing_timeout_does_not_block_main_room(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    async def fake_call_all_agents(*args, **kwargs):
+        return [
+            AgentOpinion(
+                agent="GPT 5.5",
+                title_pct=8.0,
+                summary="Plano com fonte verificável.",
+                source_urls=["https://example.com/gpt"],
+            ),
+            AgentOpinion(
+                agent="Perplexity Pro",
+                title_pct=8.1,
+                summary="Plano com fonte verificável.",
+                source_urls=["https://example.com/perplexity"],
+            ),
+            AgentOpinion(
+                agent="DeepSeek V4 Pro",
+                title_pct=7.9,
+                summary="Plano com fonte verificável.",
+                source_urls=["https://example.com/deepseek"],
+            ),
+        ]
+
+    rooms: list[str] = []
+
+    async def fake_run_model_meeting(
+        *,
+        config,
+        planning_opinions,
+        generated_at,
+        agent_specs,
+        baseline_title_pct,
+        allow_agent_fallback,
+        watchdog,
+        token_cost_ledger=None,
+        **_kwargs,
+    ):
+        room = str(config.get("_meeting_room", "main_brazil"))
+        rooms.append(room)
+        if room == "opponent_path":
+            await asyncio.sleep(0.05)
+        slots = [spec.slot for spec in agent_specs]
+        opinions = [
+            AgentOpinion(
+                agent=slot,
+                title_pct=8.0,
+                summary="Consenso auditável.",
+                answer="Sala principal segue mesmo se a lateral falhar.",
+                source_urls=["https://example.com/source"],
+                agrees_with_protagonist=True,
+            )
+            for slot in slots
+        ]
+        return build_consensus(opinions, agent_slots=slots), opinions, [], opinions
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+    monkeypatch.setattr("worldcup_brazil.pipeline._run_model_meeting", fake_run_model_meeting)
+    watchdog_path = tmp_path / "watchdog.jsonl"
+    config = load_config(Path("config/worldcup_brazil.example.json"))
+    config.update(
+        {
+            "baseline_title_pct": 8.0,
+            "minimum_source_ready_agents": 3,
+            "source_planning_repair_attempts": 0,
+            "meeting_min_participants": 3,
+            "parallel_opponent_debriefing_enabled": True,
+            "parallel_opponent_debriefing_timeout_seconds": 0.01,
+            "monte_carlo": {"enabled": False},
+            "agents": [
+                {"slot": "GPT 5.5", "provider": "openai", "model": "gpt-5.5", "endpoint": "x"},
+                {"slot": "Perplexity Pro", "provider": "openai-compatible", "model": "sonar", "endpoint": "x"},
+                {"slot": "DeepSeek V4 Pro", "provider": "openai-compatible", "model": "deepseek", "endpoint": "x"},
+            ],
+        }
+    )
+
+    artifacts = asyncio.run(
+        build_report_bundle(
+            config=config,
+            source_memory=SourceMemory(tmp_path / "source_memory.json"),
+            generated_at=datetime(2026, 6, 7, 12, tzinfo=timezone.utc),
+            watchdog=RunWatchdog(path=watchdog_path, verbose=False),
+        )
+    )
+
+    assert "opponent_path" in rooms
+    assert "main_brazil" in rooms
+    assert artifacts.bundle.metadata["parallel_opponent_debriefing"]["failed"] is True
+    assert artifacts.bundle.metadata["parallel_opponent_debriefing"]["timed_out"] is True
+    events = [json.loads(line) for line in watchdog_path.read_text(encoding="utf-8").splitlines()]
+    assert any(
+        event["step"] == "opponent_model_meeting" and event["status"] == "fail"
+        for event in events
+    )
+
+
 def test_source_planning_self_heal_accepts_query_backed_repair_language(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     calls: list[list[str]] = []
 
-    async def fake_call_all_agents(prompt, *, specs, baseline_title_pct, timeout, allow_local_fallback):
+    async def fake_call_all_agents(prompt, *, specs, baseline_title_pct, timeout, allow_local_fallback, progress_callback=None):
         calls.append([spec.slot for spec in specs])
         if len(calls) == 1:
             return [

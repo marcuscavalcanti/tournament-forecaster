@@ -787,7 +787,7 @@ def test_model_meeting_reenters_removed_agent_after_async_source_probe(monkeypat
             agrees_with_protagonist=True,
         )
 
-    async def fake_call_all_agents(prompt, *, specs, baseline_title_pct, timeout, allow_local_fallback):
+    async def fake_call_all_agents(prompt, *, specs, baseline_title_pct, timeout, allow_local_fallback, progress_callback=None):
         response_round_slots.append([spec.slot for spec in specs])
         return [
             AgentOpinion(

@@ -993,6 +993,7 @@ def _apply_runtime_env_overrides(config: dict[str, Any]) -> None:
         "http_max_attempts": "HTTP_MAX_ATTEMPTS",
         "http_backoff_base_seconds": "HTTP_BACKOFF_BASE_SECONDS",
         "http_backoff_max_seconds": "HTTP_BACKOFF_MAX_SECONDS",
+        "http_connect_timeout_seconds": "HTTP_CONNECT_TIMEOUT_SECONDS",
         "agent_bulkhead_default": "AGENT_BULKHEAD_DEFAULT",
         "source_bulkhead_per_host": "SOURCE_BULKHEAD_PER_HOST",
     }
@@ -3241,6 +3242,90 @@ def _agent_spec_by_slot(agent_specs: list[Any]) -> dict[str, Any]:
     return {spec.slot: spec for spec in agent_specs}
 
 
+class _MeetingWatchdogView:
+    def __init__(self, watchdog: RunWatchdog, *, meeting_step: str, room_step: str) -> None:
+        self._watchdog = watchdog
+        self._meeting_step = meeting_step
+        self._room_step = room_step
+
+    def _map_step(self, step: str) -> str:
+        if step == "model_meeting":
+            return self._meeting_step
+        if step == "model_room":
+            return self._room_step
+        return step
+
+    def event(self, step: str, status: str, *, detail: str = "", extra: dict[str, Any] | None = None) -> None:
+        self._watchdog.event(self._map_step(step), status, detail=detail, extra=extra)
+
+    def start(self, step: str, *, detail: str = "", extra: dict[str, Any] | None = None) -> None:
+        self.event(step, "start", detail=detail, extra=extra)
+
+    def finish(self, step: str, *, detail: str = "", extra: dict[str, Any] | None = None) -> None:
+        self.event(step, "finish", detail=detail, extra=extra)
+
+    def fail(self, step: str, *, detail: str = "", extra: dict[str, Any] | None = None) -> None:
+        self.event(step, "fail", detail=detail, extra=extra)
+
+    def chat(self, agent: str, message: str, *, round_name: str) -> None:
+        self.event(
+            "model_room",
+            "chat",
+            detail=message,
+            extra={"agent": agent, "round": round_name},
+        )
+
+    def meeting_question(self, *, round_index: int, protagonist: str, question: str) -> None:
+        self.event(
+            "model_room",
+            "question",
+            detail=question,
+            extra={"round": round_index, "protagonist": protagonist},
+        )
+
+    def meeting_response(self, *, round_index: int, agent: str, answer: str, support_score: float) -> None:
+        self.event(
+            "model_room",
+            "response",
+            detail=answer,
+            extra={"round": round_index, "agent": agent, "support_score": support_score},
+        )
+
+
+def _meeting_agent_progress_callback(
+    watchdog: Any | None,
+    *,
+    phase: str,
+    round_index: int,
+) -> Any:
+    if watchdog is None:
+        return None
+
+    def callback(event: dict[str, Any]) -> None:
+        status = str(event.get("status", "event"))
+        agent = str(event.get("agent", ""))
+        provider = str(event.get("provider", ""))
+        elapsed = event.get("elapsed_ms")
+        timeout = event.get("timeout_seconds")
+        detail_parts = [f"{phase}; round={round_index}", f"agent={agent}"]
+        if provider:
+            detail_parts.append(f"provider={provider}")
+        if timeout is not None and status == "start":
+            detail_parts.append(f"timeout_s={timeout}")
+        if elapsed is not None and status != "start":
+            detail_parts.append(f"elapsed_ms={elapsed}")
+        if event.get("error"):
+            detail_parts.append(f"error={event['error']}")
+        watchdog.event(
+            "model_room",
+            f"agent_call_{status}",
+            detail="; ".join(detail_parts),
+            extra={"phase": phase, "round": round_index, **event},
+        )
+
+    return callback
+
+
 async def _protagonist_question(
     *,
     config: dict[str, Any],
@@ -3483,16 +3568,42 @@ async def _run_model_meeting(
         collect_finished_reentry_probes(round_index)
         schedule_reentry_probes(round_index)
         protagonist_counts[protagonist] = protagonist_counts.get(protagonist, 0) + 1
-        question, question_opinion, invalid_question_reason = await _protagonist_question(
-            config=config,
-            protagonist=protagonist,
-            previous_turn=previous_turn,
-            generated_at=generated_at,
-            agent_specs=agent_specs,
-            baseline_title_pct=baseline_title_pct,
-            allow_agent_fallback=allow_agent_fallback,
-            timeout=protagonist_timeout,
-        )
+        question_started_at = asyncio.get_running_loop().time()
+        if watchdog:
+            watchdog.event(
+                "model_room",
+                "agent_call_start",
+                detail=(
+                    f"question_phase; round={round_index}; agent={protagonist}; "
+                    f"timeout_s={protagonist_timeout}"
+                ),
+                extra={
+                    "phase": "question",
+                    "round": round_index,
+                    "agent": protagonist,
+                    "timeout_seconds": protagonist_timeout,
+                },
+            )
+        try:
+            question, question_opinion, invalid_question_reason = await _protagonist_question(
+                config=config,
+                protagonist=protagonist,
+                previous_turn=previous_turn,
+                generated_at=generated_at,
+                agent_specs=agent_specs,
+                baseline_title_pct=baseline_title_pct,
+                allow_agent_fallback=allow_agent_fallback,
+                timeout=protagonist_timeout,
+            )
+        finally:
+            if watchdog:
+                elapsed_ms = round((asyncio.get_running_loop().time() - question_started_at) * 1000)
+                watchdog.event(
+                    "model_room",
+                    "agent_call_finish",
+                    detail=f"question_phase; round={round_index}; agent={protagonist}; elapsed_ms={elapsed_ms}",
+                    extra={"phase": "question", "round": round_index, "agent": protagonist, "elapsed_ms": elapsed_ms},
+                )
         question_was_fallback = (
             question_opinion is None
             or bool(getattr(question_opinion, "used_fallback", False))
@@ -3553,6 +3664,11 @@ async def _run_model_meeting(
             baseline_title_pct=baseline_title_pct,
             timeout=timeout,
             allow_local_fallback=allow_agent_fallback,
+            progress_callback=_meeting_agent_progress_callback(
+                watchdog,
+                phase="response",
+                round_index=round_index,
+            ),
         )
         if token_cost_ledger is not None:
             _record_token_costs(
@@ -4449,8 +4565,18 @@ async def _run_parallel_opponent_debriefing(
     baseline_title_pct: float,
     allow_agent_fallback: bool,
     token_cost_ledger: dict[str, Any],
+    watchdog: RunWatchdog | None = None,
 ) -> dict[str, Any]:
     opponent_config = _opponent_debriefing_config(config)
+    meeting_watchdog = (
+        _MeetingWatchdogView(
+            watchdog,
+            meeting_step="opponent_model_meeting",
+            room_step="opponent_model_room",
+        )
+        if watchdog is not None
+        else None
+    )
     consensus, final_opinions, transcript, all_opinions = await _run_model_meeting(
         config=opponent_config,
         planning_opinions=planning_opinions,
@@ -4458,7 +4584,7 @@ async def _run_parallel_opponent_debriefing(
         agent_specs=agent_specs,
         baseline_title_pct=baseline_title_pct,
         allow_agent_fallback=allow_agent_fallback,
-        watchdog=None,
+        watchdog=meeting_watchdog,
         token_cost_ledger=token_cost_ledger,
     )
     return {
@@ -5236,6 +5362,7 @@ async def build_report_bundle(
                 baseline_title_pct=baseline_title_pct,
                 allow_agent_fallback=allow_agent_fallback,
                 token_cost_ledger=token_cost_ledger,
+                watchdog=watchdog,
             )
         )
         if watchdog:
@@ -5248,7 +5375,11 @@ async def build_report_bundle(
             )
     if opponent_debriefing_task is not None:
         try:
-            opponent_debriefing_result = await opponent_debriefing_task
+            opponent_timeout = max(0.001, float(config.get("parallel_opponent_debriefing_timeout_seconds", 900)))
+            opponent_debriefing_result = await asyncio.wait_for(
+                opponent_debriefing_task,
+                timeout=opponent_timeout,
+            )
             opponent_opinions = [
                 *opponent_debriefing_result.get("final_opinions", []),
                 *opponent_debriefing_result.get("all_opinions", []),
@@ -5295,6 +5426,30 @@ async def build_report_bundle(
                         "rounds": opponent_debriefing_result.get("rounds", 0),
                         "knockout_matches_for_main_room": meeting_config.get("knockout_matches", []),
                     },
+                )
+        except asyncio.TimeoutError:
+            opponent_timeout = max(0.001, float(config.get("parallel_opponent_debriefing_timeout_seconds", 900)))
+            opponent_debriefing_result = {
+                "enabled": True,
+                "failed": True,
+                "timed_out": True,
+                "timeout_seconds": opponent_timeout,
+                "error": f"sala paralela excedeu timeout total de {opponent_timeout}s",
+            }
+            meeting_config["_parallel_opponent_briefing"] = _parallel_opponent_briefing_for_prompt(
+                opponent_debriefing_result,
+                knockout_estimates,
+            )
+            warnings.append(
+                "Sala paralela de adversários excedeu o timeout total; sala principal seguiu com Monte Carlo/top-2 já estimados."
+            )
+            if watchdog:
+                watchdog.fail(
+                    "opponent_model_meeting",
+                    detail=(
+                        f"timeout total de {opponent_timeout}s; main room continues with Monte Carlo/top-2 estimates"
+                    ),
+                    extra={"timeout_seconds": opponent_timeout},
                 )
         except Exception as exc:
             opponent_debriefing_result = {"enabled": True, "failed": True, "error": str(exc)}
@@ -5422,6 +5577,11 @@ async def build_report_bundle(
             "parallel_opponent_debriefing": {
                 "enabled": bool(opponent_debriefing_result.get("enabled", False)),
                 "failed": bool(opponent_debriefing_result.get("failed", False)),
+                "timed_out": bool(opponent_debriefing_result.get("timed_out", False)),
+                "timeout_seconds": opponent_debriefing_result.get(
+                    "timeout_seconds",
+                    config.get("parallel_opponent_debriefing_timeout_seconds"),
+                ),
                 "rounds": int(opponent_debriefing_result.get("rounds", 0) or 0),
                 "participants": list(opponent_debriefing_result.get("participants", [])),
                 "meeting_transcript": list(opponent_debriefing_result.get("meeting_transcript", [])),

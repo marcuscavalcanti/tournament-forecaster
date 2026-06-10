@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import http.client
 import json
 import os
+import queue
 import random
 import re
 import signal
 import shlex
 import shutil
 import subprocess
+import threading
 import time
 import urllib.parse
 import urllib.error
@@ -25,6 +28,7 @@ DEFAULT_PREFLIGHT_TIMEOUT_SECONDS = 180
 DEFAULT_HTTP_MAX_ATTEMPTS = 3
 DEFAULT_HTTP_BACKOFF_BASE_SECONDS = 1.0
 DEFAULT_HTTP_BACKOFF_MAX_SECONDS = 12.0
+DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS = 20.0
 RETRYABLE_HTTP_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
 DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
 DEFAULT_GEMINI_FALLBACK_MODEL = "gemini-3.1-flash-lite"
@@ -87,6 +91,16 @@ def _http_backoff_max_seconds() -> float:
         return DEFAULT_HTTP_BACKOFF_MAX_SECONDS
 
 
+def _http_connect_timeout_seconds(total_timeout: int | float) -> float:
+    value = os.environ.get("HTTP_CONNECT_TIMEOUT_SECONDS")
+    if value:
+        try:
+            return max(1.0, min(float(value), float(total_timeout)))
+        except ValueError:
+            pass
+    return max(1.0, min(DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS, float(total_timeout)))
+
+
 def _retry_after_seconds(exc: urllib.error.HTTPError) -> float | None:
     headers = getattr(exc, "headers", None)
     if not headers:
@@ -127,14 +141,121 @@ def _open_url_with_retries(request: urllib.request.Request, *, timeout: int) -> 
 
 
 def _post_json(url: str, headers: dict[str, str], payload: dict[str, Any], *, timeout: int) -> dict[str, Any]:
-    request = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={**headers, "Content-Type": "application/json"},
-        method="POST",
+    body = json.dumps(payload).encode("utf-8")
+    request_headers = {**headers, "Content-Type": "application/json"}
+    attempts = _http_max_attempts()
+    for attempt in range(1, attempts + 1):
+        try:
+            return _post_json_once(url, request_headers, body, timeout=timeout)
+        except urllib.error.HTTPError as exc:
+            if attempt >= attempts or not _is_retryable_http_error(exc):
+                raise
+            time.sleep(_retry_delay_seconds(attempt, exc))
+    raise RuntimeError("unreachable retry loop")
+
+
+def _post_json_once(
+    url: str,
+    headers: dict[str, str],
+    body: bytes,
+    *,
+    timeout: int,
+) -> dict[str, Any]:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise urllib.error.URLError(f"invalid HTTP endpoint: {url}")
+    connection_cls = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
+    connect_timeout = _http_connect_timeout_seconds(timeout)
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+    connection = connection_cls(parsed.hostname, parsed.port, timeout=connect_timeout)
+    try:
+        connection.connect()
+        if connection.sock is not None:
+            connection.sock.settimeout(timeout)
+        connection.request("POST", path, body=body, headers=headers)
+        response = connection.getresponse()
+        response_body = response.read()
+        if response.status < 200 or response.status >= 300:
+            raise urllib.error.HTTPError(
+                url=url,
+                code=response.status,
+                msg=response.reason,
+                hdrs=response.headers,
+                fp=None,
+            )
+        return json.loads(response_body.decode("utf-8"))
+    finally:
+        connection.close()
+
+
+def _call_text_with_hard_timeout(
+    mode: str,
+    spec: AgentSpec,
+    prompt: str,
+    *,
+    timeout: int,
+) -> str:
+    result_queue: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
+
+    def target() -> None:
+        try:
+            if mode == "remote":
+                result_queue.put(("ok", _call_remote_agent(spec, prompt, timeout=timeout)))
+            elif mode == "bridge":
+                result_queue.put(("ok", _call_bridge_agent(spec, prompt, timeout=timeout)))
+            else:
+                result_queue.put(("err", RuntimeError(f"unknown agent call mode: {mode}")))
+        except BaseException as exc:  # Keep exact failure text for the existing fallback/reporting path.
+            result_queue.put(("err", exc))
+
+    thread = threading.Thread(
+        target=target,
+        name=f"worldcup-agent-{spec.slot}-{mode}",
+        daemon=True,
     )
-    with _open_url_with_retries(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+    thread.start()
+    try:
+        status, payload = result_queue.get(timeout=max(1.0, float(timeout)))
+    except queue.Empty as exc:
+        raise TimeoutError(f"{spec.slot} {mode} hard timeout after {timeout}s") from exc
+    if status == "err":
+        raise payload
+    return str(payload)
+
+
+async def _call_text_with_hard_timeout_async(
+    mode: str,
+    spec: AgentSpec,
+    prompt: str,
+    *,
+    timeout: int,
+) -> str:
+    return await asyncio.to_thread(
+        _call_text_with_hard_timeout,
+        mode,
+        spec,
+        prompt,
+        timeout=timeout,
+    )
+
+
+def _agent_progress_event(callback: Any, payload: dict[str, Any]) -> None:
+    if callback is None:
+        return
+    try:
+        callback(payload)
+    except Exception:
+        return
+
+
+def _fallback_status(opinion: AgentOpinion) -> str:
+    if bool(getattr(opinion, "removed_from_main", False)):
+        return "removed"
+    if bool(getattr(opinion, "used_fallback", False)):
+        return "fallback"
+    return "finish"
 
 
 def _env_command(name: str) -> list[str] | None:
@@ -1379,12 +1500,12 @@ async def call_agent(
     allow_local_fallback: bool = True,
 ) -> AgentOpinion:
     try:
-        text = await asyncio.to_thread(_call_remote_agent, spec, prompt, timeout=timeout)
+        text = await _call_text_with_hard_timeout_async("remote", spec, prompt, timeout=timeout)
         return parse_agent_opinion(spec.slot, text, fallback_title_pct=baseline_title_pct)
     except (RuntimeError, urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
         if not spec.prefer_bridge and _has_api_key(spec) and (spec.web_fetch_url or spec.browser_command):
             try:
-                text = await asyncio.to_thread(_call_bridge_agent, spec, prompt, timeout=timeout)
+                text = await _call_text_with_hard_timeout_async("bridge", spec, prompt, timeout=timeout)
                 return parse_agent_opinion(spec.slot, text, fallback_title_pct=baseline_title_pct)
             except (RuntimeError, urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
                 pass
@@ -1419,6 +1540,7 @@ async def call_all_agents(
     baseline_title_pct: float,
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
     allow_local_fallback: bool = True,
+    progress_callback: Any = None,
 ) -> list[AgentOpinion]:
     specs = specs or default_agent_specs()
     by_slot = {spec.slot: spec for spec in specs}
@@ -1432,13 +1554,43 @@ async def call_all_agents(
         key = _agent_bulkhead_key(spec)
         semaphore = semaphores.setdefault(key, asyncio.Semaphore(_agent_bulkhead_limit(spec)))
         async with semaphore:
-            return await call_agent(
-                spec,
-                prompt,
-                baseline_title_pct=baseline_title_pct,
-                timeout=timeout,
-                allow_local_fallback=allow_local_fallback,
+            started_at = time.monotonic()
+            _agent_progress_event(
+                progress_callback,
+                {"status": "start", "agent": spec.slot, "provider": spec.provider, "timeout_seconds": timeout},
             )
+            try:
+                opinion = await call_agent(
+                    spec,
+                    prompt,
+                    baseline_title_pct=baseline_title_pct,
+                    timeout=timeout,
+                    allow_local_fallback=allow_local_fallback,
+                )
+            except Exception as exc:
+                _agent_progress_event(
+                    progress_callback,
+                    {
+                        "status": "fail",
+                        "agent": spec.slot,
+                        "provider": spec.provider,
+                        "elapsed_ms": round((time.monotonic() - started_at) * 1000),
+                        "error": str(exc),
+                    },
+                )
+                raise
+            _agent_progress_event(
+                progress_callback,
+                {
+                    "status": _fallback_status(opinion),
+                    "agent": spec.slot,
+                    "provider": spec.provider,
+                    "elapsed_ms": round((time.monotonic() - started_at) * 1000),
+                    "used_fallback": bool(getattr(opinion, "used_fallback", False)),
+                    "removed_from_main": bool(getattr(opinion, "removed_from_main", False)),
+                },
+            )
+            return opinion
 
     tasks = [
         run_with_bulkhead(by_slot[slot])
