@@ -312,3 +312,53 @@ def test_monte_carlo_reliable_concentrated_path_narrows_ci() -> None:
 
     assert estimate.brazil_ci_low > 53.0
     assert estimate.brazil_ci_high < 61.0
+
+
+def test_best_third_allocation_uses_matching_where_greedy_fails() -> None:
+    """Regressão: alocação gulosa falhava quando o primeiro slot consumia o único
+    terceiro compatível com o slot seguinte; o jogo era pulado em silêncio e a
+    cascata suprimia o funil inteiro (final não disputada em ~60% das simulações)."""
+    from worldcup_brazil.monte_carlo import _allocate_best_thirds
+
+    config = {
+        "bracket_config": {
+            "round_of_32": [
+                {"match_id": 1, "slots": ["1A", "3A/B"]},
+                {"match_id": 2, "slots": ["1B", "3A/C"]},
+            ]
+        }
+    }
+    qualified_thirds = [
+        {"group": "A", "team": "Time A"},
+        {"group": "B", "team": "Time B"},
+    ]
+
+    assignment, relaxed = _allocate_best_thirds(config, qualified_thirds)
+
+    assert relaxed == 0
+    assert assignment["3A/C"] == "Time A"
+    assert assignment["3A/B"] == "Time B"
+
+
+def test_full_simulation_never_skips_matches_with_official_configs() -> None:
+    """Toda simulação deve disputar todos os jogos da chave oficial: zero jogos
+    não resolvidos e zero alocações relaxadas com os configs canônicos."""
+    import json
+    from pathlib import Path
+
+    from worldcup_brazil.bracket import hydrate_canonical_configs
+    from worldcup_brazil.monte_carlo import run_brazil_monte_carlo
+
+    config = json.loads(
+        Path("config/worldcup_brazil.example.json").read_text(encoding="utf-8")
+    )
+    hydrate_canonical_configs(config, base_dir=Path("config"))
+    config["monte_carlo"]["rating_uncertainty_enabled"] = False
+    config["monte_carlo"]["iterations"] = 1500
+
+    result = run_brazil_monte_carlo(config)
+
+    diagnostics = result["simulation_diagnostics"]
+    assert diagnostics["unresolved_match_count"] == 0
+    assert diagnostics["third_allocation_relaxed_count"] == 0
+    assert result["stage_probabilities"]["titulo"] > 2.0

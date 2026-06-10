@@ -473,6 +473,72 @@ def _slot_kind(slot: str) -> dict[str, Any]:
     return {"type": "unknown", "label": label}
 
 
+def _allocate_best_thirds(
+    config: dict[str, Any],
+    qualified_thirds: list[dict[str, Any]],
+) -> tuple[dict[str, str], int]:
+    """Aloca os melhores terceiros aos slots 3X/Y/Z por matching com backtracking.
+
+    Regressão histórica: a alocação gulosa por ordem de chegada falhava em ~45% das
+    simulações (slot sem terceiro compatível restante), o jogo era pulado em silêncio
+    e a cascata chegava à final, que deixava de ser disputada em ~60% das simulações,
+    esmagando o funil do Brasil. O matching garante alocação completa sempre que ela
+    existe; se a configuração for inviável, o preenchimento relaxado evita pular jogo
+    e o contador de relaxamentos fica auditável no resultado.
+    """
+    slots: list[tuple[str, list[str]]] = []
+    for match in _bracket_matches(config, "round_of_32"):
+        for slot in match.get("slots", []):
+            kind = _slot_kind(str(slot))
+            if kind["type"] == "best_third":
+                slots.append((str(kind["label"]), list(kind["groups"])))
+    if not slots:
+        return {}, 0
+
+    team_by_group: dict[str, str] = {}
+    for row in qualified_thirds:
+        group = str(row.get("group") or "").strip().upper()
+        if group and group not in team_by_group:
+            team_by_group[group] = str(row["team"])
+
+    available = set(team_by_group)
+    order = sorted(
+        range(len(slots)),
+        key=lambda index: len([group for group in slots[index][1] if group in available]),
+    )
+    assignment: dict[str, str] = {}
+
+    def backtrack(position: int) -> bool:
+        if position == len(order):
+            return True
+        label, allowed = slots[order[position]]
+        for group in allowed:
+            if group in available:
+                available.discard(group)
+                assignment[label] = group
+                if backtrack(position + 1):
+                    return True
+                available.add(group)
+                del assignment[label]
+        return False
+
+    relaxed = 0
+    if not backtrack(0):
+        assignment.clear()
+        available = set(team_by_group)
+        for label, allowed in slots:
+            group = next((candidate for candidate in allowed if candidate in available), None)
+            if group is not None:
+                assignment[label] = group
+                available.discard(group)
+        for label, _allowed in slots:
+            if label not in assignment and available:
+                assignment[label] = available.pop()
+                relaxed += 1
+
+    return {label: team_by_group[group] for label, group in assignment.items()}, relaxed
+
+
 def _resolve_slot(
     slot: str,
     *,
@@ -480,6 +546,7 @@ def _resolve_slot(
     qualified_thirds: list[dict[str, Any]],
     used_third_groups: set[str],
     match_winners: dict[int, str],
+    third_assignment: dict[str, str] | None = None,
 ) -> str | None:
     kind = _slot_kind(slot)
     if kind["type"] == "winner":
@@ -491,6 +558,9 @@ def _resolve_slot(
             return group_rankings[index]
         return None
     if kind["type"] == "best_third":
+        assigned = (third_assignment or {}).get(str(kind["label"]))
+        if assigned:
+            return assigned
         for row in qualified_thirds:
             group = str(row.get("group"))
             if group in used_third_groups or group not in kind["groups"]:
@@ -659,9 +729,11 @@ def _simulate_tournament_counts(
     default_draw_pct: float,
     rating_scale: float,
     brazil: str,
-) -> tuple[dict[str, dict[str, Any]], int]:
+) -> tuple[dict[str, dict[str, Any]], int, dict[str, int]]:
     phase_buckets = {PHASE_LABELS[key]: _empty_phase_bucket() for key in PHASE_SEQUENCE}
     title_count = 0
+    third_allocation_relaxed_count = 0
+    unresolved_match_count = 0
 
     for _ in range(iterations):
         rankings, qualified_thirds = _simulate_groups(
@@ -672,6 +744,8 @@ def _simulate_tournament_counts(
             default_draw_pct=default_draw_pct,
             rating_scale=rating_scale,
         )
+        third_assignment, relaxed = _allocate_best_thirds(config, qualified_thirds)
+        third_allocation_relaxed_count += relaxed
         used_third_groups: set[str] = set()
         match_winners: dict[int, str] = {}
 
@@ -687,6 +761,7 @@ def _simulate_tournament_counts(
                     qualified_thirds=qualified_thirds,
                     used_third_groups=used_third_groups,
                     match_winners=match_winners,
+                    third_assignment=third_assignment,
                 )
                 team_b = _resolve_slot(
                     slots[1],
@@ -694,8 +769,10 @@ def _simulate_tournament_counts(
                     qualified_thirds=qualified_thirds,
                     used_third_groups=used_third_groups,
                     match_winners=match_winners,
+                    third_assignment=third_assignment,
                 )
                 if not team_a or not team_b:
+                    unresolved_match_count += 1
                     continue
 
                 match_id = int(match["match_id"])
@@ -726,7 +803,10 @@ def _simulate_tournament_counts(
                 if phase_key == "final" and winner == brazil:
                     title_count += 1
 
-    return phase_buckets, title_count
+    return phase_buckets, title_count, {
+        "third_allocation_relaxed_count": third_allocation_relaxed_count,
+        "unresolved_match_count": unresolved_match_count,
+    }
 
 
 def run_brazil_monte_carlo(config: dict[str, Any]) -> dict[str, Any]:
@@ -752,6 +832,10 @@ def run_brazil_monte_carlo(config: dict[str, Any]) -> dict[str, Any]:
     rating_uncertainty_enabled = bool(mc_config.get("rating_uncertainty_enabled", False))
     stage_uncertainty_intervals: dict[str, tuple[float, float]] = {}
     rating_uncertainty = {"enabled": False}
+    simulation_diagnostics: dict[str, int] = {
+        "third_allocation_relaxed_count": 0,
+        "unresolved_match_count": 0,
+    }
     phase_buckets = {PHASE_LABELS[key]: _empty_phase_bucket() for key in PHASE_SEQUENCE}
     title_count = 0
     iterations = configured_iterations
@@ -787,7 +871,7 @@ def run_brazil_monte_carlo(config: dict[str, Any]) -> dict[str, Any]:
                 configured_sigma=configured_sigma,
                 prior_sigma=prior_sigma,
             )
-            sample_buckets, sample_title_count = _simulate_tournament_counts(
+            sample_buckets, sample_title_count, sample_diagnostics = _simulate_tournament_counts(
                 config,
                 ratings=sampled_ratings,
                 iterations=inner_iterations,
@@ -797,6 +881,10 @@ def run_brazil_monte_carlo(config: dict[str, Any]) -> dict[str, Any]:
                 rating_scale=rating_scale,
                 brazil=brazil,
             )
+            for diagnostic_key, diagnostic_value in sample_diagnostics.items():
+                simulation_diagnostics[diagnostic_key] = (
+                    simulation_diagnostics.get(diagnostic_key, 0) + int(diagnostic_value)
+                )
             for phase in phase_buckets:
                 _merge_phase_bucket(phase_buckets[phase], sample_buckets[phase])
             title_count += sample_title_count
@@ -829,7 +917,7 @@ def run_brazil_monte_carlo(config: dict[str, Any]) -> dict[str, Any]:
             "variance_correction": "law_of_total_variance_subtracts_inner_binomial_noise",
         }
     else:
-        phase_buckets, title_count = _simulate_tournament_counts(
+        phase_buckets, title_count, single_run_diagnostics = _simulate_tournament_counts(
             config,
             ratings=ratings,
             iterations=iterations,
@@ -839,6 +927,10 @@ def run_brazil_monte_carlo(config: dict[str, Any]) -> dict[str, Any]:
             rating_scale=rating_scale,
             brazil=brazil,
         )
+        for diagnostic_key, diagnostic_value in single_run_diagnostics.items():
+            simulation_diagnostics[diagnostic_key] = (
+                simulation_diagnostics.get(diagnostic_key, 0) + int(diagnostic_value)
+            )
         stage_probabilities = _stage_probabilities_from_buckets(
             phase_buckets,
             title_count=title_count,
@@ -905,6 +997,7 @@ def run_brazil_monte_carlo(config: dict[str, Any]) -> dict[str, Any]:
         "stage_sample_intervals": stage_sample_intervals,
         "stage_uncertainty_intervals": stage_uncertainty_intervals,
         "rating_uncertainty": rating_uncertainty,
+        "simulation_diagnostics": simulation_diagnostics,
         "title_count": title_count,
         "phases": phases,
         "path_gate": {
