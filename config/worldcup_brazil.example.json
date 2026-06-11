@@ -333,5 +333,8 @@
   "exclude_slots_failing_preflight": true,
   "allow_informed_agreement_votes": true,
   "repair_format_removals_with_quorum": true,
-  "source_planning_format_repair_timeout_seconds": 60
+  "source_planning_format_repair_timeout_seconds": 60,
+  "post_editor_enabled": false,
+  "post_editor_agent_slot": "Opus 4.8",
+  "post_editor_timeout_seconds": 120
 }

@@ -246,9 +246,9 @@ def build_technical() -> Path:
         fill=COLORS["soft_coral"],
         stroke=COLORS["coral"],
         title="RESILIÊNCIA",
-        body="Timeout/sem resposta sai da rodada. Reentrada assíncrona testa volta ao pool.",
+        body="Preflight exclui slot morto. Timeout hard com margem. Reentrada seletiva e reparo curto de formato.",
         title_size=23,
-        body_size=17,
+        body_size=16,
     )
     card(
         c,
@@ -256,9 +256,9 @@ def build_technical() -> Path:
         fill=COLORS["soft_purple"],
         stroke=COLORS["purple"],
         title="GUARDS",
-        body="Retry/backoff, bulkhead, anti-eco, IC 99 e gate pré-render.",
+        body="Retry/backoff, bulkhead, anti-eco, breaker 3x, sala estéril aborta, IC 99 e gate pré-render.",
         title_size=23,
-        body_size=16,
+        body_size=15,
     )
 
     for start, end, color in [
@@ -274,9 +274,9 @@ def build_technical() -> Path:
     c.text((105, 552), "• Simula grupo, 16 avos, Oitavas, Quartas, Semi, Final e título", font=c.font(19), fill=COLORS["ink"])
     c.text((105, 586), "• Respostas terminam com consensus_check_question", font=c.font(19), fill=COLORS["ink"])
     c.text((105, 620), "• Quórum = floor(participantes ativos/2)+1", font=c.font(19), fill=COLORS["ink"])
-    c.text((105, 654), "• Slot removido fica só no log; fallback auditável conta com fonte", font=c.font(17), fill=COLORS["muted"])
-    c.text((105, 678), "• Regra do novo protagonista: discordância com fonte;", font=c.font(17), fill=COLORS["muted"])
-    c.text((122, 700), "empate por histórico de protagonismo e maior aceitação", font=c.font(17), fill=COLORS["muted"])
+    c.text((105, 654), "• Fallback sintético não vota; consenso exige voto válido", font=c.font(17), fill=COLORS["muted"])
+    c.text((105, 678), "• Breaker 3x inválidas; líder sem voto perde a palavra;", font=c.font(17), fill=COLORS["muted"])
+    c.text((122, 700), "estável 2 rodadas encerra cedo; sala vazia 2 rodadas aborta", font=c.font(17), fill=COLORS["muted"])
 
     c.rounded_rect((865, 470, 1530, 725), radius=24, fill=COLORS["soft_teal"], outline=COLORS["teal"], width=2)
     c.text((900, 510), "SALA PARALELA - ADVERSÁRIOS", font=c.font(27, bold=True), fill=COLORS["teal"])
@@ -284,6 +284,7 @@ def build_technical() -> Path:
     c.text((900, 586), "• Só candidatos oficiais do bracket por fase", font=c.font(19), fill=COLORS["ink"])
     c.text((900, 620), "• Produz scenario_probabilities e match_probabilities", font=c.font(19), fill=COLORS["ink"])
     c.text((900, 654), "• Anti-eco: cenário nunca vira vitória condicional", font=c.font(19), fill=COLORS["ink"])
+    c.text((900, 686), "• Timeout de 900s não trava a principal: segue com Monte Carlo", font=c.font(17), fill=COLORS["muted"])
 
     c.arrow((980, 385), (455, 470), color=COLORS["blue"], width=5)
     c.arrow((980, 385), (1195, 470), color=COLORS["teal"], width=5)
@@ -362,11 +363,11 @@ def build_functional() -> Path:
 
     c.rounded_rect((365, 470, 1235, 750), radius=34, fill=COLORS["white"], outline="#D7DEE9", width=3)
     c.rounded_rect((445, 515, 1155, 700), radius=42, fill=COLORS["navy"], outline=COLORS["navy"], width=2)
-    c.text((800, 548), "MESA DE DEBRIEFING", font=c.font(29, bold=True), fill=COLORS["white"], anchor="ma")
-    c.text((800, 586), "Mediador abre a rodada; protagonista pergunta; pares respondem", font=c.font(18), fill="#D6DFEA", anchor="ma")
-    c.text((800, 620), "Regra do novo protagonista: discordância com fonte", font=c.font(17), fill="#D6DFEA", anchor="ma")
-    c.text((800, 650), "Empate: histórico de protagonismo e maior aceitação", font=c.font(17), fill="#D6DFEA", anchor="ma")
-    c.text((800, 680), "Gate final: match != scenario e funil monotônico", font=c.font(17), fill="#D6DFEA", anchor="ma")
+    c.text((800, 544), "MESA DE DEBRIEFING", font=c.font(29, bold=True), fill=COLORS["white"], anchor="ma")
+    c.text((800, 582), "Líder pergunta; pares respondem; liderança roda por mérito", font=c.font(18), fill="#D6DFEA", anchor="ma")
+    c.text((800, 614), "Fala sem fonte não vale; adversário impossível é anulado", font=c.font(17), fill="#D6DFEA", anchor="ma")
+    c.text((800, 642), "Líder sem voto perde a palavra; estável 2 rodadas encerra cedo", font=c.font(17), fill="#D6DFEA", anchor="ma")
+    c.text((800, 670), "Sala vazia 2 rodadas: sessão cai barato, sem queimar horas", font=c.font(17), fill="#D6DFEA", anchor="ma")
 
     participants = [
         ((410, 440, 565, 500), COLORS["soft_blue"], COLORS["blue"], "GPT", "OpenAI CLI"),
@@ -407,15 +408,15 @@ def build_functional() -> Path:
         fill=COLORS["soft_coral"],
         stroke=COLORS["coral"],
         title="RODADA DE CONSENSO",
-        body="Maioria simples = floor(ativos/2)+1. Slot removido só audita; fallback auditável conta.",
+        body="Maioria simples dos ativos. Só voto válido conta: fallback sintético nunca vira consenso.",
         title_size=21,
         body_size=16,
     )
     c.rounded_rect((955, 805, 1510, 965), radius=22, fill=COLORS["navy"], outline=COLORS["navy"], width=2)
     c.text((1232, 835), "POST LINKEDIN", font=c.font(24, bold=True), fill=COLORS["white"], anchor="ma")
-    c.text((995, 874), "• chances por jogo e chance de título", font=c.font(16), fill="#D6DFEA")
-    c.text((995, 902), "• chat resumido, pergunta de consenso e IC 99", font=c.font(16), fill="#D6DFEA")
-    c.text((995, 930), "• só publica após gate de coerência", font=c.font(16), fill="#D6DFEA")
+    c.text((995, 874), "• caminho até o hexa: funil único da simulação + sala", font=c.font(16), fill="#D6DFEA")
+    c.text((995, 902), "• chat resumido, debate auditável e IC honesto (99%)", font=c.font(16), fill="#D6DFEA")
+    c.text((995, 930), "• só publica após gate de coerência; recalcula a cada véspera", font=c.font(16), fill="#D6DFEA")
 
     c.arrow((330, 325), (520, 470), color=COLORS["blue"], width=4)
     c.arrow((655, 315), (690, 470), color=COLORS["green"], width=4)

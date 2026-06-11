@@ -21,10 +21,59 @@ from worldcup_brazil.pipeline import (
     build_report_bundle_sync,
     load_config,
 )
+from worldcup_brazil.post_template import (
+    apply_editor_append,
+    render_template_post,
+    validate_template_post,
+)
 from worldcup_brazil.renderer import render_audit_report, render_decision_flow_svg
 from worldcup_brazil.scheduler import RunState, should_run
 from worldcup_brazil.source_memory import SourceMemory
 from worldcup_brazil.watchdog import RunWatchdog
+
+
+def _run_post_editor_append(config: dict, base_text: str, *, watchdog: RunWatchdog | None) -> str:
+    """Editor opcional do post de template: só pode fazer APPEND (emojis, insights
+    pontuais). Qualquer mutação do esqueleto é descartada pelo apply_editor_append."""
+    import asyncio
+
+    from worldcup_brazil.agents import call_agent
+
+    slot = str(config.get("post_editor_agent_slot", "Opus 4.8"))
+    specs = [spec for spec in load_agent_specs_from_config(config) if spec.slot == slot]
+    if not specs:
+        return base_text
+    prompt = (
+        "Você é o editor final de um post de LinkedIn gerado por template fixo. REGRAS INVIOLÁVEIS: "
+        "(1) devolva o texto ORIGINAL na íntegra, byte a byte, sem alterar uma vírgula; "
+        "(2) você só pode ACRESCENTAR, ao final, 1 a 3 linhas curtas com emojis/insights pontuais sobre os jogos, "
+        "coerentes com os números do próprio post; (3) o total não pode passar de 3000 caracteres; "
+        "(4) se não tiver o que acrescentar, devolva o texto original puro. Não use markdown de bloco, não comente, "
+        "não explique: devolva apenas o post.\n\n---\n" + base_text
+    )
+    try:
+        opinion = asyncio.run(
+            call_agent(
+                specs[0],
+                prompt,
+                baseline_title_pct=float(config.get("baseline_title_pct", 11.0)),
+                timeout=int(config.get("post_editor_timeout_seconds", 120)),
+                allow_local_fallback=False,
+            )
+        )
+        edited = str(getattr(opinion, "raw_text", "") or "")
+    except Exception as exc:  # noqa: BLE001 - editor é opcional; falha não derruba o run
+        if watchdog:
+            watchdog.event("post_editor", "fail", detail=str(exc)[:200])
+        return base_text
+    final_text = apply_editor_append(base_text, edited)
+    if watchdog:
+        watchdog.event(
+            "post_editor",
+            "finish",
+            detail="append aceito" if final_text != base_text else "sem append (texto original mantido)",
+        )
+    return final_text
 
 
 def _parse_datetime(value: str | None) -> datetime:
@@ -365,6 +414,28 @@ def main(argv: list[str] | None = None) -> int:
         post_path.write_text(artifacts.post, encoding="utf-8")
         audit_path.write_text(render_audit_report(artifacts.bundle), encoding="utf-8")
         graph_path.write_text(render_decision_flow_svg(artifacts.bundle), encoding="utf-8")
+        template_post_path = args.output_dir / f"linkedin_post_brazil_{stamp}.md"
+        try:
+            post_index = (
+                len(
+                    [
+                        p
+                        for p in args.output_dir.glob("linkedin_post_brazil_*.md")
+                        if p.name != template_post_path.name
+                    ]
+                )
+                + 1
+            )
+            template_post = render_template_post(artifacts.bundle, post_index=post_index)
+            if bool(config.get("post_editor_enabled", False)):
+                template_post = _run_post_editor_append(config, template_post, watchdog=watchdog)
+            validate_template_post(template_post, artifacts.bundle)
+            template_post_path.write_text(template_post, encoding="utf-8")
+        except ValueError as exc:
+            template_post_path = None
+            if watchdog:
+                watchdog.event("post_template", "fail", detail=str(exc)[:200])
+            print(f"aviso: post de template não gerado ({exc})", file=sys.stderr)
         json_path.write_text(
             json.dumps(
                 {
@@ -380,6 +451,8 @@ def main(argv: list[str] | None = None) -> int:
                         ],
                         "stage_probabilities": artifacts.bundle.stage_probabilities,
                         "stage_confidence_intervals": artifacts.bundle.stage_confidence_intervals,
+                        "group_name": artifacts.bundle.group_name,
+                        "group_summary": artifacts.bundle.group_summary,
                         "sources": artifacts.bundle.sources,
                         "warnings": artifacts.bundle.warnings,
                         "debate_transcript": artifacts.bundle.debate_transcript,
@@ -426,6 +499,8 @@ def main(argv: list[str] | None = None) -> int:
             )
             watchdog.finish("run", detail="completed successfully")
         print(f"post: {post_path}")
+        if template_post_path is not None:
+            print(f"linkedin: {template_post_path}")
         print(f"json: {json_path}")
         print(f"audit: {audit_path}")
         print(f"graph: {graph_path}")
