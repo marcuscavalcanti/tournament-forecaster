@@ -65,11 +65,14 @@ def test_template_post_fills_all_placeholders_within_limit() -> None:
 
     validate_template_post(text, _bundle())
     assert len(text) <= MAX_POST_CHARS
-    assert text.startswith("PRIMEIRO PALPITE DA SÉRIE: Brasil x Marrocos")
+    assert text.startswith("⚽ 13/jun · Brasil x Marrocos · 59/24/17 · Hexa: 8,6%")
+    assert "\n\nPRIMEIRO PALPITE DA SÉRIE: Brasil x Marrocos\n" in text
     assert "A ESTREIA (sábado, Nova Jersey):" in text
     assert "BRASIL x MARROCOS — 59% vitória | 24% empate | 17% derrota" in text
     assert "Mais provável: Japão (34% de chance desse cruzamento) → Brasil passa: 72% | Japão: 28%" in text
-    assert "Alternativa: Holanda (29%) → Brasil: 52% | Holanda: 48%" in text
+    assert "Alternativa: Holanda (29%) → Brasil: 52% | Holanda: 48%\n" in text
+    assert "Holanda: 48% - " not in text
+    assert "  " not in text.replace("\n", "|")
     assert "16 avos em 99%" in text
     assert "levanta a taça em 8,6%" in text
     assert "Opus 4.8 discordou do líder" in text
@@ -79,7 +82,8 @@ def test_template_post_fills_all_placeholders_within_limit() -> None:
 def test_template_post_uses_next_unplayed_game_and_ordinal() -> None:
     text = render_template_post(_bundle(), post_index=2, run_date=date(2026, 6, 18))
 
-    assert text.startswith("SEGUNDO PALPITE DA SÉRIE: Brasil x Haiti")
+    assert text.startswith("⚽ 19/jun · Brasil x Haiti · 92/8/0 · Hexa: 8,6%")
+    assert "\n\nSEGUNDO PALPITE DA SÉRIE: Brasil x Haiti\n" in text
     assert "O PRÓXIMO JOGO (sexta-feira, Filadélfia):" in text
     assert "BRASIL x HAITI — 92% vitória | 8% empate" in text
     assert "derrota" not in text.split("O CAMINHO")[0]

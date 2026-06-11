@@ -29,7 +29,9 @@ PHASE_HEADERS = {
 # Template fixo da série (origem: Marcus, 11/jun/2026). As partes fora de chaves
 # de formatação são contrato: o pipeline preenche os campos dinâmicos e NÃO pode
 # alterar o esqueleto. O editor opcional só pode fazer append ao final.
-TEMPLATE = """{title}
+TEMPLATE = """{round_header}
+
+{title}
 
 Como prometi: na véspera de cada jogo do Brasil, os 5 modelos de IA (Opus, GPT, Gemini, DeepSeek e Perplexity) se reúnem, pesquisam casas de apostas, rankings de força e notícias do dia, e saem com uma decisão em grupo.
 
@@ -42,15 +44,15 @@ Como prometi: na véspera de cada jogo do Brasil, os 5 modelos de IA (Opus, GPT,
 O CAMINHO ATÉ O HEXA, adversário por adversário (no mata-mata não tem empate: ou passa, ou volta pra casa):
 
 {path_blocks}
-RESUMO DA CAMINHADA: o Brasil chega nos 16 avos em {r16_pct} dos cenários, oitavas em {r8_pct},  quartas em {qf_pct}, na semifinal em {sf_pct}, na final em {final_pct}... e levanta a taça em {title_pct}.
+RESUMO DA CAMINHADA: o Brasil chega nos 16 avos em {r16_pct} dos cenários, oitavas em {r8_pct}, quartas em {qf_pct}, na semifinal em {sf_pct}, na final em {final_pct}... e levanta a taça em {title_pct}.
 
 Esse mapa MUDA a cada rodada, pois o modelo calcula o resultado dos outros grupos e troca os adversários pelo caminho. Por isso o modelo roda de novo na véspera/dia de cada jogo e eu posto o mapa atualizado.
 
 DOIS BASTIDORES DA REUNIÃO DE HOJE:
 
-1️⃣  {beat_1}
+1️⃣ {beat_1}
 
-2️⃣  {beat_2}
+2️⃣ {beat_2}
 {beat_3}
 E o supermodelo da OPTA, com 350 mil simulações? Coloca o Brasil em 5º. Minha sala concorda: candidato de verdade, favorito não. E as casas de apostas pagam 9 pra 1 no hexa, ou seja, uns 8-9% de chance. Três caminhos diferentes, mesma resposta.
 
@@ -63,7 +65,7 @@ Galera do bolão: {palpite_bolao}. Usem com moderação.
 
 PHASE_BLOCK = """➡️ {header} ({phase_date})
 • Mais provável: {ml_opp} ({ml_scn} de chance desse cruzamento) → Brasil passa: {ml_br} | {ml_opp}: {ml_opp_pct}{ml_venue}
-• Alternativa: {alt_opp} ({alt_scn}) → Brasil: {alt_br} | {alt_opp}: {alt_opp_pct}{alt_venue}
+• Alternativa: {alt_opp} ({alt_scn}) → Brasil: {alt_br} | {alt_opp}: {alt_opp_pct}
 
 """
 
@@ -120,7 +122,11 @@ def _truncate_words(text: str, limit: int) -> str:
     clean = " ".join(str(text or "").split())
     if len(clean) <= limit:
         return clean
-    cut = clean[:limit].rsplit(" ", 1)[0]
+    window = clean[:limit]
+    sentence_end = max(window.rfind(". "), window.rfind("! "), window.rfind("? "))
+    if sentence_end >= int(limit * 0.45):
+        return window[: sentence_end + 1]
+    cut = window.rsplit(" ", 1)[0]
     return cut.rstrip(",;:.") + "…"
 
 
@@ -141,13 +147,17 @@ def _extract_beats(bundle: Any) -> list[str]:
             if response.get("removed_from_main") or response.get("used_fallback"):
                 continue
             if response.get("disagreed"):
-                quote = _truncate_words(response.get("answer", ""), 150)
+                quote = _truncate_words(response.get("answer", ""), 130)
                 if _normalize_beat(quote).startswith("concordo"):
-                    continue
-                beats.append(
-                    f"Na rodada {round_index}, o {response.get('agent')} discordou do líder da mesa: \"{quote}\" "
-                    "A discordância virou ajuste com fonte — é assim que o número se move."
-                )
+                    beats.append(
+                        f"Na rodada {round_index}, o {response.get('agent')} aceitou a tese do líder, mas com ressalva: "
+                        f"\"{quote}\" Ressalva com fonte também move número."
+                    )
+                else:
+                    beats.append(
+                        f"Na rodada {round_index}, o {response.get('agent')} discordou do líder da mesa: \"{quote}\" "
+                        "A discordância virou ajuste com fonte — é assim que o número se move."
+                    )
     if len(beats) < 3:
         for turn in transcript:
             invalidated = turn.get("invalidated_protagonist_question") if isinstance(turn, dict) else None
@@ -158,10 +168,22 @@ def _extract_beats(bundle: Any) -> list[str]:
                 )
             if len(beats) >= 3:
                 break
+    metadata = getattr(bundle, "metadata", {}) or {}
+    consensus_pct = metadata.get("agent_title_consensus_pct")
+    dispersion = metadata.get("agent_dispersion_pct")
+    rounds = metadata.get("meeting_rounds")
     while len(beats) < 2:
-        beats.append(
-            "Rodada sem briga: os modelos convergiram cedo e o consenso fechou estável — quando há evidência boa, ninguém inventa discordância."
-        )
+        if consensus_pct is not None and dispersion is not None and rounds:
+            beats.append(
+                f"A mesa fechou em {_pct(consensus_pct)} de hexa com dispersão de só "
+                f"{str(dispersion).replace('.', ',')} ponto(s) entre os 5 modelos, em {rounds} rodadas — "
+                "convergência por evidência, não por preguiça."
+            )
+            consensus_pct = None
+        else:
+            beats.append(
+                "Rodada sem briga: os modelos convergiram cedo e o consenso fechou estável — quando há evidência boa, ninguém inventa discordância."
+            )
     return beats[:3]
 
 
@@ -240,14 +262,13 @@ def render_template_post(bundle: Any, *, post_index: int, run_date: date | None 
                 alt_scn=_pct_int(getattr(alt, "scenario_pct", None)),
                 alt_br=_pct_int(getattr(alt, "brazil_pct", None)),
                 alt_opp_pct=_pct_int(getattr(alt, "opponent_pct", None)),
-                alt_venue=_venue_suffix(getattr(alt, "venue", "")),
             )
         )
 
     mc_stages = ((getattr(bundle, "metadata", {}) or {}).get("monte_carlo") or {}).get("stage_probabilities") or {}
     stage = dict(getattr(bundle, "stage_probabilities", {}) or {})
     beats = _extract_beats(bundle)
-    beat_3 = f"\n3️⃣  {beats[2]}\n" if len(beats) >= 3 else "\n"
+    beat_3 = f"\n3️⃣ {beats[2]}\n" if len(beats) >= 3 else ""
 
     bolao = [win]
     if draw_value:
@@ -256,7 +277,14 @@ def render_template_post(bundle: Any, *, post_index: int, run_date: date | None 
         bolao.append(_pct_int(loss_value))
     palpite = " / ".join(value.rstrip("%") for value in bolao)
 
+    title_pct_text = _pct(stage.get("titulo"))
+    round_header = (
+        f"⚽ {_short_date(getattr(featured, 'match_date', ''))} · Brasil x {getattr(featured, 'opponent', '')} · "
+        f"{win.rstrip('%')}/{_pct_int(draw_value).rstrip('%') if draw_value else '0'}/"
+        f"{_pct_int(loss_value).rstrip('%') if loss_value else '0'} · Hexa: {title_pct_text}"
+    )
     text = TEMPLATE.format(
+        round_header=round_header,
         title=title,
         next_game_header=next_game_header,
         next_game_line=next_game_line,
@@ -267,7 +295,7 @@ def render_template_post(bundle: Any, *, post_index: int, run_date: date | None 
         qf_pct=_pct_int(stage.get("quartas")),
         sf_pct=_pct_int(stage.get("semifinal")),
         final_pct=_pct_int(stage.get("final")),
-        title_pct=_pct(stage.get("titulo")),
+        title_pct=title_pct_text,
         beat_1=beats[0],
         beat_2=beats[1],
         beat_3=beat_3,
@@ -275,6 +303,7 @@ def render_template_post(bundle: Any, *, post_index: int, run_date: date | None 
         palpite_bolao=palpite,
     )
 
+    text = re.sub(r"(?<=\S)  +(?=\S)", " ", text)
     return _trim_to_limit(text, bundle)
 
 
@@ -284,10 +313,7 @@ def _trim_to_limit(text: str, bundle: Any) -> str:
     without_beat3 = re.sub(r"\n3️⃣ .*\n", "\n", text)
     if len(without_beat3) <= MAX_POST_CHARS:
         return without_beat3
-    no_alt_venues = re.sub(r"(• Alternativa: [^\n]*?) - [^\n]+", r"\1", without_beat3)
-    if len(no_alt_venues) <= MAX_POST_CHARS:
-        return no_alt_venues
-    no_venues = re.sub(r"(\| [^|\n]+?: \d+[,.]?\d*%) - [^\n]+", r"\1", no_alt_venues)
+    no_venues = re.sub(r"(\| [^|\n]+?: \d+[,.]?\d*%) - [^\n]+", r"\1", without_beat3)
     if len(no_venues) <= MAX_POST_CHARS:
         return no_venues
     raise ValueError(
