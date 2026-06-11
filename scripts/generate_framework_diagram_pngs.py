@@ -272,7 +272,7 @@ def build_technical() -> Path:
     c.rounded_rect((70, 470, 735, 725), radius=24, fill=COLORS["soft_blue"], outline=COLORS["blue"], width=2)
     c.text((105, 510), "SALA PRINCIPAL - BRASIL", font=c.font(27, bold=True), fill=COLORS["blue"])
     c.text((105, 552), "• Simula grupo, 16 avos, Oitavas, Quartas, Semi, Final e título", font=c.font(19), fill=COLORS["ink"])
-    c.text((105, 586), "• Respostas terminam com consensus_check_question", font=c.font(19), fill=COLORS["ink"])
+    c.text((105, 586), "• Respostas terminam com consensus_check_question (pergunta de consenso)", font=c.font(19), fill=COLORS["ink"])
     c.text((105, 620), "• Quórum = floor(participantes ativos/2)+1", font=c.font(19), fill=COLORS["ink"])
     c.text((105, 654), "• Fallback sintético não vota; consenso exige voto válido", font=c.font(17), fill=COLORS["muted"])
     c.text((105, 678), "• Breaker 3x inválidas; líder sem voto perde a palavra;", font=c.font(17), fill=COLORS["muted"])

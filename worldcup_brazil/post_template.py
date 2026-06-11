@@ -112,6 +112,10 @@ def _venue_suffix(value: Any) -> str:
     return f" - {text}" if text else ""
 
 
+def _normalize_beat(text: str) -> str:
+    return unicodedata.normalize("NFKD", str(text or "")).encode("ascii", "ignore").decode("ascii").strip().lower()
+
+
 def _truncate_words(text: str, limit: int) -> str:
     clean = " ".join(str(text or "").split())
     if len(clean) <= limit:
@@ -138,6 +142,8 @@ def _extract_beats(bundle: Any) -> list[str]:
                 continue
             if response.get("disagreed"):
                 quote = _truncate_words(response.get("answer", ""), 150)
+                if _normalize_beat(quote).startswith("concordo"):
+                    continue
                 beats.append(
                     f"Na rodada {round_index}, o {response.get('agent')} discordou do líder da mesa: \"{quote}\" "
                     "A discordância virou ajuste com fonte — é assim que o número se move."
