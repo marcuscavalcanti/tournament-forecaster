@@ -309,7 +309,7 @@ def render_template_post(bundle: Any, *, post_index: int, run_date: date | None 
 def _trim_to_limit(text: str, bundle: Any) -> str:
     if len(text) <= MAX_POST_CHARS:
         return text
-    without_beat3 = re.sub(r"\n3️⃣ .*\n", "\n", text)
+    without_beat3 = re.sub(r"\n3️⃣ [^\n]*\n", "", text)
     if len(without_beat3) <= MAX_POST_CHARS:
         return without_beat3
     no_venues = re.sub(r"(\| [^|\n]+?: \d+[,.]?\d*%) - [^\n]+", r"\1", without_beat3)
