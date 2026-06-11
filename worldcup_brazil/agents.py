@@ -190,6 +190,22 @@ def _post_json_once(
         connection.close()
 
 
+def _hard_timeout_margin_seconds() -> float:
+    """Margem acima do timeout nominal antes da guilhotina da thread.
+
+    Regressão do run d4714b70 (10/jun): o hard timeout no prazo nominal exato matou
+    a chamada de planejamento do GPT no meio de busca legítima (~240s) e derrubou o
+    quórum para 2/3. O hard timeout existe para pegar conexão pendurada (SYN_SENT
+    infinito), não para apertar o prazo de trabalho real do provedor."""
+    value = os.environ.get("AGENT_HARD_TIMEOUT_MARGIN_SECONDS")
+    if not value:
+        return 120.0
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        return 120.0
+
+
 def _call_text_with_hard_timeout(
     mode: str,
     spec: AgentSpec,
@@ -216,10 +232,13 @@ def _call_text_with_hard_timeout(
         daemon=True,
     )
     thread.start()
+    hard_deadline = max(1.0, float(timeout) + _hard_timeout_margin_seconds())
     try:
-        status, payload = result_queue.get(timeout=max(1.0, float(timeout)))
+        status, payload = result_queue.get(timeout=hard_deadline)
     except queue.Empty as exc:
-        raise TimeoutError(f"{spec.slot} {mode} hard timeout after {timeout}s") from exc
+        raise TimeoutError(
+            f"{spec.slot} {mode} hard timeout after {hard_deadline:.0f}s (nominal {timeout}s + margem)"
+        ) from exc
     if status == "err":
         raise payload
     return str(payload)
@@ -825,9 +844,43 @@ def _extract_browser_command_output(command: list[str], stdout: str) -> str:
     return extracted or stdout
 
 
+def _claude_stream_error_summary(stdout: str) -> str | None:
+    """Resume erro de stream-json do claude CLI em uma linha legível.
+
+    Regressão do run d4714b70 (10/jun): rate limit da assinatura ('You've hit your
+    session limit · resets 8:20pm') chegava ao watchdog como ~8KB de stdout com
+    hooks e prompt de harness no meio; o motivo real ficava enterrado na última
+    linha do stream e o diagnóstico levou uma sessão inteira."""
+    summary = ""
+    rate_limit_hint = ""
+    for line in stdout.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("{"):
+            continue
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        if payload.get("type") == "rate_limit_event":
+            info = payload.get("rate_limit_info") or {}
+            rate_limit_hint = (
+                f" [rate limit {info.get('rateLimitType', '')}: status={info.get('status', '')}, "
+                f"overage={info.get('overageStatus', '')}]"
+            )
+        if payload.get("type") == "result" and payload.get("is_error") and isinstance(payload.get("result"), str):
+            summary = str(payload["result"]).strip()
+    if summary:
+        return f"claude CLI error: {summary}{rate_limit_hint}"
+    return None
+
+
 def _browser_command_failure_detail(slot: str, command: list[str], detail: str) -> str:
     command_name = os.path.basename(command[0]) if command else ""
     normalized = detail.lower()
+    if command_name == "claude":
+        stream_summary = _claude_stream_error_summary(detail)
+        if stream_summary:
+            return f"{slot} browser_command failed: {stream_summary}"
     if command_name == "claude" and "not logged in" in normalized:
         return (
             f"{slot} browser_command failed: Claude CLI auth unavailable in this runner process. "

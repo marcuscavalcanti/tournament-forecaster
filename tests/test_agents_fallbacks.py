@@ -811,6 +811,7 @@ def test_call_agent_hard_timeout_returns_operational_fallback(monkeypatch) -> No
         time.sleep(2)
         return '{"title_pct": 8.0, "summary": "late"}'
 
+    monkeypatch.setenv("AGENT_HARD_TIMEOUT_MARGIN_SECONDS", "0")
     monkeypatch.setattr("worldcup_brazil.agents._call_remote_agent", stuck_remote)
     spec = AgentSpec(
         slot="DeepSeek V4 Pro",
@@ -832,7 +833,7 @@ def test_call_agent_hard_timeout_returns_operational_fallback(monkeypatch) -> No
 
     assert opinion.used_fallback is True
     assert opinion.removed_from_main is True
-    assert "hard timeout after 1s" in opinion.summary
+    assert "hard timeout after 1s (nominal 1s + margem)" in opinion.summary
 
 
 def test_call_all_agents_uses_provider_bulkheads_without_serializing_other_providers(monkeypatch) -> None:
@@ -1269,3 +1270,78 @@ def test_agent_effort_profile_reports_native_controls_and_fast_latency_guard() -
     assert "bridge_timeout=agent_timeout_seconds" in claude_profile["controls"]
     assert "sem parâmetro nativo" in claude_profile["controls"]
     assert "JSON objetivo" in openai_profile["latency_guard"]
+
+
+def test_hard_timeout_allows_margin_above_nominal_deadline(monkeypatch) -> None:
+    """Regressão do run d4714b70 (10/jun): a guilhotina no prazo nominal exato matou a
+    chamada de planejamento do GPT em busca legítima e derrubou o quórum para 2/3.
+    A margem deixa o hard timeout pegar só conexão pendurada, não trabalho real."""
+    import time as _time
+
+    from worldcup_brazil import agents as agents_module
+    from worldcup_brazil.agents import AgentSpec, _call_text_with_hard_timeout
+
+    spec = AgentSpec(
+        slot="GPT 5.5",
+        provider="openai",
+        model="gpt-5.5",
+        env_api_key="OPENAI_API_KEY",
+        endpoint="https://api.openai.com/v1/responses",
+    )
+
+    def slow_remote(spec_arg, prompt, *, timeout):
+        _time.sleep(1.4)
+        return "resposta legítima que estourou o prazo nominal"
+
+    monkeypatch.setattr(agents_module, "_call_remote_agent", slow_remote)
+
+    monkeypatch.setenv("AGENT_HARD_TIMEOUT_MARGIN_SECONDS", "5")
+    assert "legítima" in _call_text_with_hard_timeout("remote", spec, "p", timeout=1)
+
+    monkeypatch.setenv("AGENT_HARD_TIMEOUT_MARGIN_SECONDS", "0")
+    import pytest as _pytest
+
+    with _pytest.raises(TimeoutError):
+        _call_text_with_hard_timeout("remote", spec, "p", timeout=1)
+
+
+def test_claude_stream_rate_limit_error_is_summarized(monkeypatch) -> None:
+    """Regressão do run d4714b70 (10/jun): o rate limit da assinatura chegava ao
+    watchdog como ~8KB de stream com hooks/prompt de harness; o motivo real ficava
+    enterrado. Agora vira uma linha legível."""
+    import json as _json
+
+    from worldcup_brazil.agents import _browser_command_failure_detail
+
+    stream = "\n".join(
+        [
+            _json.dumps({"type": "system", "subtype": "hook_started", "hook_name": "SessionStart:startup"}),
+            _json.dumps({"type": "system", "subtype": "hook_response", "output": "# Agentic Harness prompt gigante..."}),
+            _json.dumps(
+                {
+                    "type": "rate_limit_event",
+                    "rate_limit_info": {
+                        "status": "rejected",
+                        "rateLimitType": "five_hour",
+                        "overageStatus": "rejected",
+                    },
+                }
+            ),
+            _json.dumps(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "is_error": True,
+                    "api_error_status": 429,
+                    "result": "You've hit your session limit · resets 8:20pm (America/Sao_Paulo)",
+                }
+            ),
+        ]
+    )
+
+    detail = _browser_command_failure_detail("Opus 4.8", ["/usr/local/bin/claude"], stream)
+
+    assert "session limit" in detail
+    assert "five_hour" in detail
+    assert "Agentic Harness" not in detail
+    assert len(detail) < 400
