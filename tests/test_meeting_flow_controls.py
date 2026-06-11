@@ -472,6 +472,62 @@ def test_reentry_probe_attempts_are_capped(monkeypatch) -> None:
     assert probe_calls.count("Perplexity Pro") == 2
 
 
+def test_reentry_probe_quorum_risk_policy_skips_when_active_room_is_healthy(monkeypatch) -> None:
+    config = {
+        **_base_config(),
+        "meeting_min_participants": 3,
+        "meeting_min_rounds": 1,
+        "meeting_max_rounds": 1,
+        "meeting_consensus_threshold_pct": 10.0,
+        "agent_reentry_probe_enabled": True,
+        "agent_reentry_probe_policy": "quorum_risk",
+        "agent_reentry_probe_min_round": 3,
+    }
+    opus_spec = AgentSpec(
+        slot="Opus 4.8",
+        provider="anthropic",
+        model="claude-opus-4-8",
+        env_api_key="ANTHROPIC_API_KEY",
+        endpoint="https://api.anthropic.com/v1/messages",
+    )
+    probe_calls: list[str] = []
+
+    async def fake_probe(*, spec, config, generated_at, baseline_title_pct, removed_reason, timeout):
+        probe_calls.append(spec.slot)
+        return None, "should not run", ""
+
+    async def fake_call_agent(spec, prompt, **kwargs):
+        return _healthy_question_opinion(spec.slot)
+
+    async def fake_call_all_agents(prompt, *, specs, **kwargs):
+        return [_healthy_response(spec.slot, 10.0) for spec in specs]
+
+    monkeypatch.setattr("worldcup_brazil.pipeline._run_agent_reentry_probe", fake_probe)
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_agent", fake_call_agent)
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+
+    asyncio.run(
+        _run_model_meeting(
+            config=config,
+            planning_opinions=_planning_opinions(),
+            generated_at=datetime(2026, 6, 14, tzinfo=timezone.utc),
+            agent_specs=_specs(),
+            baseline_title_pct=11.0,
+            allow_agent_fallback=True,
+            watchdog=None,
+            reentry_candidate_specs=[opus_spec],
+            reentry_removed_reasons={
+                "Opus 4.8": (
+                    "fallback operacional: Resposta removida do planejamento de fontes por devolver "
+                    "resposta parcial ou sem campos auditáveis"
+                )
+            },
+        )
+    )
+
+    assert probe_calls == []
+
+
 def test_format_impossible_opponent_reason_includes_phase_country_and_candidates() -> None:
     reason = _format_impossible_opponent_reason(
         {

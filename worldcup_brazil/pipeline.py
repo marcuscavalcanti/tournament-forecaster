@@ -857,17 +857,22 @@ def _agent_reentry_probe_prompt(
     generated_at: datetime,
     removed_reason: str,
 ) -> str:
+    matches = _configured_matches_for_prompt(config)
     return (
-        _source_planning_prompt(config=config, generated_at=generated_at)
-        + "\n\nREENTRADA ASSÍNCRONA NA SALA DE DEBRIEFING.\n"
-        "Você saiu temporariamente da sala por timeout, fallback ou plano de fontes inválido. "
-        "A conversa principal não vai esperar por você. Para reentrar, responda em JSON estrito, "
-        "sem texto fora do JSON, com o mesmo contrato inicial: self_identification, title_pct, summary, "
-        "opening_argument, critique, adjustment, source_urls, source_queries, scenario_probabilities "
-        "e team_context_signals quando houver sinais auditáveis. "
-        "Traga fontes ou consultas próprias escolhidas neste momento, sem cache; não invente URL, ranking, "
-        "score, notícia ou método. Se não tiver fonte verificável, declare isso em summary e não peça reentrada.\n"
+        "REENTRADA ASSÍNCRONA NA SALA DE DEBRIEFING.\n"
+        "A conversa principal não vai esperar por você. Responda SOMENTE JSON estrito e curto. "
+        "Objetivo: provar que você pode voltar com plano de fontes próprio, fresco e verificável para a sala. "
+        f"{_agent_owned_fresh_search_contract()} "
+        f"{_quantitative_qualitative_decision_instruction()} "
+        f"{_auditable_sources_instruction(config)} "
+        "Não use Opta, não use cache, não invente URL, ranking, odd, lesão, escalação, score ou método. "
+        "Campos obrigatórios: self_identification, title_pct, summary, opening_argument, critique, adjustment, "
+        "source_urls, source_queries, scenario_probabilities, team_context_signals. "
+        "Inclua pelo menos 2 source_urls HTTP verificáveis ou 2 source_queries específicas não-Opta. "
+        "Se não tiver fonte verificável, declare isso em summary e não peça reentrada.\n"
         f"Motivo da saída temporária: {removed_reason or 'sem resposta externa verificável'}\n"
+        f"Data do run: {generated_at.isoformat()}\n"
+        f"Escopo permitido: {json.dumps(matches, ensure_ascii=False)[:5000]}\n"
     )
 
 
@@ -920,6 +925,34 @@ def _room_majority_quorum(*, configured_min: int, active_count: int) -> int:
         return 0
     _ = configured_min  # Backward-compatible parameter; quorum is majority of the active room.
     return int(active_count) // 2 + 1
+
+
+def _should_schedule_reentry_probe(
+    *,
+    config: dict[str, Any],
+    round_index: int,
+    active_count: int,
+    configured_min_participants: int,
+    consecutive_sterile: int,
+) -> tuple[bool, str]:
+    policy = str(config.get("agent_reentry_probe_policy", "always")).strip().lower()
+    if policy in {"off", "disabled", "never"}:
+        return False, "policy disabled"
+    if active_count < configured_min_participants:
+        return True, "active room below minimum participants"
+    if consecutive_sterile > 0 and bool(config.get("agent_reentry_probe_on_sterile_round", True)):
+        return True, "sterile room needs recovery"
+    min_round = max(1, int(config.get("agent_reentry_probe_min_round", 1)))
+    if round_index < min_round:
+        return False, f"delayed until round {min_round}"
+    if policy in {"always", "eager"}:
+        return True, "policy eager"
+    if policy in {"quorum_risk", "needed", "latency_first"}:
+        return False, (
+            f"active room already has {active_count} participant(s), "
+            f"minimum is {configured_min_participants}"
+        )
+    return True, f"unknown policy {policy}; falling back to eager"
 
 
 @dataclass(frozen=True)
@@ -3441,6 +3474,7 @@ async def _run_model_meeting(
     reentry_counts: dict[str, int] = {}
     probe_attempts: dict[str, int] = {}
     fallback_question_streak: dict[str, int] = {}
+    reentry_skip_announced: dict[str, str] = {}
 
     if watchdog:
         watchdog.start("model_meeting", detail=f"starting dynamic meeting with protagonist {protagonist}")
@@ -3476,6 +3510,28 @@ async def _run_model_meeting(
                         ),
                         extra={"round": round_index, "agent": slot},
                     )
+                continue
+            allowed, schedule_reason = _should_schedule_reentry_probe(
+                config=config,
+                round_index=round_index,
+                active_count=len(active_slots),
+                configured_min_participants=configured_min_participants,
+                consecutive_sterile=consecutive_sterile,
+            )
+            if not allowed:
+                if watchdog and reentry_skip_announced.get(slot) != schedule_reason:
+                    watchdog.event(
+                        "agent_reentry_probe",
+                        "skipped",
+                        detail=f"round={round_index}; agent={slot}; {schedule_reason}",
+                        extra={
+                            "round": round_index,
+                            "agent": slot,
+                            "reason": schedule_reason,
+                            "active_slots": active_slots,
+                        },
+                    )
+                reentry_skip_announced[slot] = schedule_reason
                 continue
             probe_attempts[slot] = probe_attempts.get(slot, 0) + 1
             reason = reentry_removed_reasons.get(slot, "sem resposta externa verificável")
