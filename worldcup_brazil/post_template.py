@@ -43,7 +43,7 @@ Como prometi: na véspera de cada jogo do Brasil, os 5 modelos de IA (Opus, GPT,
 
 O CAMINHO ATÉ O HEXA, adversário por adversário (no mata-mata não tem empate: ou passa, ou volta pra casa):
 
-{path_blocks}RESUMO DA CAMINHADA: o Brasil chega nos 16 avos em {r16_pct} dos cenários, oitavas em {r8_pct}, quartas em {qf_pct}, na semifinal em {sf_pct}, na final em {final_pct}... e levanta a taça em {title_pct}.
+{path_blocks}RESUMO DA CAMINHADA: o Brasil chega nos 16 avos em {r16_pct} dos cenários, oitavas em {r8_pct}, quartas em {qf_pct}, na semifinal em {sf_pct}, na final em {final_pct}... e levanta a taça em {title_pct} 🏆.
 
 Esse mapa MUDA a cada rodada, pois o modelo calcula o resultado dos outros grupos e troca os adversários pelo caminho. Por isso o modelo roda de novo na véspera/dia de cada jogo e eu posto o mapa atualizado.
 
@@ -53,7 +53,10 @@ DOIS BASTIDORES DA REUNIÃO DE HOJE:
 
 2️⃣ {beat_2}
 {beat_3}
-E o supermodelo da OPTA, com 350 mil simulações? Coloca o Brasil em 5º. Minha sala concorda: candidato de verdade, favorito não. E as casas de apostas pagam 9 pra 1 no hexa, ou seja, uns 8-9% de chance. Três caminhos diferentes, mesma resposta.
+⚠️ Propositalmente, o modelo da OPTA, que fez 350K simulações para chegar nos resultados e favoritos da Copa, é a única fonte não permitida dos modelos consultarem.
+
+Se você não está entendendo nada, pf leia o post #1 dessa série:
+https://www.linkedin.com/posts/marcuscavalcanti_copacomachismo-brasil-brazil-share-7470889508763344896-6dqG/?utm_source=share&utm_medium=member_desktop&rcm=ACoAAAAiNX0BNM7cvCA_laP0QxrgOSoYAp3D9ko
 
 Próximo post: véspera/dia de Brasil x {next_post_game}, com o mapa recalculado.
 
@@ -62,9 +65,9 @@ Galera do bolão: {palpite_bolao}. Usem com moderação.
 #CopaComAchismo #Brasil #Brazil #WorldCup2026 #Futebol #Football #Soccer #Hexa
 """
 
-PHASE_BLOCK = """➡️ {header} ({phase_date})
-• Mais provável: {ml_opp} ({ml_scn} de chance desse cruzamento) → Brasil passa: {ml_br} | {ml_opp}: {ml_opp_pct}{ml_venue}
-• Alternativa: {alt_opp} ({alt_scn}) → Brasil: {alt_br} | {alt_opp}: {alt_opp_pct}
+PHASE_BLOCK = """➡️ {header} ({phase_date}){phase_venue}
+• Mais provável: {ml_opp} ({ml_scn} de chance desse cruzamento) → {ml_label}: {ml_br} | {ml_opp}: {ml_opp_pct}
+• Alternativa: {alt_opp} ({alt_scn}) → {alt_label}: {alt_br} | {alt_opp}: {alt_opp_pct}
 
 """
 
@@ -146,24 +149,29 @@ def _extract_beats(bundle: Any) -> list[str]:
             if response.get("removed_from_main") or response.get("used_fallback"):
                 continue
             if response.get("disagreed"):
-                quote = _truncate_words(response.get("answer", ""), 130)
-                if _normalize_beat(quote).startswith("concordo"):
-                    beats.append(
-                        f"Na rodada {round_index}, o {response.get('agent')} aceitou a tese do líder, mas com ressalva: "
-                        f"\"{quote}\" Ressalva com fonte também move número."
-                    )
+                if _normalize_beat(response.get("answer", "")).startswith("concordo"):
+                    if any("concordou com o líder" in beat for beat in beats):
+                        beats.append(
+                            f"Na rodada {round_index}, o {response.get('agent')} repetiu o ritual: foi conferir "
+                            "tudo na fonte antes de assinar embaixo do líder."
+                        )
+                    else:
+                        beats.append(
+                            f"Na rodada {round_index}, o {response.get('agent')} concordou com o líder da mesa — "
+                            "mas só depois de conferir os números por conta própria. Confiança é bom; conferência é melhor."
+                        )
                 else:
                     beats.append(
-                        f"Na rodada {round_index}, o {response.get('agent')} discordou do líder da mesa: \"{quote}\" "
-                        "A discordância virou ajuste com fonte — é assim que o número se move."
+                        f"Na rodada {round_index}, o {response.get('agent')} bateu de frente com o líder da mesa, "
+                        "trouxe fontes próprias e fez a mesa ajustar o cálculo. Palpite sem prova aqui não passa."
                     )
     if len(beats) < 3:
         for turn in transcript:
             invalidated = turn.get("invalidated_protagonist_question") if isinstance(turn, dict) else None
             if invalidated:
                 beats.append(
-                    f"A fala do {invalidated.get('agent')} foi anulada pela própria sala "
-                    f"({_truncate_words(invalidated.get('reason', ''), 90)}). Regra é regra: sem fonte ou fora da chave, não vale."
+                    f"A própria mesa anulou uma fala do {invalidated.get('agent')} por citar um adversário "
+                    "que nem pode cruzar com o Brasil naquela fase. Regra é regra: fora da chave, não vale."
                 )
             if len(beats) >= 3:
                 break
@@ -248,17 +256,20 @@ def render_template_post(bundle: Any, *, post_index: int, run_date: date | None 
         ml, alt = pair.get("ml"), pair.get("alt")
         if ml is None or alt is None:
             raise ValueError(f"template post requer cenário mais provável e alternativa para {phase}")
+        is_final = phase == "Final"
         blocks.append(
             PHASE_BLOCK.format(
                 header=PHASE_HEADERS[phase],
                 phase_date=_short_date(getattr(ml, "match_date", "")),
+                phase_venue=_venue_suffix(getattr(ml, "venue", "")),
                 ml_opp=getattr(ml, "opponent", ""),
                 ml_scn=_pct_int(getattr(ml, "scenario_pct", None)),
+                ml_label="Brasil HEXA" if is_final else "Brasil passa",
                 ml_br=_pct_int(getattr(ml, "brazil_pct", None)),
                 ml_opp_pct=_pct_int(getattr(ml, "opponent_pct", None)),
-                ml_venue=_venue_suffix(getattr(ml, "venue", "")),
                 alt_opp=getattr(alt, "opponent", ""),
                 alt_scn=_pct_int(getattr(alt, "scenario_pct", None)),
+                alt_label="Brasil HEXA" if is_final else "Brasil",
                 alt_br=_pct_int(getattr(alt, "brazil_pct", None)),
                 alt_opp_pct=_pct_int(getattr(alt, "opponent_pct", None)),
             )
@@ -312,7 +323,7 @@ def _trim_to_limit(text: str, bundle: Any) -> str:
     without_beat3 = re.sub(r"\n3️⃣ [^\n]*\n", "", text)
     if len(without_beat3) <= MAX_POST_CHARS:
         return without_beat3
-    no_venues = re.sub(r"(\| [^|\n]+?: \d+[,.]?\d*%) - [^\n]+", r"\1", without_beat3)
+    no_venues = re.sub(r"(➡️ [^\n(]+\([^)]*\)) - [^\n]+", r"\1", without_beat3)
     if len(no_venues) <= MAX_POST_CHARS:
         return no_venues
     raise ValueError(
@@ -331,6 +342,7 @@ def validate_template_post(text: str, bundle: Any) -> None:
         "O CAMINHO ATÉ O HEXA",
         "RESUMO DA CAMINHADA",
         "DOIS BASTIDORES DA REUNIÃO DE HOJE:",
+        "Propositalmente, o modelo da OPTA",
         "#CopaComAchismo #Brasil #Brazil #WorldCup2026 #Futebol #Football #Soccer #Hexa",
     ):
         if sentinel not in text:

@@ -69,13 +69,21 @@ def test_template_post_fills_all_placeholders_within_limit() -> None:
     assert "\n\nPRIMEIRO PALPITE DA SÉRIE: Brasil x Marrocos\n" in text
     assert "A ESTREIA (sábado, Nova Jersey):" in text
     assert "BRASIL x MARROCOS — 59% vitória | 24% empate | 17% derrota" in text
-    assert "Mais provável: Japão (34% de chance desse cruzamento) → Brasil passa: 72% | Japão: 28%" in text
+    assert "➡️ 16 AVOS (29/jun) - Estádio X" in text
+    assert "Mais provável: Japão (34% de chance desse cruzamento) → Brasil passa: 72% | Japão: 28%\n" in text
+    assert "➡️ FINAL (29/jun) - Estádio X" in text
+    assert "França (18% de chance desse cruzamento) → Brasil HEXA: 42% | França: 58%" in text
+    assert "Alternativa: Espanha (14%) → Brasil HEXA: 41% | Espanha: 59%" in text
+    assert "levanta a taça em 8,6% 🏆." in text
+    assert "Propositalmente, o modelo da OPTA" in text
+    assert "https://www.linkedin.com/posts/marcuscavalcanti_copacomachismo" in text
+    assert chr(34) not in text.split("DOIS BASTIDORES")[1].split("⚠️")[0]
     assert "Alternativa: Holanda (29%) → Brasil: 52% | Holanda: 48%\n" in text
     assert "Holanda: 48% - " not in text
     assert "  " not in text.replace("\n", "|")
     assert "16 avos em 99%" in text
     assert "levanta a taça em 8,6%" in text
-    assert "Opus 4.8 discordou do líder" in text
+    assert "Opus 4.8 bateu de frente com o líder da mesa" in text
     assert "Galera do bolão: 59 / 24 / 17." in text
 
 
