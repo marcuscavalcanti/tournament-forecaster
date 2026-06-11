@@ -120,6 +120,11 @@ def _config_watchdog_extra(
             "model_preflight_timeout_seconds": config.get("model_preflight_timeout_seconds", 180),
             "minimum_source_ready_agents": config.get("minimum_source_ready_agents", 3),
             "source_planning_repair_attempts": config.get("source_planning_repair_attempts", 2),
+            "repair_format_removals_with_quorum": config.get("repair_format_removals_with_quorum", True),
+            "source_planning_format_repair_timeout_seconds": config.get(
+                "source_planning_format_repair_timeout_seconds",
+                min(90, int(config.get("agent_timeout_seconds", 90))),
+            ),
             "meeting_response_repair_attempts": config.get("meeting_response_repair_attempts", 1),
             "meeting_min_rounds": config.get("meeting_min_rounds"),
             "meeting_max_rounds": config.get("meeting_max_rounds"),

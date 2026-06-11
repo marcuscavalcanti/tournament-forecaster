@@ -37,6 +37,8 @@ def test_example_config_uses_three_agent_source_quorum_and_repair_attempts() -> 
     assert config["agent_reentry_probe_enabled"] is True
     assert config["agent_reentry_probe_timeout_seconds"] == 180
     assert config["source_planning_repair_attempts"] >= 1
+    assert config["repair_format_removals_with_quorum"] is True
+    assert config["source_planning_format_repair_timeout_seconds"] == 60
     assert config["meeting_response_repair_attempts"] >= 1
     assert config["meeting_min_participants"] == 3
     assert "meeting_min_real_agents" not in config
@@ -79,6 +81,8 @@ def test_load_config_watchdog_payload_exposes_safe_operational_config() -> None:
         "model_preflight_contract_enabled": True,
         "minimum_source_ready_agents": 3,
         "source_planning_repair_attempts": 2,
+        "repair_format_removals_with_quorum": True,
+        "source_planning_format_repair_timeout_seconds": 60,
         "meeting_response_repair_attempts": 1,
         "meeting_min_rounds": 6,
         "meeting_max_rounds": 18,
@@ -133,6 +137,8 @@ def test_load_config_watchdog_payload_exposes_safe_operational_config() -> None:
     assert extra["watchdog_config"]["monte_carlo_uncertainty"]["rating_uncertainty_outer_samples"] == 200
     assert extra["watchdog_config"]["model_preflight_contract_enabled"] is True
     assert extra["watchdog_config"]["source_planning_repair_attempts"] == 2
+    assert extra["watchdog_config"]["repair_format_removals_with_quorum"] is True
+    assert extra["watchdog_config"]["source_planning_format_repair_timeout_seconds"] == 60
     assert extra["watchdog_config"]["meeting_response_repair_attempts"] == 1
     assert extra["watchdog_config"]["meeting_min_participants"] == 3
     assert extra["watchdog_config"]["meeting_quorum_rule"] == "maioria simples dos participantes ativos da sala"

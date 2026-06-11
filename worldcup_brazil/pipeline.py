@@ -634,6 +634,13 @@ def _agent_source_planning_watchdog_extra(config: dict[str, Any]) -> dict[str, A
             "source_planning_repair_attempts": int(
                 config.get("source_planning_repair_attempts", DEFAULT_SOURCE_PLANNING_REPAIR_ATTEMPTS)
             ),
+            "repair_format_removals_with_quorum": bool(config.get("repair_format_removals_with_quorum", True)),
+            "source_planning_format_repair_timeout_seconds": int(
+                config.get(
+                    "source_planning_format_repair_timeout_seconds",
+                    min(90, int(config.get("agent_timeout_seconds", 90))),
+                )
+            ),
             "meeting_min_participants": int(
                 config.get("meeting_min_participants", config.get("meeting_min_real_agents", 3))
             ),
@@ -692,6 +699,8 @@ def _agent_source_planning_watchdog_detail(config: dict[str, Any]) -> str:
         f"meeting_min_participants={knobs['meeting_min_participants']}; "
         f"meeting_quorum_rule={knobs['meeting_quorum_rule']}; "
         f"self_heal_attempts={knobs['source_planning_repair_attempts']}; "
+        f"format_repair={knobs['repair_format_removals_with_quorum']}; "
+        f"format_repair_timeout_s={knobs['source_planning_format_repair_timeout_seconds']}; "
         f"meeting_repair_attempts={knobs['meeting_response_repair_attempts']}; "
         f"full_path_coverage={knobs['meeting_require_full_path_coverage']}; "
         f"parallel_opponent_room={knobs['parallel_opponent_debriefing_enabled']}; "

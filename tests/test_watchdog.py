@@ -63,6 +63,8 @@ def test_agent_source_planning_watchdog_payload_includes_contract_and_operationa
     config = {
         "minimum_source_ready_agents": 3,
         "source_planning_repair_attempts": 2,
+        "repair_format_removals_with_quorum": True,
+        "source_planning_format_repair_timeout_seconds": 60,
         "meeting_response_repair_attempts": 1,
         "meeting_require_full_path_coverage": True,
         "meeting_min_participants": 3,
@@ -82,6 +84,8 @@ def test_agent_source_planning_watchdog_payload_includes_contract_and_operationa
     assert "contrato único" in detail
     assert "quorum_min=3" in detail
     assert "self_heal_attempts=2" in detail
+    assert "format_repair=True" in detail
+    assert "format_repair_timeout_s=60" in detail
     assert "meeting_repair_attempts=1" in detail
     assert "meeting_quorum_rule=maioria simples" in detail
     assert "full_path_coverage=True" in detail
@@ -98,6 +102,8 @@ def test_agent_source_planning_watchdog_payload_includes_contract_and_operationa
     assert "lesões/cortes/notícias recentes" in extra["contract"]["team_context_signal_families"]
     assert extra["operational_knobs"]["minimum_source_ready_agents"] == 3
     assert extra["operational_knobs"]["source_planning_repair_attempts"] == 2
+    assert extra["operational_knobs"]["repair_format_removals_with_quorum"] is True
+    assert extra["operational_knobs"]["source_planning_format_repair_timeout_seconds"] == 60
     assert extra["operational_knobs"]["meeting_response_repair_attempts"] == 1
     assert extra["operational_knobs"]["meeting_min_participants"] == 3
     assert extra["operational_knobs"]["meeting_quorum_rule"] == "maioria simples dos participantes ativos da sala"
