@@ -53,6 +53,9 @@ DOIS BASTIDORES DA REUNIÃO DE HOJE:
 
 2️⃣ {beat_2}
 {beat_3}
+📊 NÚMEROS DA RODADA:
+{round_stats}
+
 ⚠️ Propositalmente, o modelo da OPTA, que fez 350K simulações para chegar nos resultados e favoritos da Copa, é a única fonte não permitida dos modelos consultarem.
 
 Se você não está entendendo nada, pf leia o post #1 dessa série:
@@ -150,20 +153,18 @@ def _extract_beats(bundle: Any) -> list[str]:
                 continue
             if response.get("disagreed"):
                 if _normalize_beat(response.get("answer", "")).startswith("concordo"):
-                    if any("concordou com o líder" in beat for beat in beats):
+                    if any("assinou embaixo" in beat for beat in beats):
                         beats.append(
-                            f"Na rodada {round_index}, o {response.get('agent')} repetiu o ritual: foi conferir "
-                            "tudo na fonte antes de assinar embaixo do líder."
+                            f"Na rodada {round_index}, o {response.get('agent')} repetiu o ritual: conferiu na fonte antes de concordar."
                         )
                     else:
                         beats.append(
-                            f"Na rodada {round_index}, o {response.get('agent')} concordou com o líder da mesa — "
-                            "mas só depois de conferir os números por conta própria. Confiança é bom; conferência é melhor."
+                            f"Na rodada {round_index}, o {response.get('agent')} só assinou embaixo do líder depois de conferir os números na fonte."
                         )
                 else:
                     beats.append(
-                        f"Na rodada {round_index}, o {response.get('agent')} bateu de frente com o líder da mesa, "
-                        "trouxe fontes próprias e fez a mesa ajustar o cálculo. Palpite sem prova aqui não passa."
+                        f"Na rodada {round_index}, o {response.get('agent')} bateu de frente com o líder, "
+                        "trouxe fontes próprias e fez a mesa recalcular."
                     )
     if len(beats) < 3:
         for turn in transcript:
@@ -182,9 +183,8 @@ def _extract_beats(bundle: Any) -> list[str]:
     while len(beats) < 2:
         if consensus_pct is not None and dispersion is not None and rounds:
             beats.append(
-                f"A mesa fechou em {_pct(consensus_pct)} de hexa com dispersão de só "
-                f"{str(dispersion).replace('.', ',')} ponto(s) entre os 5 modelos, em {rounds} rodadas — "
-                "convergência por evidência, não por preguiça."
+                f"A mesa fechou em {_pct(consensus_pct)} de hexa com diferença de só "
+                f"{str(dispersion).replace('.', ',')} ponto(s) entre os modelos, em {rounds} rodadas."
             )
             consensus_pct = None
         else:
@@ -192,6 +192,79 @@ def _extract_beats(bundle: Any) -> list[str]:
                 "Rodada sem briga: os modelos convergiram cedo e o consenso fechou estável — quando há evidência boa, ninguém inventa discordância."
             )
     return beats[:3]
+
+
+QUANTI_HINTS = ("rating", "odds", "bet", "mercado", "sofascore", "desempenho", "performance", "elo")
+
+
+def _build_round_stats(bundle: Any) -> str:
+    """Três números da rodada, escolhidos por peso de interesse nos dados do run."""
+    candidates: list[tuple[float, str]] = []
+    metadata = getattr(bundle, "metadata", {}) or {}
+
+    participation = getattr(bundle, "model_participation", {}) or {}
+    messages = participation.get("total_messages")
+    rounds = participation.get("total_rounds")
+    if messages and rounds:
+        candidates.append((70, f"💬 {messages} mensagens em {rounds} rodadas de debate"))
+
+    costs = (getattr(bundle, "model_token_costs", {}) or {}).get("total") or {}
+    cost_usd = costs.get("cost_usd")
+    if cost_usd:
+        usd = f"{float(cost_usd):.2f}".replace(".", ",")
+        candidates.append((90, f"💰 reunião inteira: US$ {usd} de IA"))
+
+    influence = getattr(bundle, "model_influence_pct", {}) or {}
+    valid_influence = {k: float(v) for k, v in influence.items() if v is not None}
+    if len(valid_influence) >= 3:
+        top_agent, top_value = max(valid_influence.items(), key=lambda kv: kv[1])
+        low_agent, low_value = min(valid_influence.items(), key=lambda kv: kv[1])
+        gap_weight = 60 + min(30.0, top_value - low_value)
+        candidates.append(
+            (
+                gap_weight,
+                f"🧭 mais influente: {top_agent} ({_pct(top_value)}); menos: {low_agent} ({_pct(low_value)})",
+            )
+        )
+
+    sources = getattr(bundle, "sources", None)
+    if sources:
+        candidates.append((55, f"🔎 {len(sources)} fontes consultadas"))
+
+    mc = metadata.get("monte_carlo") or {}
+    iterations = mc.get("iterations")
+    if iterations:
+        total = int(iterations) * 2
+        candidates.append((50, f"🎲 {total // 1000} mil copas simuladas no dia"))
+
+    team_context = mc.get("team_context") or {}
+    signals = [
+        signal
+        for adjustment in team_context.get("team_adjustments", []) or []
+        for signal in adjustment.get("signals", []) or []
+    ]
+    if len(signals) >= 5:
+        quanti = sum(
+            1
+            for signal in signals
+            if any(hint in _normalize_beat(signal.get("category", "")) for hint in QUANTI_HINTS)
+        )
+        quanti_pct = round(quanti / len(signals) * 100)
+        candidates.append(
+            (
+                65,
+                f"⚖️ contexto: {quanti_pct}% números, {100 - quanti_pct}% fatos (lesões, notícias)",
+            )
+        )
+
+    opponent_room = metadata.get("parallel_opponent_debriefing") or {}
+    if opponent_room.get("enabled") and not int(opponent_room.get("rounds") or 0):
+        candidates.append(
+            (75, "🕐 a sala de adversários estourou o tempo; a principal seguiu com a simulação pura, sem travar")
+        )
+
+    chosen = [text for _, text in sorted(candidates, key=lambda item: -item[0])[:3]]
+    return "\n".join(f"• {item}" for item in chosen)
 
 
 def _knockout_pairs(bundle: Any) -> dict[str, dict[str, Any]]:
@@ -293,8 +366,10 @@ def render_template_post(bundle: Any, *, post_index: int, run_date: date | None 
         f"{win.rstrip('%')}/{_pct_int(draw_value).rstrip('%') if draw_value else '0'}/"
         f"{_pct_int(loss_value).rstrip('%') if loss_value else '0'} · Hexa: {title_pct_text}"
     )
+    round_stats = _build_round_stats(bundle)
     text = TEMPLATE.format(
         round_header=round_header,
+        round_stats=round_stats,
         title=title,
         next_game_header=next_game_header,
         next_game_line=next_game_line,
@@ -323,6 +398,14 @@ def _trim_to_limit(text: str, bundle: Any) -> str:
     without_beat3 = re.sub(r"\n3️⃣ [^\n]*\n", "", text)
     if len(without_beat3) <= MAX_POST_CHARS:
         return without_beat3
+    for _ in range(2):
+        if len(without_beat3) <= MAX_POST_CHARS:
+            return without_beat3
+        section = re.search(r"NÚMEROS DA RODADA:\n(?:• [^\n]+\n)*• [^\n]+", without_beat3)
+        if not section or section.group(0).count("• ") <= 2:
+            break
+        trimmed_section = section.group(0).rsplit("\n• ", 1)[0]
+        without_beat3 = without_beat3[: section.start()] + trimmed_section + without_beat3[section.end():]
     no_venues = re.sub(r"(➡️ [^\n(]+\([^)]*\)) - [^\n]+", r"\1", without_beat3)
     if len(no_venues) <= MAX_POST_CHARS:
         return no_venues
@@ -343,6 +426,7 @@ def validate_template_post(text: str, bundle: Any) -> None:
         "RESUMO DA CAMINHADA",
         "DOIS BASTIDORES DA REUNIÃO DE HOJE:",
         "Propositalmente, o modelo da OPTA",
+        "NÚMEROS DA RODADA:",
         "#CopaComAchismo #Brasil #Brazil #WorldCup2026 #Futebol #Football #Soccer #Hexa",
     ):
         if sentinel not in text:
@@ -383,4 +467,8 @@ def bundle_from_json(path: Path | str) -> Any:
         group_summary=payload.get("group_summary", ""),
         metadata=payload.get("metadata", {}),
         meeting_transcript=payload.get("meeting_transcript", []),
+        model_participation=payload.get("model_participation", {}),
+        model_influence_pct=payload.get("model_influence_pct", {}),
+        model_token_costs=payload.get("model_token_costs", {}),
+        sources=payload.get("sources", []),
     )

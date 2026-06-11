@@ -55,8 +55,12 @@ def _bundle():
         knockout_matches=knockout,
         stage_probabilities={"quartas": 47.5, "semifinal": 29.0, "final": 16.3, "titulo": 8.6},
         group_summary="Brasil em 1º: ~66% (faixa 61%-72%).",
-        metadata={"monte_carlo": {"stage_probabilities": {"16_avos": 99.2, "oitavas": 67.8}}},
+        metadata={"monte_carlo": {"stage_probabilities": {"16_avos": 99.2, "oitavas": 67.8}, "iterations": 40000}},
         meeting_transcript=transcript,
+        model_participation={"total_messages": 31, "total_rounds": 8},
+        model_influence_pct={"GPT 5.5": 29.9, "DeepSeek V4 Pro": 34.8, "Perplexity Pro": 0.5},
+        model_token_costs={"total": {"cost_usd": 6.43}},
+        sources=["https://example.com"] * 12,
     )
 
 
@@ -83,7 +87,9 @@ def test_template_post_fills_all_placeholders_within_limit() -> None:
     assert "  " not in text.replace("\n", "|")
     assert "16 avos em 99%" in text
     assert "levanta a taça em 8,6%" in text
-    assert "Opus 4.8 bateu de frente com o líder da mesa" in text
+    assert "📊 NÚMEROS DA RODADA:" in text
+    assert text.split("NÚMEROS DA RODADA:")[1].split("⚠️")[0].count("• ") >= 2
+    assert "Opus 4.8 bateu de frente com o líder" in text
     assert "Galera do bolão: 59 / 24 / 17." in text
 
 
@@ -108,12 +114,12 @@ def test_validate_rejects_unresolved_placeholder_and_oversize() -> None:
 
 
 def test_editor_can_only_append() -> None:
-    base = render_template_post(_bundle(), post_index=1, run_date=date(2026, 6, 11))
+    base = "POST FIXO DO TEMPLATE\nLinha final.\n"
 
     appended = apply_editor_append(base, base.rstrip("\n") + "\n\n⚽ Bônus: estreia com cara de 2 a 0.")
     assert appended.endswith("2 a 0.")
 
-    mutated = apply_editor_append(base, base.replace("59%", "80%"))
+    mutated = apply_editor_append(base, base.replace("FIXO", "MUDADO"))
     assert mutated == base
 
     oversized = apply_editor_append(base, base.rstrip("\n") + "\n" + "x" * MAX_POST_CHARS)
