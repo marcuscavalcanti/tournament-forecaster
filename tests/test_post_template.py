@@ -42,12 +42,21 @@ def _bundle():
                                venue="Estádio Y", date_="2026-06-29", most_likely=False))
     transcript = [
         {
-            "round": 6,
+            "round": 4,
             "responses": [
-                {"agent": "Opus 4.8", "answer": "Discordo do uso de cotações de gol para medir aptidão física: elas assumem que o jogador joga.",
+                {"agent": "GPT 5.5",
+                 "answer": "Concordo com o líder, mas fui conferir antes. Rodrygo está fora do ano por lesão, então o sinal de '+3,2 por desempenho recente' não pode ficar no Modelo Principal.",
                  "disagreed": True, "removed_from_main": False, "used_fallback": False},
             ],
-        }
+        },
+        {
+            "round": 6,
+            "responses": [
+                {"agent": "Opus 4.8",
+                 "answer": "Discordo do protagonista. Cotações de gol assumem que o jogador joga: elas não medem se Neymar está apto a entrar em campo.",
+                 "disagreed": True, "removed_from_main": False, "used_fallback": False},
+            ],
+        },
     ]
     return SimpleNamespace(
         generated_at_iso="2026-06-11T15:26:34+00:00",
@@ -89,8 +98,31 @@ def test_template_post_fills_all_placeholders_within_limit() -> None:
     assert "levanta a taça em 8,6%" in text
     assert "📊 NÚMEROS DA RODADA:" in text
     assert text.split("NÚMEROS DA RODADA:")[1].split("⚠️")[0].count("• ") >= 1
-    assert "Opus 4.8 bateu de frente com o líder" in text
+    assert "Rodada 6 — Opus 4.8 bateu de frente: Cotações de gol assumem que o jogador joga" in text
+    assert "Rodada 4 — GPT 5.5 foi conferir antes: Rodrygo está fora do ano por lesão" in text
+    assert "Modelo Principal" not in text.split("DOIS BASTIDORES")[1].split("⚠️")[0]
     assert "Galera do bolão: 59 / 24 / 17." in text
+
+
+def test_backstage_section_omitted_when_beats_lack_substance() -> None:
+    bundle = _bundle()
+    bundle.meeting_transcript = [
+        {
+            "round": 2,
+            "responses": [
+                {"agent": "Gemini Pro", "answer": "Concordo com o protagonista, sem ressalvas relevantes.",
+                 "disagreed": True, "removed_from_main": False, "used_fallback": False},
+            ],
+        }
+    ]
+
+    text = render_template_post(bundle, post_index=1, run_date=date(2026, 6, 11))
+
+    validate_template_post(text, bundle)
+    assert "DOIS BASTIDORES" not in text
+    assert "1️⃣" not in text
+    assert "📊 NÚMEROS DA RODADA:" in text
+    assert text.split("NÚMEROS DA RODADA:")[1].split("⚠️")[0].count("• ") >= 3
 
 
 def test_template_post_uses_next_unplayed_game_and_ordinal() -> None:

@@ -47,18 +47,12 @@ O CAMINHO ATÉ O HEXA, adversário por adversário (no mata-mata não tem empate
 
 Esse mapa MUDA a cada rodada, pois o modelo calcula o resultado dos outros grupos e troca os adversários pelo caminho. Por isso o modelo roda de novo na véspera/dia de cada jogo e eu posto o mapa atualizado.
 
-DOIS BASTIDORES DA REUNIÃO DE HOJE:
-
-1️⃣ {beat_1}
-
-2️⃣ {beat_2}
-{beat_3}
-📊 NÚMEROS DA RODADA:
+{backstage_section}📊 NÚMEROS DA RODADA:
 {round_stats}
 
 ⚠️ Propositalmente, o modelo da OPTA, que fez 350K simulações para chegar nos resultados e favoritos da Copa, é a única fonte não permitida dos modelos consultarem.
 
-Se você não está entendendo nada, pf leia o post #1 dessa série:
+Chegou agora? O post #1 explica tudo:
 https://www.linkedin.com/posts/marcuscavalcanti_copacomachismo-brasil-brazil-share-7470889508763344896-6dqG/?utm_source=share&utm_medium=member_desktop&rcm=ACoAAAAiNX0BNM7cvCA_laP0QxrgOSoYAp3D9ko
 
 Próximo post: véspera/dia de Brasil x {next_post_game}, com o mapa recalculado.
@@ -131,88 +125,159 @@ def _truncate_words(text: str, limit: int) -> str:
     sentence_end = max(window.rfind(". "), window.rfind("! "), window.rfind("? "))
     if sentence_end >= int(limit * 0.45):
         return window[: sentence_end + 1]
+    clause_end = max(window.rfind("; "), window.rfind(" — "), window.rfind(", mas "))
+    if clause_end >= int(limit * 0.45):
+        return window[:clause_end].rstrip(",;") + "."
+    and_end = window.rfind(" e ")
+    if and_end >= int(limit * 0.6):
+        return window[:and_end].rstrip(",;") + "."
     cut = window.rsplit(" ", 1)[0]
     return cut.rstrip(",;:.") + "…"
 
 
-def _extract_beats(bundle: Any) -> list[str]:
-    """Bastidores determinísticos a partir do transcript da sala.
+JARGON_GLOSSARY = [
+    ("modelo principal", "modelo"),
+    ("sinal configurado", "sinal"),
+    ("title_pct", "chance de título"),
+    ("team_context", "contexto"),
+    ("rating_delta", "ajuste de nota"),
+    ("ratings", "notas de força"),
+    ("rating", "nota"),
+    ("player-prop", "aposta de desempenho individual"),
+    ("output", "resultado"),
+    ("source_urls", "fontes"),
+    ("scenario_pct", "chance do cruzamento"),
+    ("brazil_pct", "chance do Brasil"),
+    ("monte carlo", "simulação"),
+    ("weak_prior", "modo cauteloso"),
+    ("prior", "ponto de partida"),
+]
 
-    Prioridade: discordâncias válidas (a alma do debate), depois invalidações do
-    facilitador. O editor append-only pode enriquecer; o esqueleto nunca inventa."""
-    beats: list[str] = []
-    transcript = list(getattr(bundle, "meeting_transcript", []) or [])
-    for turn in transcript:
-        if len(beats) >= 3:
-            break
-        round_index = turn.get("round") if isinstance(turn, dict) else None
-        for response in (turn.get("responses", []) if isinstance(turn, dict) else []):
-            if len(beats) >= 3:
-                break
+# Comparados em forma normalizada (sem acento, minúsculas) — ver _normalize_beat.
+EVENT_HINTS = (
+    "lesao", "lesion", "fora da copa", "fora do ano", "corte", "cortado", "suspens",
+    "stale", "fantasma", "errado", "errada", "apto", "duvida", "desfalque",
+    "mercado", "odds", "cotac", "titular",
+)
+
+
+def _plain_language(sentence: str) -> str:
+    result = re.sub(r"\s*\([^)]*\)", "", sentence)
+    for jargon, plain in JARGON_GLOSSARY:
+        result = re.sub(rf"\b{re.escape(jargon)}\b", plain, result, flags=re.IGNORECASE)
+    return " ".join(result.split())
+
+
+def _sentence_score(sentence: str) -> int:
+    lowered = _normalize_beat(sentence)
+    score = 0
+    if any(hint in lowered for hint in EVENT_HINTS):
+        score += 2
+    if re.search(r"\d", sentence):
+        score += 1
+    if lowered.startswith(("concordo", "discordo", "sim,")):
+        score -= 1
+    return score
+
+
+def _best_sentence(answer: str) -> tuple[int, str]:
+    """Sentença com mais substância: evento concreto vale 2, número vale 1."""
+    best_score, best = 0, ""
+    for sentence in re.split(r"(?<=[.!?])\s+|;\s+", " ".join(str(answer or "").split())):
+        if len(sentence) < 25:
+            continue
+        score = _sentence_score(sentence)
+        if score > best_score:
+            best_score, best = score, sentence
+    if best:
+        best = re.sub(r"^\s*(?:\d+[\)\.]|[-–•])\s*", "", best)
+        head, separator, tail = best.partition(":")
+        if separator and len(head) <= 35 and _sentence_score(tail) >= best_score:
+            best = tail.strip()
+    return best_score, best
+
+
+def _extract_beats(bundle: Any) -> list[str]:
+    """Bastidores com a substância minerada das falas válidas da sala.
+
+    Cada bastidor carrega o fato concreto (jogador, evento, número) da sentença
+    mais rica da fala, com jargão traduzido. Regra do Marcus (11/jun): bastidor
+    sem substância não vale a tinta — sem 2 lances fortes, a seção sai do post."""
+    scored: list[tuple[int, str, str]] = []
+    for turn in getattr(bundle, "meeting_transcript", []) or []:
+        if not isinstance(turn, dict):
+            continue
+        round_index = turn.get("round")
+        for response in turn.get("responses", []) or []:
             if response.get("removed_from_main") or response.get("used_fallback"):
                 continue
-            if response.get("disagreed"):
-                if _normalize_beat(response.get("answer", "")).startswith("concordo"):
-                    if any("assinou embaixo" in beat for beat in beats):
-                        beats.append(
-                            f"Na rodada {round_index}, o {response.get('agent')} repetiu o ritual: conferiu na fonte antes de concordar."
-                        )
-                    else:
-                        beats.append(
-                            f"Na rodada {round_index}, o {response.get('agent')} só assinou embaixo do líder depois de conferir os números na fonte."
-                        )
-                else:
-                    beats.append(
-                        f"Na rodada {round_index}, o {response.get('agent')} bateu de frente com o líder, "
-                        "trouxe fontes próprias e fez a mesa recalcular."
-                    )
-    if len(beats) < 3:
-        for turn in transcript:
-            invalidated = turn.get("invalidated_protagonist_question") if isinstance(turn, dict) else None
-            if invalidated:
-                beats.append(
-                    f"A própria mesa anulou uma fala do {invalidated.get('agent')} por citar um adversário "
-                    "que nem pode cruzar com o Brasil naquela fase. Regra é regra: fora da chave, não vale."
+            if not response.get("disagreed"):
+                continue
+            score, sentence = _best_sentence(response.get("answer", ""))
+            if score < 2:
+                continue
+            fact = _truncate_words(_plain_language(sentence), 130)
+            if not fact.endswith((".", "!", "?", "…")):
+                fact += "."
+            agent = str(response.get("agent") or "")
+            if _normalize_beat(response.get("answer", "")).startswith("concordo"):
+                scored.append((score, agent, f"Rodada {round_index} — {agent} foi conferir antes: {fact}"))
+            else:
+                scored.append((score + 1, agent, f"Rodada {round_index} — {agent} bateu de frente: {fact}"))
+        invalidated = turn.get("invalidated_protagonist_question")
+        if invalidated:
+            scored.append(
+                (
+                    2,
+                    str(invalidated.get("agent") or ""),
+                    f"A mesa anulou uma fala do {invalidated.get('agent')}: citou adversário "
+                    "que nem pode cruzar com o Brasil naquela fase. Fora da chave, não vale.",
                 )
-            if len(beats) >= 3:
-                break
-    metadata = getattr(bundle, "metadata", {}) or {}
-    consensus_pct = metadata.get("agent_title_consensus_pct")
-    dispersion = metadata.get("agent_dispersion_pct")
-    rounds = metadata.get("meeting_rounds")
-    while len(beats) < 2:
-        if consensus_pct is not None and dispersion is not None and rounds:
-            beats.append(
-                f"A mesa fechou em {_pct(consensus_pct)} de hexa com diferença de só "
-                f"{str(dispersion).replace('.', ',')} ponto(s) entre os modelos, em {rounds} rodadas."
             )
-            consensus_pct = None
-        else:
-            beats.append(
-                "Rodada sem briga: os modelos convergiram cedo e o consenso fechou estável — quando há evidência boa, ninguém inventa discordância."
-            )
-    return beats[:3]
+    scored.sort(key=lambda item: -item[0])
+    if not scored:
+        return []
+    top_score, top_agent, top_beat = scored[0]
+    second = next((beat for _, agent, beat in scored[1:] if agent != top_agent), None)
+    if second is None and len(scored) > 1:
+        second = scored[1][2]
+    return [top_beat, second] if second else [top_beat]
+
+
+def _backstage_section(beats: list[str]) -> str:
+    if len(beats) < 2:
+        return ""
+    return (
+        "DOIS BASTIDORES DA REUNIÃO DE HOJE:\n\n"
+        f"1️⃣ {beats[0]}\n\n"
+        f"2️⃣ {beats[1]}\n\n"
+    )
 
 
 QUANTI_HINTS = ("rating", "odds", "bet", "mercado", "sofascore", "desempenho", "performance", "elo")
 
 
-def _build_round_stats(bundle: Any) -> str:
-    """Três números da rodada, escolhidos por peso de interesse nos dados do run."""
-    candidates: list[tuple[float, str]] = []
+def _build_round_stats(bundle: Any, *, slots: int = 3) -> str:
+    """Números da rodada: pool ponderado, bullets densos, sem dado repetido."""
+    candidates: list[tuple[float, str, str]] = []
     metadata = getattr(bundle, "metadata", {}) or {}
-
-    participation = getattr(bundle, "model_participation", {}) or {}
-    messages = participation.get("total_messages")
-    rounds = participation.get("total_rounds")
-    if messages and rounds:
-        candidates.append((70, f"💬 {messages} mensagens em {rounds} rodadas de debate"))
 
     costs = (getattr(bundle, "model_token_costs", {}) or {}).get("total") or {}
     cost_usd = costs.get("cost_usd")
-    if cost_usd:
+    calls = costs.get("calls")
+    tokens_k = int(costs.get("total_tokens") or 0) // 1000
+    if cost_usd and calls and tokens_k:
         usd = f"{float(cost_usd):.2f}".replace(".", ",")
-        candidates.append((90, f"💰 reunião inteira: US$ {usd} de IA"))
+        candidates.append(
+            (95, "custo", f"💰 US$ {usd} a reunião — {calls} chamadas, {tokens_k} mil tokens")
+        )
+    elif cost_usd:
+        usd = f"{float(cost_usd):.2f}".replace(".", ",")
+        candidates.append((90, "custo", f"💰 reunião inteira: US$ {usd} de IA"))
+    if tokens_k >= 350:
+        candidates.append(
+            (85, "custo", f"📚 {tokens_k} mil tokens lidos e escritos — um 'Senhor dos Anéis' por reunião")
+        )
 
     influence = getattr(bundle, "model_influence_pct", {}) or {}
     valid_influence = {k: float(v) for k, v in influence.items() if v is not None}
@@ -220,22 +285,37 @@ def _build_round_stats(bundle: Any) -> str:
         top_agent, top_value = max(valid_influence.items(), key=lambda kv: kv[1])
         low_agent, low_value = min(valid_influence.items(), key=lambda kv: kv[1])
         gap_weight = 60 + min(30.0, top_value - low_value)
-        candidates.append(
-            (
-                gap_weight,
-                f"🧭 mais influente: {top_agent} ({_pct(top_value)}); menos: {low_agent} ({_pct(low_value)})",
+        tied = [k for k, v in valid_influence.items() if k != top_agent and abs(v - top_value) < 0.05]
+        if tied:
+            line = (
+                f"🧭 {top_agent.split()[0]} e {tied[0].split()[0]} empataram como voz mais forte "
+                f"({_pct(top_value)}); {low_agent.split()[0]} quase não pesou ({_pct(low_value)})"
             )
-        )
+        else:
+            line = (
+                f"🧭 {top_agent.split()[0]} mandou no número final ({_pct(top_value)}); "
+                f"{low_agent.split()[0]} quase não pesou ({_pct(low_value)})"
+            )
+        candidates.append((gap_weight, "influencia", line))
 
-    sources = getattr(bundle, "sources", None)
-    if sources:
-        candidates.append((55, f"🔎 {len(sources)} fontes consultadas"))
+    participation = getattr(bundle, "model_participation", {}) or {}
+    messages = participation.get("total_messages")
+    rounds = participation.get("total_rounds")
+    sources = getattr(bundle, "sources", None) or []
+    if messages and rounds and sources:
+        candidates.append(
+            (70, "debate", f"💬 {messages} mensagens, {rounds} rodadas e {len(sources)} fontes até bater o martelo")
+        )
+    elif messages and rounds:
+        candidates.append((68, "debate", f"💬 {messages} mensagens em {rounds} rodadas de debate"))
+    elif sources:
+        candidates.append((55, "debate", f"🔎 {len(sources)} fontes consultadas"))
 
     mc = metadata.get("monte_carlo") or {}
     iterations = mc.get("iterations")
     if iterations:
         total = int(iterations) * 2
-        candidates.append((50, f"🎲 {total // 1000} mil copas simuladas no dia"))
+        candidates.append((50, "simulacao", f"🎲 {total // 1000} mil copas simuladas no dia"))
 
     team_context = mc.get("team_context") or {}
     signals = [
@@ -253,6 +333,7 @@ def _build_round_stats(bundle: Any) -> str:
         candidates.append(
             (
                 65,
+                "contexto",
                 f"⚖️ contexto: {quanti_pct}% números, {100 - quanti_pct}% fatos (lesões, notícias)",
             )
         )
@@ -260,10 +341,18 @@ def _build_round_stats(bundle: Any) -> str:
     opponent_room = metadata.get("parallel_opponent_debriefing") or {}
     if opponent_room.get("enabled") and not int(opponent_room.get("rounds") or 0):
         candidates.append(
-            (75, "🕐 a sala de adversários estourou o tempo; a principal seguiu com a simulação pura, sem travar")
+            (75, "sala", "🕐 sala dos adversários estourou o tempo; a principal seguiu sem travar")
         )
 
-    chosen = [text for _, text in sorted(candidates, key=lambda item: -item[0])[:3]]
+    chosen: list[str] = []
+    used_keys: set[str] = set()
+    for _, key, line in sorted(candidates, key=lambda item: -item[0]):
+        if key in used_keys:
+            continue
+        used_keys.add(key)
+        chosen.append(line)
+        if len(chosen) >= slots:
+            break
     return "\n".join(f"• {item}" for item in chosen)
 
 
@@ -350,8 +439,7 @@ def render_template_post(bundle: Any, *, post_index: int, run_date: date | None 
 
     mc_stages = ((getattr(bundle, "metadata", {}) or {}).get("monte_carlo") or {}).get("stage_probabilities") or {}
     stage = dict(getattr(bundle, "stage_probabilities", {}) or {})
-    beats = _extract_beats(bundle)
-    beat_3 = f"\n3️⃣ {beats[2]}\n" if len(beats) >= 3 else ""
+    backstage = _backstage_section(_extract_beats(bundle))
 
     bolao = [win]
     if draw_value:
@@ -366,7 +454,7 @@ def render_template_post(bundle: Any, *, post_index: int, run_date: date | None 
         f"{win.rstrip('%')}/{_pct_int(draw_value).rstrip('%') if draw_value else '0'}/"
         f"{_pct_int(loss_value).rstrip('%') if loss_value else '0'} · Hexa: {title_pct_text}"
     )
-    round_stats = _build_round_stats(bundle)
+    round_stats = _build_round_stats(bundle, slots=3 if backstage else 4)
     text = TEMPLATE.format(
         round_header=round_header,
         round_stats=round_stats,
@@ -381,9 +469,7 @@ def render_template_post(bundle: Any, *, post_index: int, run_date: date | None 
         sf_pct=_pct_int(stage.get("semifinal")),
         final_pct=_pct_int(stage.get("final")),
         title_pct=title_pct_text,
-        beat_1=beats[0],
-        beat_2=beats[1],
-        beat_3=beat_3,
+        backstage_section=backstage,
         next_post_game=f"{getattr(featured, 'opponent', '')} ({_short_date(getattr(featured, 'match_date', ''))})",
         palpite_bolao=palpite,
     )
@@ -393,20 +479,27 @@ def render_template_post(bundle: Any, *, post_index: int, run_date: date | None 
 
 
 def _trim_to_limit(text: str, bundle: Any) -> str:
-    if len(text) <= MAX_POST_CHARS:
-        return text
-    without_beat3 = re.sub(r"\n3️⃣ [^\n]*\n", "", text)
-    if len(without_beat3) <= MAX_POST_CHARS:
-        return without_beat3
+    """Escada de corte: números primeiro, depois encurta bastidores; estádios são o último recurso."""
+    trimmed = text
     for _ in range(3):
-        if len(without_beat3) <= MAX_POST_CHARS:
-            return without_beat3
-        section = re.search(r"NÚMEROS DA RODADA:\n(?:• [^\n]+\n)*• [^\n]+", without_beat3)
+        if len(trimmed) <= MAX_POST_CHARS:
+            return trimmed
+        section = re.search(r"NÚMEROS DA RODADA:\n(?:• [^\n]+\n)*• [^\n]+", trimmed)
         if not section or section.group(0).count("• ") <= 1:
             break
         trimmed_section = section.group(0).rsplit("\n• ", 1)[0]
-        without_beat3 = without_beat3[: section.start()] + trimmed_section + without_beat3[section.end():]
-    no_venues = re.sub(r"(➡️ [^\n(]+\([^)]*\)) - [^\n]+", r"\1", without_beat3)
+        trimmed = trimmed[: section.start()] + trimmed_section + trimmed[section.end():]
+    for limit in (155, 135, 120, 95):
+        if len(trimmed) <= MAX_POST_CHARS:
+            return trimmed
+        trimmed = re.sub(
+            r"(?m)^(1️⃣|2️⃣) (.+)$",
+            lambda match: f"{match.group(1)} {_truncate_words(match.group(2), limit)}",
+            trimmed,
+        )
+    if len(trimmed) <= MAX_POST_CHARS:
+        return trimmed
+    no_venues = re.sub(r"(➡️ [^\n(]+\([^)]*\)) - [^\n]+", r"\1", trimmed)
     if len(no_venues) <= MAX_POST_CHARS:
         return no_venues
     raise ValueError(
@@ -424,7 +517,6 @@ def validate_template_post(text: str, bundle: Any) -> None:
     for sentinel in (
         "O CAMINHO ATÉ O HEXA",
         "RESUMO DA CAMINHADA",
-        "DOIS BASTIDORES DA REUNIÃO DE HOJE:",
         "Propositalmente, o modelo da OPTA",
         "NÚMEROS DA RODADA:",
         "#CopaComAchismo #Brasil #Brazil #WorldCup2026 #Futebol #Football #Soccer #Hexa",
@@ -437,6 +529,8 @@ def validate_template_post(text: str, bundle: Any) -> None:
     for phase in PHASE_ORDER:
         if PHASE_HEADERS[phase] not in text:
             errors.append(f"fase ausente do caminho: {phase}")
+    if "1️⃣" in text and "DOIS BASTIDORES DA REUNIÃO DE HOJE:" not in text:
+        errors.append("bastidores presentes sem o cabeçalho fixo da seção")
     if errors:
         raise ValueError("post de template inválido: " + "; ".join(errors))
 
