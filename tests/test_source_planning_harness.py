@@ -9,6 +9,8 @@ from worldcup_brazil.consensus import AgentOpinion
 from worldcup_brazil.consensus import build_consensus
 from worldcup_brazil.pipeline import (
     _has_opta_marker,
+    _new_token_cost_ledger,
+    _is_format_repairable_planning_reason,
     _sanitize_source_planning_opinions,
     _source_planning_readiness_report,
     build_report_bundle,
@@ -489,6 +491,135 @@ def test_source_planning_self_heals_by_retrying_only_unready_agents(
     assert [event for event in events if event["step"] == "agent_source_quorum"][-1]["status"] == "finish"
 
 
+def test_source_planning_repairs_partial_json_before_meeting_even_when_quorum_is_met(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    async def fake_call_all_agents(prompt, *, specs, baseline_title_pct, timeout, allow_local_fallback, progress_callback=None):
+        calls.append(
+            {
+                "slots": [spec.slot for spec in specs],
+                "timeout": timeout,
+                "prompt": prompt,
+            }
+        )
+        if len(calls) == 1:
+            return [
+                AgentOpinion(
+                    agent="Opus 4.8",
+                    title_pct=8.0,
+                    summary=(
+                        "Resposta em JSON parcial; mantive leitura conservadora "
+                        "até o modelo devolver campos auditáveis."
+                    ),
+                ),
+                AgentOpinion(
+                    agent="GPT 5.5",
+                    title_pct=8.3,
+                    summary="Plano com fonte verificável.",
+                    source_urls=["https://example.com/gpt"],
+                ),
+                AgentOpinion(
+                    agent="Perplexity Pro",
+                    title_pct=8.4,
+                    summary="Plano com fonte verificável.",
+                    source_urls=["https://example.com/perplexity"],
+                ),
+                AgentOpinion(
+                    agent="DeepSeek V4 Pro",
+                    title_pct=8.1,
+                    summary="Plano com busca verificável.",
+                    source_queries=["Brazil Morocco Haiti Scotland World Cup 2026 odds Elo Sofascore"],
+                ),
+            ]
+        assert calls[-1]["slots"] == ["Opus 4.8"]
+        assert calls[-1]["timeout"] == 45
+        repair_prompt = str(calls[-1]["prompt"])
+        assert "JSON veio parcial" in repair_prompt
+        assert "SOMENTE o objeto JSON completo" in repair_prompt
+        return [
+            AgentOpinion(
+                agent="Opus 4.8",
+                title_pct=8.2,
+                summary="Reparo de formato com fontes auditáveis.",
+                source_urls=["https://example.com/opus-repaired"],
+            )
+        ]
+
+    async def fake_run_model_meeting(
+        *,
+        config,
+        planning_opinions,
+        generated_at,
+        agent_specs,
+        baseline_title_pct,
+        allow_agent_fallback,
+        watchdog,
+        token_cost_ledger=None,
+        **_kwargs,
+    ):
+        slots = [spec.slot for spec in agent_specs]
+        assert slots == ["Opus 4.8", "GPT 5.5", "Perplexity Pro", "DeepSeek V4 Pro"]
+        consensus = build_consensus(planning_opinions, agent_slots=slots)
+        return consensus, planning_opinions, [], planning_opinions
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+    monkeypatch.setattr("worldcup_brazil.pipeline._run_model_meeting", fake_run_model_meeting)
+    watchdog_path = tmp_path / "watchdog.jsonl"
+
+    artifacts = asyncio.run(
+        build_report_bundle(
+            config={
+                "baseline_title_pct": 8.0,
+                "minimum_source_ready_agents": 3,
+                "source_planning_repair_attempts": 1,
+                "source_planning_format_repair_timeout_seconds": 45,
+                "meeting_min_participants": 3,
+                "agents": [
+                    {"slot": "Opus 4.8", "provider": "anthropic", "model": "opus", "endpoint": "x"},
+                    {"slot": "GPT 5.5", "provider": "openai", "model": "gpt-5.5", "endpoint": "x"},
+                    {"slot": "Perplexity Pro", "provider": "openai-compatible", "model": "sonar", "endpoint": "x"},
+                    {"slot": "DeepSeek V4 Pro", "provider": "openai-compatible", "model": "deepseek", "endpoint": "x"},
+                ],
+                "group_matches": [{"opponent": "Marrocos", "brazil_pct": 59.0}],
+                "knockout_matches": [],
+            },
+            source_memory=SourceMemory(tmp_path / "source_memory.json"),
+            generated_at=datetime(2026, 6, 7, 12, tzinfo=timezone.utc),
+            watchdog=RunWatchdog(path=watchdog_path, verbose=False),
+        )
+    )
+
+    assert calls[0]["slots"] == ["Opus 4.8", "GPT 5.5", "Perplexity Pro", "DeepSeek V4 Pro"]
+    assert calls[1]["slots"] == ["Opus 4.8"]
+    assert artifacts.bundle.source_plan_by_model["Opus 4.8"]["source_urls"] == [
+        "https://example.com/opus-repaired"
+    ]
+    events = [json.loads(line) for line in watchdog_path.read_text(encoding="utf-8").splitlines()]
+    assert any(
+        event["step"] == "agent_source_format_repair"
+        and event["status"] == "start"
+        and event["extra"].get("agents") == ["Opus 4.8"]
+        for event in events
+    )
+
+
+def test_source_planning_format_repair_does_not_catch_environment_failures() -> None:
+    assert _is_format_repairable_planning_reason(
+        "fallback operacional: Resposta removida do planejamento de fontes por devolver resposta parcial "
+        "ou sem campos auditáveis."
+    )
+    assert not _is_format_repairable_planning_reason(
+        "fallback operacional: Modelo sem resposta externa verificável porque HTTP Error 429: Too Many Requests."
+    )
+    assert not _is_format_repairable_planning_reason(
+        "fallback operacional: busca/fetch externo indisponível ou sem permissão; "
+        "source_queries não provam busca executada."
+    )
+
+
 def test_agent_removal_watchdog_keeps_source_planning_reason(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -950,3 +1081,111 @@ def test_source_planning_self_heal_accepts_query_backed_repair_language(
     assert [event for event in (
         json.loads(line) for line in watchdog_path.read_text(encoding="utf-8").splitlines()
     ) if event["step"] == "agent_source_quorum"][-1]["status"] == "finish"
+
+
+def test_format_repair_recovers_truncated_slot_even_with_quorum_met(monkeypatch) -> None:
+    """Regressão do run 615b0948 (11/jun): Opus caiu no planejamento por JSON
+    truncado com o quórum já fechado em 3/3 e foi para o caminho caro (probe na
+    sala). Defeito de formato agora ganha um retry curto ANTES das salas."""
+    from worldcup_brazil.agents import AgentSpec
+    from worldcup_brazil.pipeline import _repair_format_only_planning_removals
+
+    config = {"require_agent_source_plan": True, "minimum_source_ready_agents": 3}
+    specs = [
+        AgentSpec(slot="Opus 4.8", provider="anthropic", model="claude-opus-4-8",
+                  env_api_key="ANTHROPIC_API_KEY", endpoint="https://api.anthropic.com/v1/messages"),
+        AgentSpec(slot="GPT 5.5", provider="openai", model="gpt-5.5",
+                  env_api_key="OPENAI_API_KEY", endpoint="https://api.openai.com/v1/responses"),
+    ]
+    healthy = [
+        AgentOpinion(agent="GPT 5.5", title_pct=8.0, summary="Plano ok.",
+                     source_urls=["https://example.com/a"]),
+        AgentOpinion(agent="Perplexity Pro", title_pct=8.1, summary="Plano ok.",
+                     source_urls=["https://example.com/b"]),
+        AgentOpinion(agent="DeepSeek V4 Pro", title_pct=8.2, summary="Plano ok.",
+                     source_urls=["https://example.com/c"]),
+    ]
+    report = {
+        "quorum_met": True,
+        "ready_count": 3,
+        "required_count": 3,
+        "removed_agents": [
+            {"agent": "Opus 4.8",
+             "reason": "devolver resposta parcial ou sem campos auditáveis"},
+        ],
+    }
+    repair_calls: list[list[str]] = []
+
+    async def fake_call_all_agents(prompt, *, specs, **kwargs):
+        repair_calls.append([spec.slot for spec in specs])
+        assert "SOMENTE o objeto JSON completo" in prompt
+        return [
+            AgentOpinion(agent="Opus 4.8", title_pct=7.9,
+                         summary="Plano reenviado completo com as mesmas fontes.",
+                         source_urls=["https://example.com/opus"])
+        ]
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+
+    merged, updated = asyncio.run(
+        _repair_format_only_planning_removals(
+            config=config,
+            planning_opinions=healthy,
+            source_readiness_report=report,
+            agent_specs=specs,
+            generated_at=datetime(2026, 6, 11, tzinfo=timezone.utc),
+            baseline_title_pct=11.0,
+            allow_agent_fallback=True,
+            watchdog=None,
+            token_cost_ledger=_new_token_cost_ledger({}),
+        )
+    )
+
+    assert repair_calls == [["Opus 4.8"]]
+    removed_now = {entry["agent"] for entry in updated.get("removed_agents", [])}
+    assert "Opus 4.8" not in removed_now
+    assert any(op.agent == "Opus 4.8" and op.source_urls for op in merged)
+
+
+def test_format_repair_skips_environment_class_removals(monkeypatch) -> None:
+    """Remoção por ambiente (busca indisponível, 429) não ganha retry de formato:
+    retry não conserta quota — o caminho dela é a política seletiva de reentrada."""
+    from worldcup_brazil.agents import AgentSpec
+    from worldcup_brazil.pipeline import _repair_format_only_planning_removals
+
+    config = {"require_agent_source_plan": True, "minimum_source_ready_agents": 3}
+    specs = [
+        AgentSpec(slot="Gemini Pro", provider="google-gemini", model="gemini-3.5-flash",
+                  env_api_key="GEMINI_API_KEY",
+                  endpoint="https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"),
+    ]
+    report = {
+        "quorum_met": True,
+        "ready_count": 3,
+        "required_count": 3,
+        "removed_agents": [
+            {"agent": "Gemini Pro",
+             "reason": "falha operacional sem resposta externa verificável (HTTP 429)"},
+        ],
+    }
+
+    async def fake_call_all_agents(prompt, *, specs, **kwargs):
+        raise AssertionError("não deveria chamar reparo para remoção de ambiente")
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+
+    merged, updated = asyncio.run(
+        _repair_format_only_planning_removals(
+            config=config,
+            planning_opinions=[],
+            source_readiness_report=report,
+            agent_specs=specs,
+            generated_at=datetime(2026, 6, 11, tzinfo=timezone.utc),
+            baseline_title_pct=11.0,
+            allow_agent_fallback=True,
+            watchdog=None,
+            token_cost_ledger=_new_token_cost_ledger({}),
+        )
+    )
+
+    assert updated is report

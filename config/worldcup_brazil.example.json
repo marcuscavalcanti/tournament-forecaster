@@ -156,7 +156,7 @@
       "browser_command": null,
       "prefer_bridge": true,
       "notes": "O slot Opus é CLI-first: se o binário claude estiver no PATH, o script usa claude --print --verbose --output-format stream-json --model $CLAUDE_CLI_MODEL --effort $CLAUDE_CLI_EFFORT {prompt} e extrai o result final do stream, mesmo que ANTHROPIC_API_KEY exista. Defaults: CLAUDE_CLI_MODEL=claude-opus-4-8 e CLAUDE_CLI_EFFORT=high para régua comum entre modelos. Para override total, defina CLAUDE_CLI_COMMAND. Para forçar API Anthropic, defina CLAUDE_PREFER_BRIDGE=false ou prefer_bridge=false.",
-      "max_output_tokens": 6000
+      "max_output_tokens": 8000
     },
     {
       "slot": "GPT 5.5",
@@ -331,5 +331,7 @@
     }
   ],
   "exclude_slots_failing_preflight": true,
-  "allow_informed_agreement_votes": true
+  "allow_informed_agreement_votes": true,
+  "repair_format_removals_with_quorum": true,
+  "source_planning_format_repair_timeout_seconds": 90
 }

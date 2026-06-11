@@ -176,6 +176,19 @@ def _new_token_cost_ledger(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def _token_cost_entry(ledger: dict[str, Any], agent: str) -> dict[str, Any]:
+    ledger.setdefault(
+        "total",
+        {
+            "calls": 0,
+            "fallback_calls": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "cost_usd": 0.0,
+            "cost_brl": 0.0,
+        },
+    )
+    ledger.setdefault("by_model", {})
     return ledger["by_model"].setdefault(
         agent,
         {
@@ -724,6 +737,146 @@ def _emit_source_planning_readiness(
         ),
         extra=report,
     )
+
+
+def _is_format_repairable_planning_reason(reason: str) -> bool:
+    """Classe de remoção recuperável por retry curto de formatação.
+
+    Regressão do run 615b0948 (11/jun): Opus passou no preflight com busca
+    funcionando e caiu no planejamento por JSON truncado — defeito de formato,
+    não de capacidade nem de ambiente. Remoções por ambiente (busca indisponível,
+    429, timeout) NÃO entram aqui: retry de formato não conserta quota."""
+    normalized = _normalize_text(str(reason or ""))
+    format_markers = (
+        "resposta parcial",
+        "resposta em json parcial",
+        "json parcial",
+        "devolver resposta parcial",
+        "payload parcial",
+        "sem campos auditaveis",
+    )
+    environment_markers = (
+        "429",
+        "too many requests",
+        "quota",
+        "rate limit",
+        "session limit",
+        "timeout",
+        "timed out",
+        "sem permissao",
+        "permissao nao concedida",
+        "permission",
+        "sem ferramenta",
+        "nao ha ferramenta",
+        "busca/fetch externo indisponivel",
+        "busca externa/fetch nao disponivel",
+        "fetch externo indisponivel",
+        "sem resposta externa verificavel",
+    )
+    return any(marker in normalized for marker in format_markers) and not any(
+        marker in normalized for marker in environment_markers
+    )
+
+
+def _source_planning_format_repair_prompt(*, config: dict[str, Any], generated_at: datetime) -> str:
+    return (
+        "REPARO DE FORMATAÇÃO DO PLANEJAMENTO DE FONTES.\n"
+        "Sua resposta anterior chegou com JSON veio parcial, truncado ou sem campos auditáveis. "
+        "Reenvie somente o objeto JSON completo e válido; SOMENTE o objeto JSON completo deve aparecer, "
+        "sem markdown, sem comentário antes ou depois, e sem texto fora do JSON. "
+        "Não refaça o raciocínio em prosa.\n\n"
+        f"{_agent_owned_fresh_search_contract()}\n"
+        f"{_effort_latency_instruction()}\n\n"
+        "Campos obrigatórios no JSON: self_identification, title_pct, summary, opening_argument, critique, "
+        "adjustment, source_urls, source_queries, scenario_probabilities, team_context_signals. "
+        "Use as fontes que você acabou de buscar neste run; se precisar substituir uma fonte quebrada, use "
+        "source_queries específicas e auditáveis. Não invente URL, ranking, score, lesão, odd, notícia ou método. "
+        "Source_queries só contam quando representam busca realmente executada por você agora.\n\n"
+        f"Gerado em UTC: {generated_at.isoformat()}\n"
+        f"Escopo de jogos configurado: {_configured_matches_for_prompt(config)}\n"
+    )
+
+
+async def _repair_format_only_planning_removals(
+    *,
+    config: dict[str, Any],
+    planning_opinions: list[Any],
+    source_readiness_report: dict[str, Any],
+    agent_specs: list[Any],
+    generated_at: datetime,
+    baseline_title_pct: float,
+    allow_agent_fallback: bool,
+    watchdog: RunWatchdog | None,
+    token_cost_ledger: dict[str, Any],
+) -> tuple[list[Any], dict[str, Any]]:
+    """Reparo barato de formato mesmo com quórum atingido, antes das salas abrirem.
+
+    O self-heal clássico só dispara sem quórum; com quórum 3/3 o slot truncado ia
+    direto para o caminho caro (probe durante a sala, agora seletivo) ou ficava de
+    fora. Uma passada curta aqui devolve a voz extra para a sala de adversários e
+    para a rodada 1 da principal, sem afrouxar nenhuma régua de mérito."""
+    if not bool(config.get("repair_format_removals_with_quorum", True)):
+        return planning_opinions, source_readiness_report
+    format_slots = [
+        str(entry["agent"])
+        for entry in source_readiness_report.get("removed_agents", [])
+        if _is_format_repairable_planning_reason(str(entry.get("reason", "")))
+    ]
+    repair_specs = [spec for spec in agent_specs if spec.slot in format_slots]
+    if not repair_specs:
+        return planning_opinions, source_readiness_report
+    timeout = int(
+        config.get(
+            "source_planning_format_repair_timeout_seconds",
+            min(90, int(config.get("agent_timeout_seconds", 90))),
+        )
+    )
+    if watchdog:
+        watchdog.start(
+            "agent_source_format_repair",
+            detail=(
+                f"reparo de formatação para {', '.join(spec.slot for spec in repair_specs)}; "
+                f"timeout_s={timeout}; quórum já atingido, sala não espera além deste passo"
+            ),
+            extra={"agents": [spec.slot for spec in repair_specs], "timeout_seconds": timeout},
+        )
+    repair_prompt = _source_planning_format_repair_prompt(config=config, generated_at=generated_at)
+    raw_repair_opinions = await call_all_agents(
+        repair_prompt,
+        specs=repair_specs,
+        baseline_title_pct=baseline_title_pct,
+        timeout=timeout,
+        allow_local_fallback=allow_agent_fallback,
+    )
+    _record_token_costs(
+        token_cost_ledger,
+        config=config,
+        prompt=repair_prompt,
+        opinions=raw_repair_opinions,
+        stage="source_planning_format_repair",
+    )
+    repaired_opinions = _sanitize_source_planning_opinions(
+        raw_repair_opinions,
+        baseline_title_pct=baseline_title_pct,
+        config=config,
+    )
+    merged_opinions = _merge_planning_opinions(list(planning_opinions), repaired_opinions, agent_specs)
+    updated_report = _source_planning_readiness_report(merged_opinions, config)
+    recovered = [
+        slot
+        for slot in format_slots
+        if slot not in {str(entry["agent"]) for entry in updated_report.get("removed_agents", [])}
+    ]
+    if watchdog:
+        watchdog.finish(
+            "agent_source_format_repair",
+            detail=(
+                f"recuperados: {', '.join(recovered) or 'nenhum'}; "
+                f"prontos agora: {updated_report.get('ready_count')}/{updated_report.get('required_count')}"
+            ),
+            extra={"recovered": recovered},
+        )
+    return merged_opinions, updated_report
 
 
 def _source_planning_repair_prompt(
@@ -5248,6 +5401,18 @@ async def build_report_bundle(
         _emit_source_planning_readiness(watchdog, source_readiness_report, final=False)
     if not bool(source_readiness_report["quorum_met"]):
         planning_opinions, source_readiness_report = await _self_heal_source_planning_quorum(
+            config=config,
+            planning_opinions=planning_opinions,
+            source_readiness_report=source_readiness_report,
+            agent_specs=agent_specs,
+            generated_at=generated_at,
+            baseline_title_pct=baseline_title_pct,
+            allow_agent_fallback=allow_agent_fallback,
+            watchdog=watchdog,
+            token_cost_ledger=token_cost_ledger,
+        )
+    else:
+        planning_opinions, source_readiness_report = await _repair_format_only_planning_removals(
             config=config,
             planning_opinions=planning_opinions,
             source_readiness_report=source_readiness_report,
