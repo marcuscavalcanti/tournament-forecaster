@@ -88,7 +88,7 @@ def test_template_post_fills_all_placeholders_within_limit() -> None:
     assert "16 avos em 99%" in text
     assert "levanta a taça em 8,6%" in text
     assert "📊 NÚMEROS DA RODADA:" in text
-    assert text.split("NÚMEROS DA RODADA:")[1].split("⚠️")[0].count("• ") >= 2
+    assert text.split("NÚMEROS DA RODADA:")[1].split("⚠️")[0].count("• ") >= 1
     assert "Opus 4.8 bateu de frente com o líder" in text
     assert "Galera do bolão: 59 / 24 / 17." in text
 

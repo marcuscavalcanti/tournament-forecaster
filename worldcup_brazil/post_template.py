@@ -398,11 +398,11 @@ def _trim_to_limit(text: str, bundle: Any) -> str:
     without_beat3 = re.sub(r"\n3️⃣ [^\n]*\n", "", text)
     if len(without_beat3) <= MAX_POST_CHARS:
         return without_beat3
-    for _ in range(2):
+    for _ in range(3):
         if len(without_beat3) <= MAX_POST_CHARS:
             return without_beat3
         section = re.search(r"NÚMEROS DA RODADA:\n(?:• [^\n]+\n)*• [^\n]+", without_beat3)
-        if not section or section.group(0).count("• ") <= 2:
+        if not section or section.group(0).count("• ") <= 1:
             break
         trimmed_section = section.group(0).rsplit("\n• ", 1)[0]
         without_beat3 = without_beat3[: section.start()] + trimmed_section + without_beat3[section.end():]
