@@ -121,3 +121,45 @@ def test_fetch_sources_concurrently_uses_source_bulkhead_per_host(monkeypatch) -
     assert max_running_by_host["a.example"] == 1
     assert max_running_by_host["b.example"] == 1
     assert ("start", "B1") in order[:2]
+
+
+def test_sources_open_url_retries_transient_urlerror(monkeypatch) -> None:
+    """Espelho de agents.py (auditoria 11/jun): blip de DNS/TLS na busca de fontes
+    era single-shot e derrubava a coleta da rodada sem usar as 3 tentativas."""
+    import urllib.error
+
+    from worldcup_brazil import sources
+
+    attempts = {"count": 0}
+
+    def fake_urlopen(request, timeout):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise urllib.error.URLError("dns blip")
+        return "RESPONSE"
+
+    monkeypatch.setenv("HTTP_MAX_ATTEMPTS", "3")  # não herdar env do host
+    monkeypatch.setattr(sources.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(sources.time, "sleep", lambda seconds: None)
+
+    assert sources._open_url_with_retries(object(), timeout=5) == "RESPONSE"
+    assert attempts["count"] == 2
+
+
+def test_sources_retry_after_cap_mirrors_agents(monkeypatch) -> None:
+    """O clone de retry em sources.py precisa do MESMO contrato de Retry-After do
+    agents.py — o pin só no original deixava o espelho regredir sem alarme."""
+    import urllib.error
+
+    from worldcup_brazil import sources
+
+    exc = urllib.error.HTTPError(
+        url="https://api.example.com/x", code=429, msg="Too Many Requests",
+        hdrs={"Retry-After": "30"}, fp=None,
+    )
+
+    monkeypatch.delenv("RETRY_AFTER_MAX_SECONDS", raising=False)
+    assert sources._retry_delay_seconds(1, exc) == 30.0
+
+    monkeypatch.setenv("RETRY_AFTER_MAX_SECONDS", "20")
+    assert sources._retry_delay_seconds(1, exc) == 20.0

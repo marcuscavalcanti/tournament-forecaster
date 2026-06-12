@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
+import email.utils
 import http.client
 import json
 import os
@@ -28,6 +30,24 @@ DEFAULT_PREFLIGHT_TIMEOUT_SECONDS = 180
 DEFAULT_HTTP_MAX_ATTEMPTS = 3
 DEFAULT_HTTP_BACKOFF_BASE_SECONDS = 1.0
 DEFAULT_HTTP_BACKOFF_MAX_SECONDS = 12.0
+DEFAULT_RETRY_AFTER_MAX_SECONDS = 60.0
+
+# Transientes por natureza: valem retry com o mesmo backoff dos HTTP 5xx/429.
+# Regressão da auditoria 11/jun (Perplexity 0,5% de influência por US$0,95 no run
+# 615b0948): TCP reset, socket timeout, blip de DNS/TLS e body 200 truncado
+# propagavam single-shot até o fallback local e ejetavam o slot da rodada inteira —
+# a maquinaria de retry existia, mas só HTTPError entrava no loop.
+RETRYABLE_TRANSIENT_EXCEPTIONS = (
+    urllib.error.URLError,
+    TimeoutError,
+    OSError,
+    http.client.HTTPException,
+    json.JSONDecodeError,
+    # Body truncado no meio de caractere multi-byte (payloads pt-BR: "seleção",
+    # "título") levanta UnicodeDecodeError antes do json.loads — mesma falha
+    # transiente do JSONDecodeError, um byte de diferença.
+    UnicodeDecodeError,
+)
 DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS = 20.0
 RETRYABLE_HTTP_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
 DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
@@ -101,6 +121,16 @@ def _http_connect_timeout_seconds(total_timeout: int | float) -> float:
     return max(1.0, min(DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS, float(total_timeout)))
 
 
+def _retry_after_max_seconds() -> float:
+    value = os.environ.get("RETRY_AFTER_MAX_SECONDS")
+    if not value:
+        return DEFAULT_RETRY_AFTER_MAX_SECONDS
+    try:
+        return max(1.0, float(value))
+    except ValueError:
+        return DEFAULT_RETRY_AFTER_MAX_SECONDS
+
+
 def _retry_after_seconds(exc: urllib.error.HTTPError) -> float | None:
     headers = getattr(exc, "headers", None)
     if not headers:
@@ -109,15 +139,28 @@ def _retry_after_seconds(exc: urllib.error.HTTPError) -> float | None:
     if not value:
         return None
     try:
-        return max(0.0, float(value))
+        seconds = float(value)
     except ValueError:
-        return None
+        try:
+            retry_at = email.utils.parsedate_to_datetime(str(value))
+        except (TypeError, ValueError):
+            return None
+        if retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=datetime.timezone.utc)
+        seconds = (retry_at - datetime.datetime.now(datetime.timezone.utc)).total_seconds()
+    # Valor zero ou data no passado (clock skew): ignorar o header e cair no
+    # backoff exponencial, em vez de re-bater imediatamente com delay 0.
+    return seconds if seconds > 0 else None
 
 
-def _retry_delay_seconds(attempt_index: int, exc: urllib.error.HTTPError) -> float:
-    retry_after = _retry_after_seconds(exc)
-    if retry_after is not None:
-        return min(retry_after, _http_backoff_max_seconds())
+def _retry_delay_seconds(attempt_index: int, exc: Exception) -> float:
+    if isinstance(exc, urllib.error.HTTPError):
+        retry_after = _retry_after_seconds(exc)
+        if retry_after is not None:
+            # Retry-After do servidor tem cap próprio: clampado ao cap exponencial
+            # de 12s, um 429 com Retry-After: 30 dormia 12s, caía de volta na MESMA
+            # janela de rate-limit e exauria as 3 tentativas em ~24s.
+            return min(retry_after, _retry_after_max_seconds())
     base = _http_backoff_base_seconds()
     exponential = base * (2 ** max(0, attempt_index - 1))
     jitter = random.uniform(0.0, min(base, 1.0)) if base > 0 else 0.0
@@ -128,13 +171,19 @@ def _is_retryable_http_error(exc: urllib.error.HTTPError) -> bool:
     return int(getattr(exc, "code", 0) or 0) in RETRYABLE_HTTP_STATUS_CODES
 
 
+def _is_retryable_exception(exc: Exception) -> bool:
+    if isinstance(exc, urllib.error.HTTPError):
+        return _is_retryable_http_error(exc)
+    return isinstance(exc, RETRYABLE_TRANSIENT_EXCEPTIONS)
+
+
 def _open_url_with_retries(request: urllib.request.Request, *, timeout: int) -> Any:
     attempts = _http_max_attempts()
     for attempt in range(1, attempts + 1):
         try:
             return urllib.request.urlopen(request, timeout=timeout)
-        except urllib.error.HTTPError as exc:
-            if attempt >= attempts or not _is_retryable_http_error(exc):
+        except RETRYABLE_TRANSIENT_EXCEPTIONS as exc:
+            if attempt >= attempts or not _is_retryable_exception(exc):
                 raise
             time.sleep(_retry_delay_seconds(attempt, exc))
     raise RuntimeError("unreachable retry loop")
@@ -147,8 +196,8 @@ def _post_json(url: str, headers: dict[str, str], payload: dict[str, Any], *, ti
     for attempt in range(1, attempts + 1):
         try:
             return _post_json_once(url, request_headers, body, timeout=timeout)
-        except urllib.error.HTTPError as exc:
-            if attempt >= attempts or not _is_retryable_http_error(exc):
+        except RETRYABLE_TRANSIENT_EXCEPTIONS as exc:
+            if attempt >= attempts or not _is_retryable_exception(exc):
                 raise
             time.sleep(_retry_delay_seconds(attempt, exc))
     raise RuntimeError("unreachable retry loop")

@@ -1345,3 +1345,93 @@ def test_claude_stream_rate_limit_error_is_summarized(monkeypatch) -> None:
     assert "five_hour" in detail
     assert "Agentic Harness" not in detail
     assert len(detail) < 400
+
+
+def test_post_json_retries_transient_network_errors_and_truncated_body(monkeypatch) -> None:
+    """Regressão da auditoria 11/jun (Perplexity a 0,5% de influência por US$0,95 no
+    run 615b0948): TCP reset e body 200 truncado eram single-shot — só HTTPError
+    entrava no loop de retry — e um único blip de rede ejetava o slot API-only da
+    rodada inteira via fallback local, sem usar nenhuma das tentativas configuradas."""
+    import json as json_module
+    import urllib.error
+
+    from worldcup_brazil import agents
+
+    outcomes = [
+        urllib.error.URLError("connection reset by peer"),
+        json_module.JSONDecodeError("truncated body", "{", 0),
+        # corte um byte DENTRO de um caractere multi-byte ("seleção") — review 11/jun
+        UnicodeDecodeError("utf-8", b"\xc3", 0, 1, "unexpected end of data"),
+        {"ok": True},
+    ]
+    calls = {"count": 0}
+
+    def fake_once(url, headers, body, *, timeout):
+        outcome = outcomes[calls["count"]]
+        calls["count"] += 1
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    sleeps: list[float] = []
+    monkeypatch.setenv("HTTP_MAX_ATTEMPTS", "4")
+    monkeypatch.setattr(agents, "_post_json_once", fake_once)
+    monkeypatch.setattr(agents.time, "sleep", sleeps.append)
+
+    result = agents._post_json("https://api.example.com/x", {}, {}, timeout=5)
+
+    assert result == {"ok": True}
+    assert calls["count"] == 4
+    assert len(sleeps) == 3
+
+
+def test_retry_after_is_honored_beyond_exponential_cap(monkeypatch) -> None:
+    """429 com Retry-After: 30 dormia só 12s (clamp no cap exponencial), caía de
+    volta na MESMA janela de rate-limit e exauria as tentativas em ~24s. O header
+    do servidor agora tem cap próprio (RETRY_AFTER_MAX_SECONDS, default 60s)."""
+    import urllib.error
+
+    from worldcup_brazil import agents
+
+    exc = urllib.error.HTTPError(
+        url="https://api.example.com/x",
+        code=429,
+        msg="Too Many Requests",
+        hdrs={"Retry-After": "30"},
+        fp=None,
+    )
+
+    monkeypatch.delenv("RETRY_AFTER_MAX_SECONDS", raising=False)
+    assert agents._retry_delay_seconds(1, exc) == 30.0
+
+    monkeypatch.setenv("RETRY_AFTER_MAX_SECONDS", "20")
+    assert agents._retry_delay_seconds(1, exc) == 20.0
+
+
+def test_retry_after_http_date_is_honored_and_past_dates_fall_back(monkeypatch) -> None:
+    """Retry-After em forma HTTP-date (RFC 7231) também deve ser honrado; data no
+    passado (clock skew) NÃO pode virar delay 0 — cai no backoff exponencial."""
+    import datetime
+    import email.utils
+    import urllib.error
+
+    from worldcup_brazil import agents
+
+    monkeypatch.delenv("RETRY_AFTER_MAX_SECONDS", raising=False)
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    future = email.utils.format_datetime(now + datetime.timedelta(seconds=30))
+    exc_future = urllib.error.HTTPError(
+        url="https://api.example.com/x", code=429, msg="Too Many Requests",
+        hdrs={"Retry-After": future}, fp=None,
+    )
+    delay = agents._retry_delay_seconds(1, exc_future)
+    assert 20.0 <= delay <= 35.0
+
+    past = email.utils.format_datetime(now - datetime.timedelta(seconds=30))
+    exc_past = urllib.error.HTTPError(
+        url="https://api.example.com/x", code=429, msg="Too Many Requests",
+        hdrs={"Retry-After": past}, fp=None,
+    )
+    delay = agents._retry_delay_seconds(1, exc_past)
+    assert 0.0 < delay <= 12.0  # exponencial com jitter, nunca 0

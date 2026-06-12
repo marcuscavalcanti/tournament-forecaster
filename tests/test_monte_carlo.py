@@ -362,3 +362,53 @@ def test_full_simulation_never_skips_matches_with_official_configs() -> None:
     assert diagnostics["unresolved_match_count"] == 0
     assert diagnostics["third_allocation_relaxed_count"] == 0
     assert result["stage_probabilities"]["titulo"] > 2.0
+
+
+def test_monte_carlo_fails_hard_on_unresolved_bracket_slot() -> None:
+    """Gate de integridade (auditoria 11/jun): label de slot quebrado em
+    bracket.config.json fazia jogos serem pulados em silêncio (continue) e o
+    funil colapsar — título 0.0 publicado com exit 0, a mesma classe de bug do
+    alocador greedy que deprimiu o funil em ~60%. Agora: falha hard, sem publicar."""
+    import pytest
+
+    from worldcup_brazil.monte_carlo import MonteCarloIntegrityError
+
+    config = _mc_config(iterations=200)
+    config["monte_carlo"]["rating_uncertainty_enabled"] = False
+    config["bracket_config"]["round_of_32"][0]["slots"][0] = "2Z"
+
+    with pytest.raises(MonteCarloIntegrityError, match="sem slot resolvido"):
+        run_brazil_monte_carlo(config)
+
+
+def test_monte_carlo_compact_summary_carries_simulation_diagnostics() -> None:
+    """Os contadores de integridade precisam chegar aos artefatos persistidos —
+    antes só existiam no result completo, invisíveis para watchdog e post-mortem."""
+    result = run_brazil_monte_carlo(_mc_config(iterations=400))
+
+    summary = monte_carlo_compact_summary(result)
+
+    assert summary["simulation_diagnostics"] == result["simulation_diagnostics"]
+    assert summary["simulation_diagnostics"]["unresolved_match_count"] == 0
+
+
+def test_simulation_integrity_relaxed_thirds_prong_enforces_cap() -> None:
+    """O 2º dente do gate: alocação de melhores-terceiros relaxada acima de 0,5%
+    das iterações também é config degenerado e não pode publicar em silêncio."""
+    import pytest
+
+    from worldcup_brazil.monte_carlo import (
+        MonteCarloIntegrityError,
+        _check_simulation_integrity,
+    )
+
+    _check_simulation_integrity(
+        {"unresolved_match_count": 0, "third_allocation_relaxed_count": 200},
+        iterations=40000,
+    )  # 0,5% exato: passa
+
+    with pytest.raises(MonteCarloIntegrityError, match="melhores-terceiros"):
+        _check_simulation_integrity(
+            {"unresolved_match_count": 0, "third_allocation_relaxed_count": 201},
+            iterations=40000,
+        )

@@ -809,6 +809,39 @@ def _simulate_tournament_counts(
     }
 
 
+RELAXED_THIRD_ALLOCATION_MAX_FRACTION = 0.005
+
+
+class MonteCarloIntegrityError(RuntimeError):
+    """Configuração de chave/grupos produziu simulação estruturalmente inválida.
+
+    Jogos com slot não resolvido eram pulados em silêncio (continue) — a mesma
+    classe de bug do alocador greedy de melhores-terceiros que deprimiu o funil
+    em ~60%. Auditoria 11/jun reproduziu: um label quebrado em bracket.config.json
+    levava o título a 0.0 com exit 0. Este gate transforma config quebrado em
+    falha hard ANTES de publicar número errado."""
+
+
+def _check_simulation_integrity(diagnostics: dict[str, int], *, iterations: int) -> None:
+    unresolved = int(diagnostics.get("unresolved_match_count", 0))
+    relaxed = int(diagnostics.get("third_allocation_relaxed_count", 0))
+    relaxed_cap = int(iterations * RELAXED_THIRD_ALLOCATION_MAX_FRACTION)
+    problems: list[str] = []
+    if unresolved > 0:
+        problems.append(
+            f"{unresolved} jogo(s) de mata-mata sem slot resolvido — revisar bracket.config.json/groups.config.json"
+        )
+    if relaxed > relaxed_cap:
+        problems.append(
+            f"alocação de melhores-terceiros relaxada {relaxed}x "
+            f"(cap {relaxed_cap} = {RELAXED_THIRD_ALLOCATION_MAX_FRACTION:.1%} de {iterations} iterações)"
+        )
+    if problems:
+        raise MonteCarloIntegrityError(
+            "Monte Carlo abortado para não publicar funil errado: " + "; ".join(problems)
+        )
+
+
 def run_brazil_monte_carlo(config: dict[str, Any]) -> dict[str, Any]:
     mc_config = _mc_config(config)
     if not bool(mc_config.get("enabled", False)):
@@ -937,6 +970,8 @@ def run_brazil_monte_carlo(config: dict[str, Any]) -> dict[str, Any]:
             iterations=iterations,
         )
 
+    _check_simulation_integrity(simulation_diagnostics, iterations=iterations)
+
     phases: dict[str, Any] = {}
     for phase, bucket in phase_buckets.items():
         reach_count = int(bucket["reach_count"])
@@ -1036,6 +1071,7 @@ def monte_carlo_compact_summary(result: dict[str, Any], *, top_n: int = 3) -> di
         "stage_sample_intervals": result.get("stage_sample_intervals", {}),
         "stage_uncertainty_intervals": result.get("stage_uncertainty_intervals", {}),
         "rating_uncertainty": result.get("rating_uncertainty", {"enabled": False}),
+        "simulation_diagnostics": result.get("simulation_diagnostics", {}),
         "path_gate": result.get("path_gate", {}),
         "phases": phases,
     }

@@ -4712,6 +4712,17 @@ def _opponent_debriefing_config(config: dict[str, Any]) -> dict[str, Any]:
     return {
         **config,
         "_meeting_room": "opponent_path",
+        # Contrato de rodadas PRÓPRIO — herdar o da sala principal (min_rounds=6,
+        # timeouts de 240s) tornava o timeout de 900s matematicamente garantido:
+        # 6 rodadas × ~225-300s nunca cabem no orçamento. Run 615b0948 (11/jun):
+        # 4 rodadas completas descartadas, rounds=0, gasto da sala perdido.
+        "meeting_min_rounds": int(config.get("opponent_debriefing_min_rounds", 1)),
+        "meeting_max_rounds": int(config.get("opponent_debriefing_max_rounds", 3)),
+        "meeting_stability_rounds": int(config.get("opponent_debriefing_stability_rounds", 1)),
+        "agent_timeout_seconds": int(config.get("opponent_debriefing_agent_timeout_seconds", 120)),
+        # Sem este override, a 1ª chamada de TODA rodada (pergunta do protagonista)
+        # herdava os 210s da sala principal e furava o modelo de orçamento.
+        "protagonist_timeout_seconds": int(config.get("opponent_debriefing_protagonist_timeout_seconds", 120)),
         "group_matches": [],
         "knockout_matches": knockout_matches,
         "macro_direction": (
@@ -4724,6 +4735,28 @@ def _opponent_debriefing_config(config: dict[str, Any]) -> dict[str, Any]:
             "a escolha dos adversários prováveis que a sala principal usará."
         ),
     }
+
+
+def _opponent_debriefing_budget_warning(config: dict[str, Any]) -> str | None:
+    """Aviso de startup quando o piso de rodadas da sala paralela não cabe no orçamento.
+
+    Pior caso por rodada = pergunta do protagonista (sequencial) + 1,5× timeout de
+    agente (respostas em paralelo + consenso/repair), calibrado nos watchdogs de jun/2026."""
+    sub_config = _opponent_debriefing_config(config)
+    agent_timeout = float(sub_config.get("agent_timeout_seconds", 120))
+    protagonist_timeout = float(sub_config.get("protagonist_timeout_seconds", agent_timeout))
+    # Pergunta do protagonista (sequencial) + respostas em paralelo + consenso/repair.
+    per_round_worst_seconds = protagonist_timeout + 1.5 * agent_timeout
+    min_rounds = max(1, int(sub_config.get("meeting_min_rounds", 1)))
+    worst_case_seconds = min_rounds * per_round_worst_seconds
+    budget_seconds = max(0.001, float(config.get("parallel_opponent_debriefing_timeout_seconds", 900)))
+    if worst_case_seconds > budget_seconds:
+        return (
+            f"sala paralela: {min_rounds} rodada(s) mínima(s) × ~{per_round_worst_seconds:.0f}s de pior caso "
+            f"por rodada = ~{worst_case_seconds:.0f}s não cabe no orçamento de {budget_seconds:.0f}s; "
+            "ajuste os knobs opponent_debriefing_*"
+        )
+    return None
 
 
 def _knockout_estimates_as_config_matches(estimates: list[Any]) -> list[dict[str, Any]]:
@@ -5583,6 +5616,11 @@ async def build_report_bundle(
     opponent_debriefing_task = None
     opponent_debriefing_result: dict[str, Any] = {"enabled": False}
     if _parallel_opponent_debriefing_enabled(config) and active_agent_specs:
+        budget_warning = _opponent_debriefing_budget_warning(config)
+        if budget_warning:
+            warnings.append(budget_warning)
+            if watchdog:
+                watchdog.event("opponent_model_meeting", "budget_warning", detail=budget_warning)
         opponent_debriefing_task = asyncio.create_task(
             _run_parallel_opponent_debriefing(
                 config=meeting_config,

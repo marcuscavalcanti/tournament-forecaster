@@ -697,3 +697,35 @@ def test_production_shape_fallback_question_increments_streak(monkeypatch) -> No
 
     assert transcript[0]["protagonist"] == "GPT 5.5"
     assert transcript[1]["protagonist"] != "GPT 5.5"
+
+
+def test_opponent_debriefing_room_has_own_round_contract_fitting_budget() -> None:
+    """Regressão do run 615b0948 (11/jun): a sala paralela herdava meeting_min_rounds=6,
+    max_rounds=18 e agent_timeout=240s da sala principal — 6 rodadas × ~225-300s nunca
+    cabem no orçamento de 900s, então o timeout era matematicamente garantido em TODO
+    run diário e as rodadas completas eram descartadas (rounds=0). Contrato próprio."""
+    from pathlib import Path
+
+    from worldcup_brazil.pipeline import (
+        _opponent_debriefing_budget_warning,
+        _opponent_debriefing_config,
+        load_config,
+    )
+
+    config = load_config(Path("config/worldcup_brazil.example.json"))
+    assert int(config.get("meeting_min_rounds", 6)) >= 6  # sala principal intacta
+
+    sub_config = _opponent_debriefing_config(config)
+
+    assert int(sub_config["meeting_min_rounds"]) <= 2
+    assert int(sub_config["meeting_max_rounds"]) <= 3
+    assert int(sub_config["meeting_stability_rounds"]) == 1
+    assert int(sub_config["agent_timeout_seconds"]) <= 120
+    assert int(sub_config["protagonist_timeout_seconds"]) <= 120  # 1ª chamada de toda rodada
+    assert _opponent_debriefing_budget_warning(config) is None
+
+    tight = dict(config)
+    tight["parallel_opponent_debriefing_timeout_seconds"] = 60
+    warning = _opponent_debriefing_budget_warning(tight)
+    assert warning is not None
+    assert "não cabe no orçamento" in warning
