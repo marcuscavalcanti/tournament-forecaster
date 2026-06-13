@@ -412,3 +412,49 @@ def test_simulation_integrity_relaxed_thirds_prong_enforces_cap() -> None:
             {"unresolved_match_count": 0, "third_allocation_relaxed_count": 201},
             iterations=40000,
         )
+
+
+def test_monte_carlo_output_is_bit_identical_after_hot_loop_memoization() -> None:
+    """Gate de regressão da otimização de performance (item 14 da auditoria 11/jun).
+
+    As memoizações de _normalize/_slot_kind/_rating_*_probability são puras: o
+    resultado COMPLETO do Monte Carlo (todas as fases, CIs, diagnostics, título)
+    deve ser byte a byte idêntico ao código pré-cache. Hashes capturados do código
+    original; qualquer mudança futura que altere um único número quebra aqui.
+
+    Ao contrário do red-green usual, este teste PASSA no código antigo e no novo —
+    é exatamente o que prova que a otimização não mudou o comportamento."""
+    import hashlib
+    import json as json_module
+    from pathlib import Path
+
+    from worldcup_brazil.bracket import hydrate_canonical_configs
+
+    def _config(**mc: object) -> dict:
+        config = json_module.loads(
+            Path("config/worldcup_brazil.example.json").read_text(encoding="utf-8")
+        )
+        hydrate_canonical_configs(config, base_dir=Path("config"))
+        config["monte_carlo"].update(mc)
+        config["monte_carlo"]["seed"] = 26062026
+        return config
+
+    def _hash(result: dict) -> str:
+        canonical = json_module.dumps(
+            result, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    result_off = run_brazil_monte_carlo(
+        _config(rating_uncertainty_enabled=False, iterations=2000)
+    )
+    result_on = run_brazil_monte_carlo(
+        _config(
+            rating_uncertainty_enabled=True,
+            rating_uncertainty_outer_samples=6,
+            rating_uncertainty_inner_iterations=400,
+        )
+    )
+
+    assert _hash(result_off) == "3a8112323212d0884ef7b9882feae17776ac49570e9d1c185b21f00e21cf9ca7"
+    assert _hash(result_on) == "44176e8de29adae1cac6a8f9532bfbbe60e2d55b76d7cd0f8a7653bf5b1cb878"

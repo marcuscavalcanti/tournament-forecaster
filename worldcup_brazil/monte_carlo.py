@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import math
 import random
 import re
@@ -29,9 +30,17 @@ DEFAULT_CONFIGURED_RATING_SIGMA = 50.0
 DEFAULT_PRIOR_RATING_SIGMA = 150.0
 
 
-def _normalize(value: Any) -> str:
-    normalized = unicodedata.normalize("NFKD", str(value or ""))
+@functools.lru_cache(maxsize=4096)
+def _normalize_cached(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value)
     return "".join(char for char in normalized if not unicodedata.combining(char)).lower()
+
+
+def _normalize(value: Any) -> str:
+    # Hot path: chamado ~5,8M vezes por run nos mesmos ~48 nomes de times. A NFKD
+    # é a invariante mais cara do loop (auditoria 11/jun: cache sozinho = −49% do
+    # runtime, output bit-idêntico). Stringify primeiro garante chave hashável.
+    return _normalize_cached(str(value or ""))
 
 
 def _mc_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -331,11 +340,16 @@ def _explicit_brazil_group_probabilities(config: dict[str, Any]) -> dict[tuple[s
     return probabilities
 
 
+@functools.lru_cache(maxsize=32768)
 def _rating_win_probability(rating_a: float, rating_b: float, *, scale: float) -> float:
+    # Pura: depende só de (rating_a, rating_b, scale). Por outer-sample os ratings
+    # são fixos, então cada par recorre nas 200+ iterações internas — memo dá hit
+    # alto e devolve o MESMO float (bit-idêntico ao recálculo).
     scale = max(1.0, scale)
     return 1.0 / (1.0 + 10.0 ** (-(rating_a - rating_b) / scale))
 
 
+@functools.lru_cache(maxsize=8192)
 def _rating_draw_probability(rating_a: float, rating_b: float, *, default_draw_pct: float, scale: float) -> float:
     mismatch = min(abs(rating_a - rating_b) / max(1.0, scale), 2.0)
     draw_pct = max(12.0, float(default_draw_pct) - mismatch * 5.0)
@@ -458,7 +472,11 @@ def _simulate_groups(
     return rankings, third_rows[:8]
 
 
+@functools.lru_cache(maxsize=256)
 def _slot_kind(slot: str) -> dict[str, Any]:
+    # Hot path: ~2,5M regex/run sobre os mesmos ~31 labels constantes de bracket.
+    # Memoizado; o resultado é tratado como IMUTÁVEL pelos callers (somente leitura,
+    # e `groups` é tupla justamente para o dict compartilhado do cache não corromper).
     label = str(slot or "").strip().upper().replace(" ", "")
     winner = re.fullmatch(r"W(\d+)", label)
     if winner:
@@ -468,7 +486,7 @@ def _slot_kind(slot: str) -> dict[str, Any]:
         return {"type": "group_rank", "rank": int(rank.group(1)), "group": rank.group(2), "label": label}
     third = re.fullmatch(r"3([A-L/]+)", label)
     if third:
-        groups = [group for group in third.group(1).replace("/", "") if group in "ABCDEFGHIJKL"]
+        groups = tuple(group for group in third.group(1).replace("/", "") if group in "ABCDEFGHIJKL")
         return {"type": "best_third", "rank": 3, "groups": groups, "label": label}
     return {"type": "unknown", "label": label}
 
