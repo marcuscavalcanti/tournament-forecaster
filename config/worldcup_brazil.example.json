@@ -144,7 +144,18 @@
   "minimum_source_ready_agents": 3,
   "source_planning_repair_attempts": 2,
   "meeting_response_repair_attempts": 1,
+  "blind_peer_review_enabled": false,
+  "blind_peer_review_shadow_only": true,
+  "blind_peer_review_timeout_seconds": 90,
+  "blind_peer_review_acceptance_threshold": 0.72,
+  "numeric_chairman_enabled": true,
+  "llm_council_fast_path_enabled": false,
+  "llm_council_fast_path_shadow_only": true,
+  "llm_council_fast_path_min_participants": 3,
+  "llm_council_fast_path_max_dispersion_pct": 2.5,
   "max_agent_title_shift_pct": 5.0,
+  "max_agent_title_shift_with_sources_pct": 8.0,
+  "max_agent_title_pct_abs_cap": 25.0,
   "agents": [
     {
       "slot": "Opus 4.8",
@@ -196,9 +207,37 @@
       "model_fallbacks": [
         "gemini-3.1-flash-lite"
       ],
+      "model_order_by_role": {
+        "preflight": ["gemini-3.1-flash-lite", "gemini-3.5-flash"],
+        "source_planning": ["gemini-3.5-flash", "gemini-3.1-flash-lite"],
+        "source_planning_repair": ["gemini-3.1-flash-lite", "gemini-3.5-flash"],
+        "format_repair": ["gemini-3.1-flash-lite", "gemini-3.5-flash"],
+        "protagonist_question": ["gemini-3.1-flash-lite", "gemini-3.5-flash"],
+        "meeting_response": ["gemini-3.1-flash-lite", "gemini-3.5-flash"],
+        "agent_reentry_probe": ["gemini-3.1-flash-lite", "gemini-3.5-flash"]
+      },
+      "max_output_tokens_by_role": {
+        "preflight": 1200,
+        "source_planning": 4500,
+        "source_planning_repair": 2500,
+        "format_repair": 1200,
+        "protagonist_question": 1500,
+        "meeting_response": 2500,
+        "agent_reentry_probe": 2200
+      },
+      "model_rate_limits": {
+        "gemini-3.5-flash": {
+          "rpm": 1000,
+          "tpm": 2000000
+        },
+        "gemini-3.1-flash-lite": {
+          "rpm": 4000,
+          "tpm": 4000000
+        }
+      },
       "prefer_bridge": true,
       "reasoning_effort": "high",
-      "notes": "Se o binário gemini estiver no PATH, o script prefere Gemini CLI com gemini-3.5-flash: gemini --skip-trust -p {prompt} --output-format text --approval-mode plan -m GEMINI_MODEL. Se o CLI/API falhar, tenta gemini-3.1-flash-lite antes de remover o Gemini da sala. Para API HTTP primária, use GEMINI_PREFER_BRIDGE=false.",
+      "notes": "Gemini usa política por papel: 3.5 Flash no planejamento de fontes; 3.1 Flash Lite em preflight, perguntas/respostas de sala, reparos e reentry para reduzir TPM/latência. Se 3.5 receber 429, entra em cooldown local (GEMINI_RATE_LIMIT_COOLDOWN_SECONDS) e o próximo turno pula direto para Lite. Para API HTTP primária, use GEMINI_PREFER_BRIDGE=false.",
       "max_output_tokens": 7000
     }
   ],

@@ -4,7 +4,7 @@ from worldcup_brazil.probabilities import (
     blend_match_estimate,
     normalize_two_way,
 )
-from worldcup_brazil.pipeline import _stage_probabilities
+from worldcup_brazil.pipeline import _stage_probability_source, _stage_probabilities
 
 
 def test_normalize_two_way_rejects_zero_or_negative_total() -> None:
@@ -126,3 +126,18 @@ def test_stage_probabilities_use_single_monte_carlo_funnel_including_title() -> 
         "titulo": 8.0,
     }
     assert probabilities["titulo"] <= probabilities["final"]
+
+
+def test_stage_probability_source_marks_partial_monte_carlo_as_partial_fallback() -> None:
+    config = {
+        "monte_carlo": {"use_stage_probabilities": True},
+        "_monte_carlo_result": {
+            "enabled": True,
+            "stage_probabilities": {
+                "quartas": 62.0,
+                "semifinal": 38.0,
+            },
+        },
+    }
+
+    assert _stage_probability_source(config) == "monte_carlo_partial_agent_scaled_fallback"

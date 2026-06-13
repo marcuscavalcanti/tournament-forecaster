@@ -200,7 +200,17 @@ def _config_watchdog_extra(
                 "source_planning_format_repair_timeout_seconds",
                 min(90, int(config.get("agent_timeout_seconds", 90))),
             ),
+            "blind_peer_review_enabled": config.get("blind_peer_review_enabled", False),
+            "blind_peer_review_shadow_only": config.get("blind_peer_review_shadow_only", True),
+            "blind_peer_review_timeout_seconds": config.get("blind_peer_review_timeout_seconds", 90),
+            "numeric_chairman_enabled": config.get("numeric_chairman_enabled", True),
+            "llm_council_fast_path_enabled": config.get("llm_council_fast_path_enabled", False),
+            "llm_council_fast_path_shadow_only": config.get("llm_council_fast_path_shadow_only", True),
+            "llm_council_fast_path_min_participants": config.get("llm_council_fast_path_min_participants", 3),
             "meeting_response_repair_attempts": config.get("meeting_response_repair_attempts", 1),
+            "max_agent_title_shift_pct": config.get("max_agent_title_shift_pct", 5.0),
+            "max_agent_title_shift_with_sources_pct": config.get("max_agent_title_shift_with_sources_pct", 8.0),
+            "max_agent_title_pct_abs_cap": config.get("max_agent_title_pct_abs_cap", 25.0),
             "meeting_min_rounds": config.get("meeting_min_rounds"),
             "meeting_max_rounds": config.get("meeting_max_rounds"),
             "meeting_min_participants": config.get(
@@ -280,6 +290,8 @@ def _config_watchdog_detail(
         f"repair_attempts={cfg['source_planning_repair_attempts']}; "
         f"meeting_min_participants={cfg['meeting_min_participants']}; "
         f"meeting_quorum_rule={cfg['meeting_quorum_rule']}; "
+        f"numeric_chairman={cfg['numeric_chairman_enabled']}; "
+        f"fast_path={cfg['llm_council_fast_path_enabled']}; "
         f"full_path_coverage={cfg['meeting_require_full_path_coverage']}; "
         f"parallel_opponent_room={cfg['parallel_opponent_debriefing_enabled']}; "
         f"reentry_probe={cfg['agent_reentry_probe_enabled']}; "

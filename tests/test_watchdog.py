@@ -65,6 +65,13 @@ def test_agent_source_planning_watchdog_payload_includes_contract_and_operationa
         "source_planning_repair_attempts": 2,
         "repair_format_removals_with_quorum": True,
         "source_planning_format_repair_timeout_seconds": 60,
+        "blind_peer_review_enabled": False,
+        "blind_peer_review_shadow_only": True,
+        "blind_peer_review_timeout_seconds": 90,
+        "numeric_chairman_enabled": True,
+        "llm_council_fast_path_enabled": False,
+        "llm_council_fast_path_shadow_only": True,
+        "llm_council_fast_path_min_participants": 3,
         "meeting_response_repair_attempts": 1,
         "meeting_require_full_path_coverage": True,
         "meeting_min_participants": 3,
@@ -86,6 +93,10 @@ def test_agent_source_planning_watchdog_payload_includes_contract_and_operationa
     assert "self_heal_attempts=2" in detail
     assert "format_repair=True" in detail
     assert "format_repair_timeout_s=60" in detail
+    assert "blind_review=False" in detail
+    assert "blind_review_timeout_s=90" in detail
+    assert "numeric_chairman=True" in detail
+    assert "fast_path=False" in detail
     assert "meeting_repair_attempts=1" in detail
     assert "meeting_quorum_rule=maioria simples" in detail
     assert "full_path_coverage=True" in detail
@@ -104,6 +115,13 @@ def test_agent_source_planning_watchdog_payload_includes_contract_and_operationa
     assert extra["operational_knobs"]["source_planning_repair_attempts"] == 2
     assert extra["operational_knobs"]["repair_format_removals_with_quorum"] is True
     assert extra["operational_knobs"]["source_planning_format_repair_timeout_seconds"] == 60
+    assert extra["operational_knobs"]["blind_peer_review_enabled"] is False
+    assert extra["operational_knobs"]["blind_peer_review_shadow_only"] is True
+    assert extra["operational_knobs"]["blind_peer_review_timeout_seconds"] == 90
+    assert extra["operational_knobs"]["numeric_chairman_enabled"] is True
+    assert extra["operational_knobs"]["llm_council_fast_path_enabled"] is False
+    assert extra["operational_knobs"]["llm_council_fast_path_shadow_only"] is True
+    assert extra["operational_knobs"]["llm_council_fast_path_min_participants"] == 3
     assert extra["operational_knobs"]["meeting_response_repair_attempts"] == 1
     assert extra["operational_knobs"]["meeting_min_participants"] == 3
     assert extra["operational_knobs"]["meeting_quorum_rule"] == "maioria simples dos participantes ativos da sala"

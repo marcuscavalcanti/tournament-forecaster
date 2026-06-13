@@ -707,6 +707,112 @@ def test_agent_removal_watchdog_keeps_source_planning_reason(
     assert "sem resposta auditável, não entra no pool ativo da sala" in removal["detail"]
 
 
+def test_gemini_billing_depleted_reason_reaches_watchdog_and_bundle_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    billing_reason = (
+        "Modelo sem resposta externa verificável porque Gemini API model fallback chain failed: "
+        "gemini-3.5-flash: Google Gemini billing action required: prepayment credits are depleted; "
+        "buy/prepay credits in AI Studio at https://ai.studio/projects before expecting Gemini to rejoin "
+        "the model room. Raw API message: Your prepayment credits are depleted."
+    )
+
+    async def fake_call_all_agents(*args, **kwargs):
+        return [
+            AgentOpinion(
+                agent="GPT 5.5",
+                title_pct=8.0,
+                summary="Plano com fonte verificável.",
+                source_urls=["https://example.com/gpt"],
+            ),
+            AgentOpinion(
+                agent="Perplexity Pro",
+                title_pct=8.1,
+                summary="Plano com fonte verificável.",
+                source_urls=["https://example.com/perplexity"],
+            ),
+            AgentOpinion(
+                agent="DeepSeek V4 Pro",
+                title_pct=8.2,
+                summary="Plano com fonte verificável.",
+                source_urls=["https://example.com/deepseek"],
+            ),
+            AgentOpinion(
+                agent="Gemini Pro",
+                title_pct=8.0,
+                summary=billing_reason,
+                used_fallback=True,
+            ),
+        ]
+
+    async def fake_run_model_meeting(
+        *,
+        config,
+        planning_opinions,
+        generated_at,
+        agent_specs,
+        baseline_title_pct,
+        allow_agent_fallback,
+        watchdog,
+        token_cost_ledger=None,
+        **_kwargs,
+    ):
+        slots = [spec.slot for spec in agent_specs]
+        consensus = build_consensus(planning_opinions, agent_slots=slots)
+        return consensus, planning_opinions, [], planning_opinions
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+    monkeypatch.setattr("worldcup_brazil.pipeline._run_model_meeting", fake_run_model_meeting)
+    watchdog_path = tmp_path / "watchdog.jsonl"
+
+    artifacts = asyncio.run(
+        build_report_bundle(
+            config={
+                "baseline_title_pct": 8.0,
+                "minimum_source_ready_agents": 3,
+                "source_planning_repair_attempts": 0,
+                "meeting_min_participants": 3,
+                "parallel_opponent_debriefing_enabled": False,
+                "monte_carlo": {"enabled": False},
+                "agents": [
+                    {"slot": "GPT 5.5", "provider": "openai", "model": "gpt-5.5", "endpoint": "x"},
+                    {"slot": "Perplexity Pro", "provider": "openai-compatible", "model": "sonar", "endpoint": "x"},
+                    {"slot": "DeepSeek V4 Pro", "provider": "openai-compatible", "model": "deepseek", "endpoint": "x"},
+                    {"slot": "Gemini Pro", "provider": "google-gemini", "model": "gemini", "endpoint": "x"},
+                ],
+                "group_matches": [{"opponent": "Marrocos", "brazil_pct": 59.0}],
+                "knockout_matches": [],
+            },
+            source_memory=SourceMemory(tmp_path / "source_memory.json"),
+            generated_at=datetime(2026, 6, 7, 12, tzinfo=timezone.utc),
+            watchdog=RunWatchdog(path=watchdog_path, verbose=False),
+        )
+    )
+
+    removed_reasons = artifacts.bundle.metadata["removed_agent_reasons"]
+    assert "Gemini Pro" in removed_reasons
+    assert "Google Gemini billing action required" in removed_reasons["Gemini Pro"]
+    assert "buy/prepay credits" in removed_reasons["Gemini Pro"]
+    assert "https://ai.studio/projects" in removed_reasons["Gemini Pro"]
+    assert any(
+        "Gemini Pro" in warning and "comprar créditos" in warning and "https://ai.studio/projects" in warning
+        for warning in artifacts.bundle.warnings
+    )
+
+    events = [json.loads(line) for line in watchdog_path.read_text(encoding="utf-8").splitlines()]
+    removal = [
+        event
+        for event in events
+        if event["step"] == "model_room"
+        and event["status"] == "chat"
+        and event["extra"].get("round") == "agent-removal"
+        and event["extra"].get("agent") == "Gemini Pro"
+    ][0]
+    assert "Google Gemini billing action required" in removal["detail"]
+    assert "https://ai.studio/projects" in removal["detail"]
+
+
 def test_parallel_opponent_debriefing_runs_side_room_and_updates_bracket_scenarios(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -856,6 +962,7 @@ def test_parallel_opponent_debriefing_runs_side_room_and_updates_bracket_scenari
 
     assert set(meeting_rooms) == {"main_brazil", "opponent_path"}
     assert artifacts.bundle.metadata["parallel_opponent_debriefing"]["enabled"] is True
+    assert artifacts.bundle.metadata["parallel_opponent_debriefing"]["usable_for_main_room"] is True
     assert artifacts.bundle.metadata["parallel_opponent_debriefing"]["rounds"] == 1
     assert main_room_first_knockout_opponent == ["Japão"]
     round_of_32 = [match for match in artifacts.bundle.knockout_matches if match.phase == "16 avos"]
@@ -863,6 +970,363 @@ def test_parallel_opponent_debriefing_runs_side_room_and_updates_bracket_scenari
     assert round_of_32[0].scenario_pct == 41.0
     assert round_of_32[1].opponent == "Suécia"
     assert round_of_32[1].scenario_pct == 26.0
+
+
+def test_parallel_opponent_debriefing_without_explicit_consensus_does_not_rewrite_main_room(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    async def fake_call_all_agents(*args, **kwargs):
+        return [
+            AgentOpinion(
+                agent="GPT 5.5",
+                title_pct=8.0,
+                summary="Plano com fonte verificável.",
+                source_urls=["https://example.com/gpt"],
+            ),
+            AgentOpinion(
+                agent="Perplexity Pro",
+                title_pct=8.1,
+                summary="Plano com fonte verificável.",
+                source_urls=["https://example.com/perplexity"],
+            ),
+            AgentOpinion(
+                agent="DeepSeek V4 Pro",
+                title_pct=7.9,
+                summary="Plano com fonte verificável.",
+                source_urls=["https://example.com/deepseek"],
+            ),
+        ]
+
+    main_room_first_knockout_opponent: list[str] = []
+
+    async def fake_run_model_meeting(
+        *,
+        config,
+        planning_opinions,
+        generated_at,
+        agent_specs,
+        baseline_title_pct,
+        allow_agent_fallback,
+        watchdog,
+        token_cost_ledger=None,
+        **_kwargs,
+    ):
+        room = str(config.get("_meeting_room", "main_brazil"))
+        slots = [spec.slot for spec in agent_specs]
+        if room == "opponent_path":
+            opinions = [
+                AgentOpinion(
+                    agent=slot,
+                    title_pct=8.0,
+                    summary="Sala paralela propõe adversários, mas bateu teto sem consenso explícito.",
+                    answer="Japão e Suécia aparecem nos cenários, mas a sala não encerrou por consenso.",
+                    scenario_probabilities={"16 avos: Japão": 41.0, "16 avos: Suécia": 26.0},
+                    match_probabilities={"16 avos: Japão": 58.0, "16 avos: Suécia": 57.0},
+                    source_urls=["https://example.com/slot-2f"],
+                    agrees_with_protagonist=True,
+                )
+                for slot in slots
+            ]
+            consensus = build_consensus(opinions, agent_slots=slots)
+            object.__setattr__(consensus, "exit_status", "max_rounds_no_consensus")
+            object.__setattr__(
+                consensus,
+                "exit_warning",
+                "Sala paralela atingiu o teto de rodadas sem consenso explícito.",
+            )
+            return consensus, opinions, [{"round": 3, "responses": []}], opinions
+
+        main_room_first_knockout_opponent.append(
+            str((config.get("knockout_matches") or [{}])[0].get("opponent", ""))
+        )
+        opinions = [
+            AgentOpinion(
+                agent=slot,
+                title_pct=8.0,
+                summary="Sala principal não deve receber top-2 lateral sem consenso.",
+                answer="Brasil usa os cenários base quando a sala lateral não fechou consenso.",
+                source_urls=["https://example.com/main"],
+                agrees_with_protagonist=True,
+            )
+            for slot in slots
+        ]
+        return build_consensus(opinions, agent_slots=slots), opinions, [], opinions
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+    monkeypatch.setattr("worldcup_brazil.pipeline._run_model_meeting", fake_run_model_meeting)
+    config = load_config(Path("config/worldcup_brazil.example.json"))
+    config.update(
+        {
+            "baseline_title_pct": 8.0,
+            "minimum_source_ready_agents": 3,
+            "source_planning_repair_attempts": 0,
+            "meeting_min_participants": 3,
+            "parallel_opponent_debriefing_enabled": True,
+            "monte_carlo": {"enabled": False},
+            "knockout_matches": [
+                {
+                    "phase": "16 avos",
+                    "opponent": "Adversário base",
+                    "most_likely": True,
+                    "scenario_pct": 46.0,
+                    "brazil_pct": 57.0,
+                },
+                {
+                    "phase": "16 avos",
+                    "opponent": "Alternativa base",
+                    "most_likely": False,
+                    "scenario_pct": 24.0,
+                    "brazil_pct": 56.0,
+                },
+            ],
+            "agents": [
+                {"slot": "GPT 5.5", "provider": "openai", "model": "gpt-5.5", "endpoint": "x"},
+                {"slot": "Perplexity Pro", "provider": "openai-compatible", "model": "sonar", "endpoint": "x"},
+                {"slot": "DeepSeek V4 Pro", "provider": "openai-compatible", "model": "deepseek", "endpoint": "x"},
+            ],
+        }
+    )
+
+    artifacts = asyncio.run(
+        build_report_bundle(
+            config=config,
+            source_memory=SourceMemory(tmp_path / "source_memory.json"),
+            generated_at=datetime(2026, 6, 7, 12, tzinfo=timezone.utc),
+            watchdog=None,
+        )
+    )
+
+    assert main_room_first_knockout_opponent == ["Adversário base"]
+    assert artifacts.bundle.knockout_matches[0].opponent == "Adversário base"
+    side_room = artifacts.bundle.metadata["parallel_opponent_debriefing"]
+    assert side_room["usable_for_main_room"] is False
+    assert side_room["exit_status"] == "max_rounds_no_consensus"
+    assert any("sala paralela" in warning.lower() and "sem consenso" in warning.lower() for warning in artifacts.bundle.warnings)
+
+
+def test_main_meeting_degraded_publish_is_persisted_in_bundle_warnings(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    async def fake_call_all_agents(*args, **kwargs):
+        return [
+            AgentOpinion(
+                agent="GPT 5.5",
+                title_pct=8.0,
+                summary="Plano com fonte verificável.",
+                source_urls=["https://example.com/gpt"],
+            ),
+            AgentOpinion(
+                agent="Perplexity Pro",
+                title_pct=8.1,
+                summary="Plano com fonte verificável.",
+                source_urls=["https://example.com/perplexity"],
+            ),
+            AgentOpinion(
+                agent="DeepSeek V4 Pro",
+                title_pct=7.9,
+                summary="Plano com fonte verificável.",
+                source_urls=["https://example.com/deepseek"],
+            ),
+        ]
+
+    async def fake_run_model_meeting(
+        *,
+        config,
+        planning_opinions,
+        generated_at,
+        agent_specs,
+        baseline_title_pct,
+        allow_agent_fallback,
+        watchdog,
+        token_cost_ledger=None,
+        **_kwargs,
+    ):
+        slots = [spec.slot for spec in agent_specs]
+        opinions = [
+            AgentOpinion(
+                agent=slot,
+                title_pct=8.0,
+                summary="Sala principal publica último consenso válido em modo degradado.",
+                answer="Houve rodada final estéril, então este consenso precisa aparecer com alerta.",
+                source_urls=["https://example.com/main"],
+                agrees_with_protagonist=True,
+            )
+            for slot in slots
+        ]
+        consensus = build_consensus(opinions, agent_slots=slots)
+        object.__setattr__(consensus, "exit_status", "degraded_last_valid")
+        object.__setattr__(
+            consensus,
+            "exit_warning",
+            "Sala principal publicou o último consenso válido em modo degradado.",
+        )
+        return consensus, opinions, [], opinions
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+    monkeypatch.setattr("worldcup_brazil.pipeline._run_model_meeting", fake_run_model_meeting)
+    config = load_config(Path("config/worldcup_brazil.example.json"))
+    config.update(
+        {
+            "baseline_title_pct": 8.0,
+            "minimum_source_ready_agents": 3,
+            "source_planning_repair_attempts": 0,
+            "meeting_min_participants": 3,
+            "parallel_opponent_debriefing_enabled": False,
+            "monte_carlo": {"enabled": False},
+            "agents": [
+                {"slot": "GPT 5.5", "provider": "openai", "model": "gpt-5.5", "endpoint": "x"},
+                {"slot": "Perplexity Pro", "provider": "openai-compatible", "model": "sonar", "endpoint": "x"},
+                {"slot": "DeepSeek V4 Pro", "provider": "openai-compatible", "model": "deepseek", "endpoint": "x"},
+            ],
+        }
+    )
+
+    artifacts = asyncio.run(
+        build_report_bundle(
+            config=config,
+            source_memory=SourceMemory(tmp_path / "source_memory.json"),
+            generated_at=datetime(2026, 6, 7, 12, tzinfo=timezone.utc),
+            watchdog=None,
+        )
+    )
+
+    assert artifacts.bundle.metadata["meeting_exit_status"] == "degraded_last_valid"
+    assert artifacts.bundle.metadata["meeting_exit_warning"]
+    assert any("modo degradado" in warning.lower() for warning in artifacts.bundle.warnings)
+
+
+def test_blind_peer_review_shadow_metadata_is_persisted_without_decision_effect(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    async def fake_call_all_agents(prompt, *, specs, baseline_title_pct, **kwargs):
+        call_role = kwargs.get("call_role")
+        if call_role == "blind_peer_review":
+            return [
+                AgentOpinion(
+                    agent=spec.slot,
+                    title_pct=8.0,
+                    summary="Revisão cega em shadow.",
+                    answer=json.dumps(
+                        {
+                            "scores": [
+                                {"position_id": "position_1", "score": 0.81, "accepted": True},
+                                {"position_id": "position_2", "score": 0.76, "accepted": True},
+                                {"position_id": "position_3", "score": 0.64, "accepted": False},
+                            ]
+                        }
+                    ),
+                    raw_text=json.dumps(
+                        {
+                            "scores": [
+                                {"position_id": "position_1", "score": 0.81, "accepted": True},
+                                {"position_id": "position_2", "score": 0.76, "accepted": True},
+                                {"position_id": "position_3", "score": 0.64, "accepted": False},
+                            ]
+                        }
+                    ),
+                    source_urls=["https://example.com/blind-review"],
+                )
+                for spec in specs
+            ]
+        if "planejamento de fontes" in prompt.lower() or "source_urls" in prompt.lower():
+            return [
+                AgentOpinion(
+                    agent=spec.slot,
+                    title_pct=8.0,
+                    summary="Plano com fonte verificável.",
+                    source_urls=[f"https://example.com/{spec.slot.lower().replace(' ', '-')}"],
+                )
+                for spec in specs
+            ]
+        return [
+            AgentOpinion(
+                agent=spec.slot,
+                title_pct=8.0,
+                summary="Sala principal mantém chance de título do Brasil.",
+                answer="Concordo com odds, Elo e chaveamento; Brasil fica em 8%.",
+                source_urls=["https://example.com/main"],
+                agrees_with_protagonist=True,
+            )
+            for spec in specs
+        ]
+
+    async def fake_call_agent(spec, prompt, **kwargs):
+        return AgentOpinion(
+            agent=spec.slot,
+            title_pct=8.0,
+            summary="Pergunta com fonte verificável.",
+            question="Concordam com Brasil em 8% após odds e Elo?",
+            answer="Odds e Elo sustentam Brasil em 8%.",
+            source_urls=["https://example.com/question"],
+            agrees_with_protagonist=True,
+        )
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_agent", fake_call_agent)
+    config = load_config(Path("config/worldcup_brazil.example.json"))
+    config.update(
+        {
+            "baseline_title_pct": 8.0,
+            "minimum_source_ready_agents": 3,
+            "source_planning_repair_attempts": 0,
+            "meeting_min_participants": 3,
+            "meeting_min_rounds": 1,
+            "meeting_max_rounds": 1,
+            "meeting_require_full_path_coverage": False,
+            "parallel_opponent_debriefing_enabled": False,
+            "monte_carlo": {"enabled": False},
+            "blind_peer_review_enabled": True,
+            "blind_peer_review_shadow_only": True,
+            "blind_peer_review_timeout_seconds": 12,
+            "agents": [
+                {"slot": "GPT 5.5", "provider": "openai", "model": "gpt-5.5", "endpoint": "x"},
+                {"slot": "Perplexity Pro", "provider": "openai-compatible", "model": "sonar", "endpoint": "x"},
+                {"slot": "DeepSeek V4 Pro", "provider": "openai-compatible", "model": "deepseek", "endpoint": "x"},
+            ],
+        }
+    )
+
+    watchdog_path = tmp_path / "watchdog.jsonl"
+    artifacts = asyncio.run(
+        build_report_bundle(
+            config=config,
+            source_memory=SourceMemory(tmp_path / "source_memory.json"),
+            generated_at=datetime(2026, 6, 7, 12, tzinfo=timezone.utc),
+            watchdog=RunWatchdog(path=watchdog_path, verbose=False),
+        )
+    )
+
+    assert artifacts.bundle.metadata["agent_title_consensus_pct"] == 8.0
+    chairman = artifacts.bundle.metadata["numeric_chairman"]
+    assert chairman["enabled"] is True
+    assert chairman["number_owner"] == "agent_scaled_fallback"
+    assert chairman["primary_number_owner"] == "monte_carlo_reconciled_funnel"
+    assert chairman["llm_role"] == "narrative_and_bounded_adjustment"
+    assert chairman["llm_decides_number"] is False
+    assert chairman["hard_gate"] == "ReportCoherenceError"
+    assert chairman["stage_probability_source"] == "agent_scaled_fallback"
+    fast_path = artifacts.bundle.metadata["llm_council_fast_path"]
+    assert fast_path["enabled"] is False
+    assert fast_path["acted_on_decision"] is False
+    shadow = artifacts.bundle.metadata["blind_peer_review_shadow"]
+    assert shadow["enabled"] is True
+    assert shadow["shadow_only"] is True
+    assert shadow["acted_on_decision"] is False
+    assert shadow["rounds_reviewed"] == [1]
+    assert shadow["blind_top_position_id"] == "position_1"
+    assert shadow["blind_acceptance_count"] == 2
+    assert shadow["blind_review_score"]["position_1"] == 0.81
+    assert shadow["self_preference_leakage"]["reviewer_count"] == 3
+    events = [json.loads(line) for line in watchdog_path.read_text(encoding="utf-8").splitlines()]
+    assert any(event["step"] == "blind_peer_review" and event["status"] == "start" for event in events)
+    finish_events = [
+        event for event in events if event["step"] == "blind_peer_review" and event["status"] == "finish"
+    ]
+    assert finish_events
+    assert finish_events[-1]["extra"]["acted_on_decision"] is False
 
 
 def test_parallel_opponent_debriefing_timeout_does_not_block_main_room(

@@ -51,8 +51,6 @@ def _looks_removed_or_unusable(opinion: AgentOpinion) -> bool:
             "resposta removida do planejamento",
             "sem resposta parseável",
             "sem resposta parseavel",
-            "sem resposta externa utilizável",
-            "sem resposta externa utilizavel",
             "falha operacional sem resposta externa",
             "busca/fetch externo indisponível",
             "busca/fetch externo indisponivel",
@@ -133,6 +131,8 @@ class Consensus:
     raw_opinions: list[AgentOpinion]
     debate_transcript: list[str]
     agent_slots: tuple[str, ...] = REQUIRED_AGENT_SLOTS
+    exit_status: str = "consensus"
+    exit_warning: str = ""
 
 
 def _build_debate_transcript(

@@ -659,6 +659,35 @@ def test_sanitize_main_meeting_opinions_neutralizes_partial_json_title() -> None
     assert "sem campos auditáveis" in sanitized[0].summary
 
 
+def test_sanitize_main_meeting_opinions_does_not_treat_evidence_caveat_as_partial_payload() -> None:
+    opinions = [
+        AgentOpinion(
+            agent="DeepSeek V4 Pro",
+            title_pct=5.0,
+            summary=(
+                "Concordo parcialmente: sem resposta externa utilizável nova para mover além do ajuste "
+                "ancorado em odds e Elo."
+            ),
+            answer=(
+                "Com odds +900/+950, Elo Brasil 1991 vs Inglaterra 2024 e Brasil-Inglaterra em 45%, "
+                "aceito título em 5.0% e shift adicional 0. Pergunta de consenso: os demais concordam?"
+            ),
+            source_urls=["https://example.com/odds", "https://example.com/elo"],
+            agrees_with_protagonist=True,
+        )
+    ]
+
+    sanitized = _sanitize_main_meeting_opinions(
+        opinions,
+        baseline_title_pct=3.5,
+        config={"require_auditable_source_urls_for_meeting_votes": True},
+    )
+
+    assert sanitized[0].used_fallback is False
+    assert sanitized[0].removed_from_main is False
+    assert sanitized[0].title_pct == 5.0
+
+
 def test_sanitize_main_meeting_opinions_neutralizes_implausible_title_jump() -> None:
     opinions = [
         AgentOpinion(
@@ -680,6 +709,36 @@ def test_sanitize_main_meeting_opinions_neutralizes_implausible_title_jump() -> 
     assert sanitized[0].used_fallback is True
     assert sanitized[0].title_pct == 11.0
     assert "inconsistência quantitativa" in sanitized[0].summary
+
+
+def test_sanitize_main_meeting_opinions_allows_source_backed_title_recalibration_near_market_band() -> None:
+    opinions = [
+        AgentOpinion(
+            agent="GPT 5.5",
+            title_pct=8.6,
+            summary=(
+                "Discordo da âncora de 3.5% porque odds de mercado, Elo e chaveamento indicam Brasil "
+                "em faixa de elite, com título perto de 8.6%."
+            ),
+            answer=(
+                "A hipótese auditável é recalibrar o título de 3.5% para 8.6%: odds +900/+950, "
+                "Elo Brasil 1991 e gargalo Brasil-Inglaterra em 45% sustentam o ajuste. "
+                "Pergunta de consenso: concordam integralmente com esta recalibração?"
+            ),
+            source_urls=["https://example.com/odds", "https://example.com/elo"],
+            agrees_with_protagonist=False,
+        )
+    ]
+
+    sanitized = _sanitize_main_meeting_opinions(
+        opinions,
+        baseline_title_pct=3.5,
+        config={"max_agent_title_shift_pct": 5.0, "require_auditable_source_urls_for_meeting_votes": True},
+    )
+
+    assert sanitized[0].used_fallback is False
+    assert sanitized[0].removed_from_main is False
+    assert sanitized[0].title_pct == 8.6
 
 
 def test_sanitize_main_meeting_opinions_removes_agreement_without_auditable_sources() -> None:

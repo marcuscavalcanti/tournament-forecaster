@@ -8,6 +8,7 @@ import urllib.error
 
 import pytest
 
+import worldcup_brazil.agents as agents_module
 from worldcup_brazil.agents import (
     AgentSpec,
     _browser_command_env,
@@ -15,6 +16,7 @@ from worldcup_brazil.agents import (
     _call_browser_command_agent,
     _call_remote_agent,
     _post_json,
+    _post_json_once,
     agent_effort_profile,
     call_agent,
     call_all_agents,
@@ -807,6 +809,48 @@ def test_post_json_does_not_retry_http_404(monkeypatch) -> None:
     assert calls["count"] == 1
 
 
+def test_post_json_once_preserves_http_error_body(monkeypatch) -> None:
+    body = json.dumps(
+        {
+            "error": {
+                "message": "Your prepayment credits are depleted. Please go to AI Studio at https://ai.studio/projects."
+            }
+        }
+    ).encode("utf-8")
+
+    class FakeResponse:
+        status = 429
+        reason = "Too Many Requests"
+        headers = {}
+
+        def read(self):
+            return body
+
+    class FakeConnection:
+        def __init__(self, *_args, **_kwargs):
+            self.sock = None
+
+        def connect(self):
+            return None
+
+        def request(self, *_args, **_kwargs):
+            return None
+
+        def getresponse(self):
+            return FakeResponse()
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr("worldcup_brazil.agents.http.client.HTTPSConnection", FakeConnection)
+
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        _post_json_once("https://generativelanguage.googleapis.com/v1beta/models/x:generateContent", {}, b"{}", timeout=3)
+
+    assert exc_info.value.fp is not None
+    assert "prepayment credits are depleted" in exc_info.value.fp.read().decode("utf-8")
+
+
 def test_call_agent_hard_timeout_returns_operational_fallback(monkeypatch) -> None:
     def stuck_remote(*_args, **_kwargs):
         import time
@@ -1071,6 +1115,7 @@ def test_call_remote_agent_posts_to_gemini_generate_content(monkeypatch) -> None
 
 
 def test_call_remote_agent_tries_gemini_lite_model_before_removing_from_room(monkeypatch) -> None:
+    getattr(agents_module, "_MODEL_RATE_LIMIT_COOLDOWNS", {}).clear()
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-secret")
     calls = {"bridge_models": [], "http_urls": []}
 
@@ -1135,6 +1180,288 @@ def test_call_remote_agent_tries_gemini_lite_model_before_removing_from_room(mon
         "from": "gemini-3.5-flash",
         "to": "gemini-3.1-flash-lite",
     }
+
+
+def test_gemini_prepayment_depleted_429_surfaces_billing_action(monkeypatch) -> None:
+    getattr(agents_module, "_MODEL_RATE_LIMIT_COOLDOWNS", {}).clear()
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-secret")
+    body = {
+        "error": {
+            "code": 429,
+            "message": (
+                "Your prepayment credits are depleted. Please go to AI Studio at "
+                "https://ai.studio/projects to manage your project and billing. Learn more at "
+                "https://ai.google.dev/gemini-api/docs/billing#prepay. "
+            ),
+            "status": "RESOURCE_EXHAUSTED",
+        }
+    }
+    calls: list[str] = []
+
+    def fake_post_json(url, headers, payload, *, timeout):
+        calls.append(url)
+        raise urllib.error.HTTPError(
+            url=url,
+            code=429,
+            msg="Too Many Requests",
+            hdrs=None,
+            fp=io.BytesIO(json.dumps(body).encode("utf-8")),
+        )
+
+    monkeypatch.setattr("worldcup_brazil.agents._post_json", fake_post_json)
+    spec = AgentSpec(
+        slot="Gemini Pro",
+        provider="google-gemini",
+        model="gemini-3.5-flash",
+        env_api_key="GEMINI_API_KEY",
+        endpoint="https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+        model_fallbacks=["gemini-3.1-flash-lite"],
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        _call_remote_agent(spec, "Monte uma tese sem Opta.", timeout=12)
+
+    detail = str(exc_info.value)
+    assert "Google Gemini billing action required" in detail
+    assert "prepayment credits are depleted" in detail
+    assert "https://ai.studio/projects" in detail
+    assert "buy/prepay credits" in detail
+    assert "skipped by rate-limit cooldown" not in detail
+    assert len(calls) == 2
+
+
+def test_gemini_rate_limit_cooldown_skips_primary_model_on_next_call(monkeypatch) -> None:
+    getattr(agents_module, "_MODEL_RATE_LIMIT_COOLDOWNS", {}).clear()
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-secret")
+    monkeypatch.setenv("GEMINI_RATE_LIMIT_COOLDOWN_SECONDS", "900")
+    calls: list[str] = []
+
+    def fake_post_json(url, headers, payload, *, timeout):
+        calls.append(url)
+        if "gemini-3.5-flash" in url:
+            raise urllib.error.HTTPError(url=url, code=429, msg="Too Many Requests", hdrs=None, fp=None)
+        return {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "text": json.dumps(
+                                    {
+                                        "title_pct": 9.6,
+                                        "summary": "Gemini lite respondeu com fonte auditável.",
+                                    }
+                                )
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setattr("worldcup_brazil.agents._post_json", fake_post_json)
+    spec = AgentSpec(
+        slot="Gemini Pro",
+        provider="google-gemini",
+        model="gemini-3.5-flash",
+        env_api_key="GEMINI_API_KEY",
+        endpoint="https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+        max_output_tokens=7000,
+        reasoning_effort="high",
+        model_fallbacks=["gemini-3.1-flash-lite"],
+    )
+
+    _call_remote_agent(spec, "primeiro turno", timeout=12)
+    _call_remote_agent(spec, "segundo turno", timeout=12)
+
+    assert calls == [
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent",
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent",
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent",
+    ]
+
+
+def test_gemini_meeting_response_role_uses_lite_and_smaller_output_budget(monkeypatch) -> None:
+    getattr(agents_module, "_MODEL_RATE_LIMIT_COOLDOWNS", {}).clear()
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-secret")
+    calls: list[dict[str, object]] = []
+
+    def fake_post_json(url, headers, payload, *, timeout):
+        calls.append({"url": url, "max_output": payload["generationConfig"]["maxOutputTokens"]})
+        return {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "text": json.dumps(
+                                    {
+                                        "title_pct": 9.4,
+                                        "summary": "Resposta curta do Gemini lite para rodada de sala.",
+                                    }
+                                )
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setattr("worldcup_brazil.agents._post_json", fake_post_json)
+    [spec] = load_agent_specs_from_config(
+        {
+            "agents": [
+                {
+                    "slot": "Gemini Pro",
+                    "provider": "google-gemini",
+                    "model": "gemini-3.5-flash",
+                    "env_api_key": "GEMINI_API_KEY",
+                    "endpoint": "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                    "browser_command": None,
+                    "prefer_bridge": False,
+                    "max_output_tokens": 7000,
+                    "reasoning_effort": "high",
+                    "model_fallbacks": ["gemini-3.1-flash-lite"],
+                    "model_order_by_role": {
+                        "meeting_response": ["gemini-3.1-flash-lite", "gemini-3.5-flash"]
+                    },
+                    "max_output_tokens_by_role": {
+                        "meeting_response": 2500,
+                        "source_planning": 4500
+                    },
+                }
+            ]
+        }
+    )
+
+    response_opinion = asyncio.run(
+        call_agent(
+            spec,
+            "responda à pergunta do protagonista",
+            baseline_title_pct=9.0,
+            timeout=12,
+            call_role="meeting_response",
+        )
+    )
+    planning_opinion = asyncio.run(
+        call_agent(
+            spec,
+            "planeje suas fontes",
+            baseline_title_pct=9.0,
+            timeout=12,
+            call_role="source_planning",
+        )
+    )
+
+    assert response_opinion.summary.startswith("Resposta curta do Gemini lite")
+    assert planning_opinion.summary.startswith("Resposta curta do Gemini lite")
+    assert calls == [
+        {
+            "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent",
+            "max_output": 2500,
+        },
+        {
+            "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent",
+            "max_output": 4500,
+        },
+    ]
+
+
+def test_gemini_role_model_order_retargets_cli_model_argument(monkeypatch) -> None:
+    getattr(agents_module, "_MODEL_RATE_LIMIT_COOLDOWNS", {}).clear()
+    seen_commands: list[list[str]] = []
+
+    def fake_run(command, **_kwargs):
+        seen_commands.append(command)
+
+        class Result:
+            returncode = 0
+            stdout = json.dumps(
+                {
+                    "title_pct": 9.3,
+                    "summary": "Gemini CLI lite respondeu a rodada de sala.",
+                }
+            )
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr("worldcup_brazil.agents._run_browser_subprocess", fake_run)
+    spec = AgentSpec(
+        slot="Gemini Pro",
+        provider="google-gemini",
+        model="gemini-3.5-flash",
+        env_api_key="GEMINI_API_KEY",
+        endpoint="https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+        browser_command=["gemini", "--skip-trust", "-p", "{prompt}", "-m", "gemini-3.5-flash"],
+        prefer_bridge=True,
+        model_fallbacks=["gemini-3.1-flash-lite"],
+        model_order_by_role={"meeting_response": ["gemini-3.1-flash-lite", "gemini-3.5-flash"]},
+        max_output_tokens_by_role={"meeting_response": 2500},
+    )
+
+    opinion = asyncio.run(
+        call_agent(
+            spec,
+            "responda à pergunta do protagonista",
+            baseline_title_pct=9.0,
+            timeout=12,
+            call_role="meeting_response",
+        )
+    )
+
+    assert opinion.summary.startswith("Gemini CLI lite")
+    assert seen_commands == [["gemini", "--skip-trust", "-p", "responda à pergunta do protagonista", "-m", "gemini-3.1-flash-lite"]]
+
+
+def test_gemini_local_quota_guard_skips_primary_when_tpm_budget_would_be_exceeded(monkeypatch) -> None:
+    getattr(agents_module, "_MODEL_RATE_LIMIT_COOLDOWNS", {}).clear()
+    getattr(agents_module, "_MODEL_QUOTA_EVENTS", {}).clear()
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-secret")
+    calls: list[str] = []
+
+    def fake_post_json(url, headers, payload, *, timeout):
+        calls.append(url)
+        return {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "text": json.dumps(
+                                    {
+                                        "title_pct": 9.1,
+                                        "summary": "Gemini lite entrou por quota guard local.",
+                                    }
+                                )
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setattr("worldcup_brazil.agents._post_json", fake_post_json)
+    spec = AgentSpec(
+        slot="Gemini Pro",
+        provider="google-gemini",
+        model="gemini-3.5-flash",
+        env_api_key="GEMINI_API_KEY",
+        endpoint="https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+        max_output_tokens=2000,
+        model_fallbacks=["gemini-3.1-flash-lite"],
+        model_rate_limits={
+            "gemini-3.5-flash": {"tpm": 1000, "rpm": 1000},
+            "gemini-3.1-flash-lite": {"tpm": 6000, "rpm": 1000},
+        },
+    )
+
+    text = _call_remote_agent(spec, "x" * 2000, timeout=12)
+
+    assert calls == [
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent"
+    ]
+    assert json.loads(text)["summary"].startswith("Gemini lite entrou por quota guard local.")
 
 
 def test_call_remote_agent_falls_back_to_gemini_http_api_after_cli_failure(monkeypatch) -> None:

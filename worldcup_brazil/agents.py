@@ -4,6 +4,7 @@ import asyncio
 import datetime
 import email.utils
 import http.client
+import io
 import json
 import os
 import queue
@@ -18,7 +19,7 @@ import time
 import urllib.parse
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from worldcup_brazil.consensus import AgentOpinion, REQUIRED_AGENT_SLOTS
@@ -52,6 +53,11 @@ DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS = 20.0
 RETRYABLE_HTTP_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
 DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
 DEFAULT_GEMINI_FALLBACK_MODEL = "gemini-3.1-flash-lite"
+DEFAULT_GEMINI_RATE_LIMIT_COOLDOWN_SECONDS = 900.0
+
+
+_MODEL_RATE_LIMIT_COOLDOWNS: dict[tuple[str, str, str], float] = {}
+_MODEL_QUOTA_EVENTS: dict[tuple[str, str, str], list[tuple[float, int]]] = {}
 
 
 @dataclass(frozen=True)
@@ -69,6 +75,9 @@ class AgentSpec:
     browser_command: list[str] | None = None
     browser_fallback_commands: list[list[str]] | None = None
     model_fallbacks: list[str] | None = None
+    model_order_by_role: dict[str, list[str]] | None = None
+    max_output_tokens_by_role: dict[str, int] | None = None
+    model_rate_limits: dict[str, dict[str, int]] | None = None
     prefer_bridge: bool = False
 
 
@@ -153,6 +162,97 @@ def _retry_after_seconds(exc: urllib.error.HTTPError) -> float | None:
     return seconds if seconds > 0 else None
 
 
+def _http_error_body_text(exc: urllib.error.HTTPError) -> str:
+    cached = getattr(exc, "_worldcup_body_text", None)
+    if isinstance(cached, str):
+        return cached
+    fp = getattr(exc, "fp", None)
+    if fp is None:
+        return ""
+    position: int | None = None
+    try:
+        position = fp.tell()
+    except (AttributeError, OSError):
+        position = None
+    try:
+        raw = fp.read()
+    except Exception:
+        raw = b""
+    if position is not None:
+        try:
+            fp.seek(position)
+        except (AttributeError, OSError):
+            pass
+    if isinstance(raw, bytes):
+        text = raw.decode("utf-8", errors="replace")
+    else:
+        text = str(raw or "")
+    try:
+        setattr(exc, "_worldcup_body_text", text)
+    except Exception:
+        pass
+    return text
+
+
+def _http_error_api_message(exc: urllib.error.HTTPError) -> str:
+    body = _http_error_body_text(exc)
+    if not body:
+        return ""
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return body.strip()
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict) and error.get("message"):
+            return str(error.get("message") or "").strip()
+        if payload.get("message"):
+            return str(payload.get("message") or "").strip()
+    return body.strip()
+
+
+def _looks_like_gemini_prepayment_depleted_text(text: str) -> bool:
+    lowered = str(text or "").lower()
+    return (
+        "prepayment credits are depleted" in lowered
+        or (
+            "ai.studio/projects" in lowered
+            and "billing" in lowered
+            and ("prepay" in lowered or "credits" in lowered)
+        )
+    )
+
+
+def _is_gemini_prepayment_depleted_error(exc: Exception) -> bool:
+    if not isinstance(exc, urllib.error.HTTPError):
+        return _looks_like_gemini_prepayment_depleted_text(str(exc))
+    if int(getattr(exc, "code", 0) or 0) != 429:
+        return False
+    return _looks_like_gemini_prepayment_depleted_text(
+        " ".join([_http_error_api_message(exc), _http_error_body_text(exc)])
+    )
+
+
+def _gemini_billing_action_required_detail(exc: Exception) -> str:
+    if isinstance(exc, urllib.error.HTTPError):
+        api_message = _http_error_api_message(exc)
+    else:
+        api_message = str(exc)
+    api_message = " ".join(str(api_message or "").split())
+    return (
+        "Google Gemini billing action required: prepayment credits are depleted; "
+        "buy/prepay credits in AI Studio at https://ai.studio/projects before expecting Gemini to rejoin "
+        "the model room. Raw API message: "
+        f"{api_message or 'Your prepayment credits are depleted.'}"
+    )
+
+
+def _agent_exception_detail(exc: Exception) -> str:
+    if _is_gemini_prepayment_depleted_error(exc):
+        return _gemini_billing_action_required_detail(exc)
+    return str(exc)
+
+
 def _retry_delay_seconds(attempt_index: int, exc: Exception) -> float:
     if isinstance(exc, urllib.error.HTTPError):
         retry_after = _retry_after_seconds(exc)
@@ -168,6 +268,8 @@ def _retry_delay_seconds(attempt_index: int, exc: Exception) -> float:
 
 
 def _is_retryable_http_error(exc: urllib.error.HTTPError) -> bool:
+    if _is_gemini_prepayment_depleted_error(exc):
+        return False
     return int(getattr(exc, "code", 0) or 0) in RETRYABLE_HTTP_STATUS_CODES
 
 
@@ -227,13 +329,18 @@ def _post_json_once(
         response = connection.getresponse()
         response_body = response.read()
         if response.status < 200 or response.status >= 300:
-            raise urllib.error.HTTPError(
+            error = urllib.error.HTTPError(
                 url=url,
                 code=response.status,
                 msg=response.reason,
                 hdrs=response.headers,
-                fp=None,
+                fp=io.BytesIO(response_body),
             )
+            try:
+                setattr(error, "_worldcup_body_text", response_body.decode("utf-8", errors="replace"))
+            except Exception:
+                pass
+            raise error
         return json.loads(response_body.decode("utf-8"))
     finally:
         connection.close()
@@ -457,6 +564,186 @@ def _gemini_model_fallbacks(primary_model: str) -> list[str]:
     return [model for model in fallbacks if model and model != primary_model]
 
 
+def _unique_model_list(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        model = str(value or "").strip()
+        if not model or model in seen:
+            continue
+        seen.add(model)
+        result.append(model)
+    return result
+
+
+def _models_for_call(spec: AgentSpec) -> list[str]:
+    return _unique_model_list([spec.model, *(spec.model_fallbacks or [])])
+
+
+def _role_from_prompt(prompt: str) -> str:
+    lower = prompt.lower()
+    if "reentrada assíncrona" in lower or "reentrada assincrona" in lower:
+        return "agent_reentry_probe"
+    if "protagonista atual da sala de reunião dos modelos" in lower:
+        return "protagonist_question"
+    if "responda à pergunta do protagonista" in lower or "responda a pergunta do protagonista" in lower:
+        return "meeting_response"
+    if "rodada de reparo operacional" in lower or "self-healing" in lower:
+        return "source_planning_repair"
+    if "reenvie somente o objeto json completo" in lower or "json veio truncado" in lower:
+        return "format_repair"
+    if "planejamento de fontes" in lower or "plano de fontes" in lower or "source_urls, source_queries" in lower:
+        return "source_planning"
+    return "general"
+
+
+def _model_order_for_role(spec: AgentSpec, call_role: str | None) -> list[str]:
+    base = _models_for_call(spec)
+    if not call_role or not spec.model_order_by_role:
+        return base
+    configured = spec.model_order_by_role.get(call_role)
+    if not configured:
+        return base
+    allowed = set(base)
+    role_order = [model for model in configured if model in allowed]
+    return _unique_model_list([*role_order, *base])
+
+
+def _retarget_browser_command_model(command: list[str] | None, *, from_model: str, to_model: str) -> list[str] | None:
+    if not command or from_model == to_model:
+        return command
+    return [to_model if arg == from_model else arg for arg in command]
+
+
+def _spec_for_call_role(spec: AgentSpec, call_role: str | None) -> AgentSpec:
+    role = call_role or "general"
+    max_output_tokens = spec.max_output_tokens
+    if spec.max_output_tokens_by_role and role in spec.max_output_tokens_by_role:
+        max_output_tokens = max(1, int(spec.max_output_tokens_by_role[role]))
+    model_order = _model_order_for_role(spec, role)
+    if model_order:
+        return replace(
+            spec,
+            model=model_order[0],
+            model_fallbacks=model_order[1:],
+            max_output_tokens=max_output_tokens,
+            browser_command=_retarget_browser_command_model(
+                spec.browser_command,
+                from_model=spec.model,
+                to_model=model_order[0],
+            ),
+        )
+    return replace(spec, max_output_tokens=max_output_tokens)
+
+
+def _rate_limit_cooldown_key(spec: AgentSpec, model: str) -> tuple[str, str, str]:
+    identity = spec.env_api_key or urllib.parse.urlparse(spec.endpoint).netloc or spec.endpoint
+    return spec.provider, identity, model
+
+
+def _gemini_rate_limit_cooldown_seconds(exc: Exception) -> float:
+    if isinstance(exc, urllib.error.HTTPError):
+        retry_after = _retry_after_seconds(exc)
+        if retry_after is not None:
+            return min(retry_after, _retry_after_max_seconds())
+    value = os.environ.get("GEMINI_RATE_LIMIT_COOLDOWN_SECONDS")
+    if value:
+        try:
+            return max(0.0, float(value))
+        except ValueError:
+            pass
+    return DEFAULT_GEMINI_RATE_LIMIT_COOLDOWN_SECONDS
+
+
+def _is_rate_limit_failure(exc: Exception) -> bool:
+    if _is_gemini_prepayment_depleted_error(exc):
+        return False
+    if isinstance(exc, urllib.error.HTTPError) and int(getattr(exc, "code", 0) or 0) == 429:
+        return True
+    text = str(exc).lower()
+    return any(marker in text for marker in ["429", "too many requests", "rate limit", "quota"])
+
+
+def _mark_model_rate_limited(spec: AgentSpec, model: str, exc: Exception) -> None:
+    if spec.provider != "google-gemini" or not _is_rate_limit_failure(exc):
+        return
+    cooldown = _gemini_rate_limit_cooldown_seconds(exc)
+    if cooldown <= 0:
+        return
+    _MODEL_RATE_LIMIT_COOLDOWNS[_rate_limit_cooldown_key(spec, model)] = time.monotonic() + cooldown
+
+
+def _model_rate_limit_cooldown_remaining_seconds(spec: AgentSpec, model: str) -> float:
+    key = _rate_limit_cooldown_key(spec, model)
+    until = _MODEL_RATE_LIMIT_COOLDOWNS.get(key)
+    if until is None:
+        return 0.0
+    remaining = until - time.monotonic()
+    if remaining <= 0:
+        _MODEL_RATE_LIMIT_COOLDOWNS.pop(key, None)
+        return 0.0
+    return remaining
+
+
+def _estimated_request_tokens(prompt: str, *, max_output_tokens: int) -> int:
+    return max(1, (len(prompt) + 3) // 4) + max(1, int(max_output_tokens))
+
+
+def _model_quota_limits(spec: AgentSpec, model: str) -> dict[str, int]:
+    if not spec.model_rate_limits:
+        return {}
+    raw = spec.model_rate_limits.get(model) or {}
+    limits: dict[str, int] = {}
+    for key in ("rpm", "tpm", "rpd"):
+        value = raw.get(key)
+        if value is None:
+            continue
+        try:
+            numeric = int(value)
+        except (TypeError, ValueError):
+            continue
+        if numeric > 0:
+            limits[key] = numeric
+    return limits
+
+
+def _quota_events_for_window(key: tuple[str, str, str], *, window_seconds: float) -> list[tuple[float, int]]:
+    now = time.monotonic()
+    events = [
+        (event_time, tokens)
+        for event_time, tokens in _MODEL_QUOTA_EVENTS.get(key, [])
+        if now - event_time <= window_seconds
+    ]
+    _MODEL_QUOTA_EVENTS[key] = events
+    return events
+
+
+def _local_quota_guard_reason(spec: AgentSpec, model: str, prompt: str) -> str | None:
+    limits = _model_quota_limits(spec, model)
+    if not limits:
+        return None
+    key = _rate_limit_cooldown_key(spec, model)
+    estimated_tokens = _estimated_request_tokens(prompt, max_output_tokens=spec.max_output_tokens)
+    minute_events = _quota_events_for_window(key, window_seconds=60.0)
+    day_events = _quota_events_for_window(key, window_seconds=86400.0)
+    if "rpm" in limits and len(minute_events) + 1 > limits["rpm"]:
+        return f"rpm {len(minute_events) + 1}/{limits['rpm']}"
+    if "tpm" in limits and sum(tokens for _, tokens in minute_events) + estimated_tokens > limits["tpm"]:
+        return f"tpm {sum(tokens for _, tokens in minute_events) + estimated_tokens}/{limits['tpm']}"
+    if "rpd" in limits and len(day_events) + 1 > limits["rpd"]:
+        return f"rpd {len(day_events) + 1}/{limits['rpd']}"
+    return None
+
+
+def _record_model_quota_event(spec: AgentSpec, model: str, prompt: str) -> None:
+    if not _model_quota_limits(spec, model):
+        return
+    key = _rate_limit_cooldown_key(spec, model)
+    events = _quota_events_for_window(key, window_seconds=86400.0)
+    events.append((time.monotonic(), _estimated_request_tokens(prompt, max_output_tokens=spec.max_output_tokens)))
+    _MODEL_QUOTA_EVENTS[key] = events
+
+
 def _env_int(name: str) -> int | None:
     value = os.environ.get(name)
     if not value:
@@ -556,6 +843,31 @@ def agent_effort_profile(spec: AgentSpec) -> dict[str, str]:
     controls.append(f"http_retries={_http_max_attempts()}")
     controls.append(f"http_backoff={_http_backoff_base_seconds():.1f}-{_http_backoff_max_seconds():.1f}s")
     controls.append(f"bulkhead={_agent_bulkhead_key(spec)}:{_agent_bulkhead_limit(spec)}")
+    if spec.model_order_by_role:
+        controls.append(
+            "role_model_order="
+            + ", ".join(
+                f"{role}:{'>'.join(models)}"
+                for role, models in sorted(spec.model_order_by_role.items())
+            )
+        )
+    if spec.max_output_tokens_by_role:
+        controls.append(
+            "role_token_caps="
+            + ", ".join(
+                f"{role}:{tokens}"
+                for role, tokens in sorted(spec.max_output_tokens_by_role.items())
+            )
+        )
+    if spec.model_rate_limits:
+        controls.append(
+            "model_rate_limits="
+            + ", ".join(
+                f"{model}:"
+                + "/".join(f"{key}{value}" for key, value in sorted(limits.items()))
+                for model, limits in sorted(spec.model_rate_limits.items())
+            )
+        )
     if not native_control:
         controls.append("prompt_effort=high-equivalent")
         controls.append("sem parâmetro nativo de esforço; usa prompt/bridge configurado")
@@ -656,6 +968,28 @@ def default_agent_specs() -> list[AgentSpec]:
             web_fetch_url=gemini_web_fetch,
             browser_command=gemini_browser_command,
             model_fallbacks=gemini_model_fallbacks,
+            model_order_by_role={
+                "preflight": [DEFAULT_GEMINI_FALLBACK_MODEL, gemini_model],
+                "meeting_response": [DEFAULT_GEMINI_FALLBACK_MODEL, gemini_model],
+                "protagonist_question": [DEFAULT_GEMINI_FALLBACK_MODEL, gemini_model],
+                "format_repair": [DEFAULT_GEMINI_FALLBACK_MODEL, gemini_model],
+                "source_planning_repair": [DEFAULT_GEMINI_FALLBACK_MODEL, gemini_model],
+                "agent_reentry_probe": [DEFAULT_GEMINI_FALLBACK_MODEL, gemini_model],
+                "source_planning": [gemini_model, DEFAULT_GEMINI_FALLBACK_MODEL],
+            },
+            max_output_tokens_by_role={
+                "preflight": 1200,
+                "meeting_response": 2500,
+                "protagonist_question": 1500,
+                "format_repair": 1200,
+                "source_planning_repair": 2500,
+                "agent_reentry_probe": 2200,
+                "source_planning": 4500,
+            },
+            model_rate_limits={
+                gemini_model: {"rpm": 1000, "tpm": 2_000_000},
+                DEFAULT_GEMINI_FALLBACK_MODEL: {"rpm": 4000, "tpm": 4_000_000},
+            },
             prefer_bridge=gemini_prefer_bridge,
         ),
     ]
@@ -805,7 +1139,15 @@ def _call_api_agent_runtime(
 
     if spec.provider == "google-gemini":
         failures: list[str] = []
-        for model in [spec.model, *(spec.model_fallbacks or [])]:
+        for model in _models_for_call(spec):
+            cooldown_remaining = _model_rate_limit_cooldown_remaining_seconds(spec, model)
+            if cooldown_remaining > 0:
+                failures.append(f"{model}: skipped by rate-limit cooldown ({cooldown_remaining:.0f}s remaining)")
+                continue
+            quota_reason = _local_quota_guard_reason(spec, model, prompt)
+            if quota_reason:
+                failures.append(f"{model}: skipped by local quota guard ({quota_reason})")
+                continue
             endpoint = spec.endpoint.replace("{model}", urllib.parse.quote(model, safe=""))
             generation_config: dict[str, Any] = {
                 "maxOutputTokens": spec.max_output_tokens,
@@ -817,6 +1159,7 @@ def _call_api_agent_runtime(
             elif spec.reasoning_effort:
                 generation_config["thinkingConfig"] = {"thinkingLevel": spec.reasoning_effort.upper()}
             try:
+                _record_model_quota_event(spec, model, prompt)
                 data = _post_json(
                     endpoint,
                     {"X-goog-api-key": api_key},
@@ -840,7 +1183,8 @@ def _call_api_agent_runtime(
                     used_model=model,
                 ), f"api:{spec.provider}", model
             except Exception as exc:  # Gemini model fallback is intentionally broad before removing the slot.
-                failures.append(f"{model}: {exc}")
+                _mark_model_rate_limited(spec, model, exc)
+                failures.append(f"{model}: {_agent_exception_detail(exc)}")
         raise RuntimeError("Gemini API model fallback chain failed: " + " | ".join(failures))
 
     raise RuntimeError(f"unsupported provider {spec.provider}")
@@ -1008,14 +1352,17 @@ def _run_browser_subprocess(
     try:
         process = subprocess.Popen(
             command,
-            stdin=subprocess.PIPE,
+            stdin=subprocess.DEVNULL if input_text is None else subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             env=env,
             start_new_session=True,
         )
-        stdout, stderr = process.communicate(input=input_text, timeout=timeout)
+        if input_text is None:
+            stdout, stderr = process.communicate(timeout=timeout)
+        else:
+            stdout, stderr = process.communicate(input=input_text, timeout=timeout)
     except subprocess.TimeoutExpired as exc:
         if process is not None:
             try:
@@ -1039,11 +1386,20 @@ def _call_browser_command_agent_runtime(spec: AgentSpec, prompt: str, *, timeout
     commands = [spec.browser_command, *(spec.browser_fallback_commands or [])]
     failures: list[str] = []
     for raw_command in commands:
-        models = [spec.model]
-        if spec.provider == "google-gemini":
-            models.extend(spec.model_fallbacks or [])
+        models = _models_for_call(spec) if spec.provider == "google-gemini" else [spec.model]
         for model in models:
+            if spec.provider == "google-gemini":
+                cooldown_remaining = _model_rate_limit_cooldown_remaining_seconds(spec, model)
+                if cooldown_remaining > 0:
+                    failures.append(f"{model}: skipped by rate-limit cooldown ({cooldown_remaining:.0f}s remaining)")
+                    continue
+                quota_reason = _local_quota_guard_reason(spec, model, prompt)
+                if quota_reason:
+                    failures.append(f"{model}: skipped by local quota guard ({quota_reason})")
+                    continue
             try:
+                if spec.provider == "google-gemini":
+                    _record_model_quota_event(spec, model, prompt)
                 text = _run_browser_command(
                     spec.slot,
                     raw_command,
@@ -1058,7 +1414,8 @@ def _call_browser_command_agent_runtime(spec: AgentSpec, prompt: str, *, timeout
                     model,
                 )
             except RuntimeError as exc:
-                failures.append(str(exc))
+                _mark_model_rate_limited(spec, model, exc)
+                failures.append(_agent_exception_detail(exc))
     if not failures:
         raise RuntimeError(f"{spec.slot} has no configured browser_command")
     if len(failures) == 1:
@@ -1336,8 +1693,9 @@ def run_agent_preflight(
     method = "api" if _has_api_key(spec) else "unavailable"
     runtime_model = spec.model
     try:
+        runtime_spec = _spec_for_call_role(spec, "preflight")
         text, method, runtime_model = _call_remote_agent_runtime(
-            spec,
+            runtime_spec,
             _agent_preflight_prompt(spec.slot, contract=contract),
             timeout=timeout,
         )
@@ -1600,20 +1958,24 @@ async def call_agent(
     baseline_title_pct: float,
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
     allow_local_fallback: bool = True,
+    call_role: str | None = None,
 ) -> AgentOpinion:
+    runtime_spec = _spec_for_call_role(spec, call_role or _role_from_prompt(prompt))
     try:
-        text = await _call_text_with_hard_timeout_async("remote", spec, prompt, timeout=timeout)
-        return parse_agent_opinion(spec.slot, text, fallback_title_pct=baseline_title_pct)
+        text = await _call_text_with_hard_timeout_async("remote", runtime_spec, prompt, timeout=timeout)
+        return parse_agent_opinion(runtime_spec.slot, text, fallback_title_pct=baseline_title_pct)
     except (RuntimeError, urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
-        if not spec.prefer_bridge and _has_api_key(spec) and (spec.web_fetch_url or spec.browser_command):
+        if not runtime_spec.prefer_bridge and _has_api_key(runtime_spec) and (
+            runtime_spec.web_fetch_url or runtime_spec.browser_command
+        ):
             try:
-                text = await _call_text_with_hard_timeout_async("bridge", spec, prompt, timeout=timeout)
-                return parse_agent_opinion(spec.slot, text, fallback_title_pct=baseline_title_pct)
+                text = await _call_text_with_hard_timeout_async("bridge", runtime_spec, prompt, timeout=timeout)
+                return parse_agent_opinion(runtime_spec.slot, text, fallback_title_pct=baseline_title_pct)
             except (RuntimeError, urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
                 pass
         if not allow_local_fallback:
             raise
-        return _local_fallback_opinion(spec, str(exc), baseline_title_pct=baseline_title_pct)
+        return _local_fallback_opinion(runtime_spec, str(exc), baseline_title_pct=baseline_title_pct)
 
 
 def _bulkhead_env_suffix(value: str) -> str:
@@ -1643,6 +2005,7 @@ async def call_all_agents(
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
     allow_local_fallback: bool = True,
     progress_callback: Any = None,
+    call_role: str | None = None,
 ) -> list[AgentOpinion]:
     specs = specs or default_agent_specs()
     by_slot = {spec.slot: spec for spec in specs}
@@ -1653,6 +2016,7 @@ async def call_all_agents(
     semaphores: dict[str, asyncio.Semaphore] = {}
 
     async def run_with_bulkhead(spec: AgentSpec) -> AgentOpinion:
+        role = call_role or _role_from_prompt(prompt)
         key = _agent_bulkhead_key(spec)
         semaphore = semaphores.setdefault(key, asyncio.Semaphore(_agent_bulkhead_limit(spec)))
         async with semaphore:
@@ -1662,13 +2026,25 @@ async def call_all_agents(
                 {"status": "start", "agent": spec.slot, "provider": spec.provider, "timeout_seconds": timeout},
             )
             try:
-                opinion = await call_agent(
-                    spec,
-                    prompt,
-                    baseline_title_pct=baseline_title_pct,
-                    timeout=timeout,
-                    allow_local_fallback=allow_local_fallback,
-                )
+                try:
+                    opinion = await call_agent(
+                        spec,
+                        prompt,
+                        baseline_title_pct=baseline_title_pct,
+                        timeout=timeout,
+                        allow_local_fallback=allow_local_fallback,
+                        call_role=role,
+                    )
+                except TypeError as exc:
+                    if "call_role" not in str(exc):
+                        raise
+                    opinion = await call_agent(
+                        spec,
+                        prompt,
+                        baseline_title_pct=baseline_title_pct,
+                        timeout=timeout,
+                        allow_local_fallback=allow_local_fallback,
+                    )
             except Exception as exc:
                 _agent_progress_event(
                     progress_callback,
@@ -1772,6 +2148,15 @@ def load_agent_specs_from_config(config: dict[str, Any]) -> list[AgentSpec]:
                 browser_fallback_commands=browser_fallback_commands,
                 model_fallbacks=_configured_value(
                     item, "model_fallbacks", default.model_fallbacks if default else None
+                ),
+                model_order_by_role=_configured_value(
+                    item, "model_order_by_role", default.model_order_by_role if default else None
+                ),
+                max_output_tokens_by_role=_configured_value(
+                    item, "max_output_tokens_by_role", default.max_output_tokens_by_role if default else None
+                ),
+                model_rate_limits=_configured_value(
+                    item, "model_rate_limits", default.model_rate_limits if default else None
                 ),
                 prefer_bridge=bool(_configured_value(item, "prefer_bridge", default.prefer_bridge if default else False)),
             )

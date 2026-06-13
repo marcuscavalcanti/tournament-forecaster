@@ -179,6 +179,33 @@ def test_corrupt_calibration_log_is_quarantined_and_load_returns_empty(tmp_path)
     assert list(tmp_path.glob("calibration_predictions.json.corrupt*"))
 
 
+def test_second_corruption_does_not_clobber_first_quarantined_log(tmp_path) -> None:
+    """Bug histórico: a quarentena usava Path.replace para um sufixo .corrupt FIXO,
+    que sobrescreve o destino incondicionalmente. Um segundo torn write do log de
+    calibração clobava silenciosamente a forense do incidente anterior — a leitura
+    seguia com log vazio, mas a trilha de inspeção do primeiro incidente sumia.
+
+    No código antigo, este teste encontraria apenas 1 arquivo .corrupt com o
+    conteúdo do segundo incidente. O fix gera nome único (.corrupt.<timestamp>[.<n>]),
+    então os dois incidentes coexistem e o payload do primeiro permanece intacto."""
+    log_path = tmp_path / "calibration_predictions.json"
+
+    log_path.write_text('[{"id": "m1", "predicted_pct": 7', encoding="utf-8")  # incidente 1
+    assert _load_prediction_log(log_path) == []
+    first_quarantined = list(tmp_path.glob("calibration_predictions.json.corrupt*"))
+    assert len(first_quarantined) == 1
+    first_path = first_quarantined[0]
+    first_payload = first_path.read_text(encoding="utf-8")
+
+    log_path.write_text('[{"id": "m2", "predicted_pct": 8', encoding="utf-8")  # incidente 2 (distinto)
+    assert _load_prediction_log(log_path) == []
+
+    # ambos os incidentes preservados — nada foi clobado
+    assert len(list(tmp_path.glob("calibration_predictions.json.corrupt*"))) == 2
+    assert first_path.exists()
+    assert first_path.read_text(encoding="utf-8") == first_payload == '[{"id": "m1", "predicted_pct": 7'
+
+
 def test_atomic_write_text_writes_content_without_leaving_tmp_orphan(tmp_path) -> None:
     """ITEM 5: atomic_write_text grava o conteúdo e não deixa tempfile órfão no
     diretório do alvo após sucesso."""

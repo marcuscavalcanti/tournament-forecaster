@@ -71,8 +71,6 @@ def _looks_unusable(text: str) -> bool:
         "resposta em json parcial",
         "sem resposta parseável",
         "sem resposta parseavel",
-        "sem resposta externa utilizável",
-        "sem resposta externa utilizavel",
         "modelo não participa do consenso",
         "modelo nao participa do consenso",
         "falha operacional sem resposta externa",

@@ -45,3 +45,31 @@ def test_corrupt_run_state_is_quarantined_and_treated_as_no_state(tmp_path: Path
     assert not state_path.exists()
     # sufixo único (.corrupt.<timestamp>) para não clobbar forense de incidente anterior
     assert list(tmp_path.glob("state.json.corrupt*"))
+
+
+def test_second_corruption_does_not_clobber_first_quarantined_state(tmp_path: Path) -> None:
+    """Bug histórico: a quarentena usava Path.replace para um sufixo .corrupt FIXO,
+    que sobrescreve o destino incondicionalmente. Um segundo torn write clobava
+    silenciosamente a forense do incidente anterior — recuperação seguia, mas a
+    trilha de inspeção (motivo declarado de isolar o arquivo) era destruída.
+
+    No código antigo, este teste encontraria apenas 1 arquivo .corrupt e o
+    conteúdo do primeiro incidente teria virado o do segundo. O fix gera nome
+    único (.corrupt.<timestamp>[.<n>]), então os dois incidentes coexistem e o
+    payload do primeiro permanece intacto."""
+    state_path = tmp_path / "state.json"
+
+    state_path.write_text('{"last_success_at": "2026-06-1', encoding="utf-8")  # incidente 1
+    assert RunState(path=state_path).last_success_at() is None
+    first_quarantined = list(tmp_path.glob("state.json.corrupt*"))
+    assert len(first_quarantined) == 1
+    first_path = first_quarantined[0]
+    first_payload = first_path.read_text(encoding="utf-8")
+
+    state_path.write_text('{"last_success_at": "2026-06-2', encoding="utf-8")  # incidente 2 (distinto)
+    assert RunState(path=state_path).last_success_at() is None
+
+    # ambos os incidentes preservados — nada foi clobado
+    assert len(list(tmp_path.glob("state.json.corrupt*"))) == 2
+    assert first_path.exists()
+    assert first_path.read_text(encoding="utf-8") == first_payload == '{"last_success_at": "2026-06-1'

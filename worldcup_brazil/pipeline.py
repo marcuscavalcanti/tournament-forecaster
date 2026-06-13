@@ -175,6 +175,22 @@ def _new_token_cost_ledger(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _json_payload_from_text(text: str) -> dict[str, Any]:
+    candidate = str(text or "")
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", candidate, flags=re.S)
+    if fenced:
+        candidate = fenced.group(1)
+    start = candidate.find("{")
+    end = candidate.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return {}
+    try:
+        payload = json.loads(candidate[start : end + 1])
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def _token_cost_entry(ledger: dict[str, Any], agent: str) -> dict[str, Any]:
     ledger.setdefault(
         "total",
@@ -641,11 +657,28 @@ def _agent_source_planning_watchdog_extra(config: dict[str, Any]) -> dict[str, A
                     min(90, int(config.get("agent_timeout_seconds", 90))),
                 )
             ),
+            "blind_peer_review_enabled": bool(config.get("blind_peer_review_enabled", False)),
+            "blind_peer_review_shadow_only": bool(config.get("blind_peer_review_shadow_only", True)),
+            "blind_peer_review_timeout_seconds": int(config.get("blind_peer_review_timeout_seconds", 90)),
+            "numeric_chairman_enabled": bool(config.get("numeric_chairman_enabled", True)),
+            "llm_council_fast_path_enabled": bool(config.get("llm_council_fast_path_enabled", False)),
+            "llm_council_fast_path_shadow_only": bool(config.get("llm_council_fast_path_shadow_only", True)),
+            "llm_council_fast_path_min_participants": int(
+                config.get(
+                    "llm_council_fast_path_min_participants",
+                    config.get("meeting_min_participants", config.get("meeting_min_real_agents", 3)),
+                )
+            ),
             "meeting_min_participants": int(
                 config.get("meeting_min_participants", config.get("meeting_min_real_agents", 3))
             ),
             "meeting_quorum_rule": "maioria simples dos participantes ativos da sala",
             "meeting_response_repair_attempts": int(config.get("meeting_response_repair_attempts", 1)),
+            "max_agent_title_shift_pct": float(config.get("max_agent_title_shift_pct", 5.0)),
+            "max_agent_title_shift_with_sources_pct": float(
+                config.get("max_agent_title_shift_with_sources_pct", 8.0)
+            ),
+            "max_agent_title_pct_abs_cap": float(config.get("max_agent_title_pct_abs_cap", 25.0)),
             "meeting_require_full_path_coverage": bool(config.get("meeting_require_full_path_coverage", True)),
             "parallel_opponent_debriefing_enabled": bool(config.get("parallel_opponent_debriefing_enabled", False)),
             "agent_timeout_seconds": int(config.get("agent_timeout_seconds", 90)),
@@ -701,6 +734,10 @@ def _agent_source_planning_watchdog_detail(config: dict[str, Any]) -> str:
         f"self_heal_attempts={knobs['source_planning_repair_attempts']}; "
         f"format_repair={knobs['repair_format_removals_with_quorum']}; "
         f"format_repair_timeout_s={knobs['source_planning_format_repair_timeout_seconds']}; "
+        f"blind_review={knobs['blind_peer_review_enabled']}; "
+        f"blind_review_timeout_s={knobs['blind_peer_review_timeout_seconds']}; "
+        f"numeric_chairman={knobs['numeric_chairman_enabled']}; "
+        f"fast_path={knobs['llm_council_fast_path_enabled']}; "
         f"meeting_repair_attempts={knobs['meeting_response_repair_attempts']}; "
         f"full_path_coverage={knobs['meeting_require_full_path_coverage']}; "
         f"parallel_opponent_room={knobs['parallel_opponent_debriefing_enabled']}; "
@@ -1871,6 +1908,24 @@ def _stage_probabilities(title_pct: float, config: dict[str, Any]) -> dict[str, 
     }
 
 
+def _stage_probability_source(config: dict[str, Any]) -> str:
+    if config.get("stage_probabilities"):
+        return "configured_stage_probabilities"
+    monte_carlo_result = config.get("_monte_carlo_result")
+    if (
+        isinstance(monte_carlo_result, dict)
+        and monte_carlo_result.get("enabled")
+        and bool((config.get("monte_carlo") or {}).get("use_stage_probabilities", True))
+    ):
+        stages = monte_carlo_result.get("stage_probabilities") or {}
+        required = ("quartas", "semifinal", "final", "titulo")
+        if all(key in stages for key in required):
+            return "monte_carlo_reconciled_funnel"
+        if stages:
+            return "monte_carlo_partial_agent_scaled_fallback"
+    return "agent_scaled_fallback"
+
+
 def _bounded_confidence_level(value: Any, *, default: float = 0.95) -> float:
     try:
         confidence_level = float(value)
@@ -2902,7 +2957,22 @@ def _sanitize_protagonist_question(question: str, *, config: dict[str, Any], pro
     )
 
 
-def _has_implausible_title_jump(opinion: Any, *, baseline_title_pct: float, config: dict[str, Any] | None) -> bool:
+def _has_source_backed_recalibration(opinion: Any, *, combined: str, config: dict[str, Any] | None) -> bool:
+    source_urls, source_queries = _effective_meeting_sources(opinion, config or {})
+    if not (source_urls or source_queries):
+        return False
+    if not _looks_like_meeting_vote(opinion, combined):
+        return False
+    return _has_rational_hypothesis(combined)
+
+
+def _has_implausible_title_jump(
+    opinion: Any,
+    *,
+    baseline_title_pct: float,
+    config: dict[str, Any] | None,
+    combined: str | None = None,
+) -> bool:
     max_shift_pct = float((config or {}).get("max_agent_title_shift_pct", 5.0))
     if max_shift_pct <= 0:
         return False
@@ -2910,7 +2980,42 @@ def _has_implausible_title_jump(opinion: Any, *, baseline_title_pct: float, conf
         title_pct = float(getattr(opinion, "title_pct"))
     except (TypeError, ValueError):
         return True
-    return abs(title_pct - float(baseline_title_pct)) > max_shift_pct
+    shift_pct = abs(title_pct - float(baseline_title_pct))
+    if shift_pct <= max_shift_pct + 1e-9:
+        return False
+    cfg = config or {}
+    source_backed_shift_pct = float(cfg.get("max_agent_title_shift_with_sources_pct", 8.0))
+    absolute_cap_pct = float(cfg.get("max_agent_title_pct_abs_cap", 25.0))
+    if (
+        combined is not None
+        and title_pct <= absolute_cap_pct
+        and shift_pct <= source_backed_shift_pct + 1e-9
+        and _has_source_backed_recalibration(opinion, combined=combined, config=cfg)
+    ):
+        return False
+    return True
+
+
+def _has_unusable_meeting_payload(opinion: Any, *, combined: str, config: dict[str, Any] | None) -> bool:
+    normalized = _normalize_text(combined)
+    has_parse_failure = any(
+        marker in normalized
+        for marker in (
+            "resposta em json parcial",
+            "sem resposta parseavel",
+        )
+    )
+    if has_parse_failure:
+        return True
+    has_no_external_answer_marker = "sem resposta externa utilizavel" in normalized
+    if not has_no_external_answer_marker:
+        return False
+    if bool(getattr(opinion, "used_fallback", False)) or bool(getattr(opinion, "removed_from_main", False)):
+        return True
+    source_urls, source_queries = _effective_meeting_sources(opinion, config or {})
+    if (source_urls or source_queries) and _has_rational_hypothesis(combined):
+        return False
+    return True
 
 
 def _auditable_source_urls(opinion: Any) -> list[str]:
@@ -3126,20 +3231,14 @@ def _sanitize_main_meeting_opinions(
         impossible_bracket_detail = _impossible_bracket_opponent_detail(combined, config) if config else None
         has_impossible_bracket_opponent = bool(impossible_bracket_detail)
         has_unconfigured_group_opponent = bool(config and _mentions_unconfigured_opponent(combined, config))
-        has_unusable_payload = any(
-            marker in _normalize_text(combined)
-            for marker in (
-                "resposta em json parcial",
-                "sem resposta parseavel",
-                "sem resposta externa utilizavel",
-            )
-        )
+        has_unusable_payload = _has_unusable_meeting_payload(opinion, combined=combined, config=config)
         external_search_issue = _external_search_failure_issue(opinion)
         has_fixed_quanti_quali_allocation = _has_fixed_quanti_quali_allocation(combined)
         has_implausible_title_jump = _has_implausible_title_jump(
             opinion,
             baseline_title_pct=baseline_title_pct,
             config=config,
+            combined=combined,
         )
         has_unsupported_meeting_vote = _has_unsupported_meeting_vote(
             opinion,
@@ -3577,6 +3676,492 @@ def _next_peer_after_invalid_protagonist_question(turn: dict[str, Any], *, curre
     return str(winner.get("agent", current_protagonist))
 
 
+def _blind_peer_review_enabled(config: dict[str, Any]) -> bool:
+    return bool(config.get("blind_peer_review_enabled", False))
+
+
+def _blind_peer_review_shadow_only(config: dict[str, Any]) -> bool:
+    return bool(config.get("blind_peer_review_shadow_only", True))
+
+
+def _blind_peer_review_acceptance_threshold(config: dict[str, Any]) -> float:
+    return float(config.get("blind_peer_review_acceptance_threshold", 0.72))
+
+
+def _blind_peer_review_empty_metadata(config: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "enabled": _blind_peer_review_enabled(config),
+        "mode": "shadow",
+        "shadow_only": _blind_peer_review_shadow_only(config),
+        "acted_on_decision": False,
+        "rounds_reviewed": [],
+        "blind_review_score": {},
+        "blind_acceptance_count": 0,
+        "blind_top_position_id": "",
+        "self_preference_leakage": {
+            "value": 0.0,
+            "self_score_count": 0,
+            "reviewer_count": 0,
+        },
+        "errors": [],
+    }
+
+
+def _blind_peer_review_public_text(text: str, *, agent_slots: list[str]) -> str:
+    clean = str(text or "")
+    for slot in agent_slots:
+        if slot:
+            clean = re.sub(re.escape(slot), "modelo", clean, flags=re.I)
+    replacements = {
+        r"\bprotagonista\b": "posição",
+        r"\blíder\b": "posição",
+        r"\blider\b": "posição",
+        r"\bleader\b": "posição",
+    }
+    for pattern, replacement in replacements.items():
+        clean = re.sub(pattern, replacement, clean, flags=re.I)
+    return clean
+
+
+def _blind_peer_review_positions(opinions: list[Any], *, agent_slots: list[str]) -> list[dict[str, Any]]:
+    by_agent = {str(getattr(opinion, "agent", "")): opinion for opinion in opinions}
+    positions: list[dict[str, Any]] = []
+    for slot in agent_slots:
+        opinion = by_agent.get(slot)
+        if opinion is None or not _counts_as_consensus_participant(opinion):
+            continue
+        positions.append(
+            {
+                "position_id": f"position_{len(positions) + 1}",
+                "_agent": slot,
+                "title_pct": round(float(getattr(opinion, "title_pct", 0.0) or 0.0), 1),
+                "summary": _blind_peer_review_public_text(
+                    str(getattr(opinion, "summary", "") or ""),
+                    agent_slots=agent_slots,
+                )[:700],
+                "answer": _blind_peer_review_public_text(
+                    str(getattr(opinion, "answer", "") or ""),
+                    agent_slots=agent_slots,
+                )[:900],
+                "source_count": len(getattr(opinion, "source_urls", []) or [])
+                + len(getattr(opinion, "source_queries", []) or []),
+                "has_match_probabilities": bool(getattr(opinion, "match_probabilities", {}) or {}),
+                "has_scenario_probabilities": bool(getattr(opinion, "scenario_probabilities", {}) or {}),
+            }
+        )
+    return positions
+
+
+def _blind_peer_review_prompt(
+    *,
+    config: dict[str, Any],
+    round_index: int,
+    positions: list[dict[str, Any]],
+    generated_at: datetime,
+) -> str:
+    public_positions = [
+        {key: value for key, value in position.items() if key != "_agent"}
+        for position in positions
+    ]
+    payload = json.dumps(public_positions, ensure_ascii=False)
+    fast_path_can_act = bool(config.get("llm_council_fast_path_enabled", False)) and not bool(
+        config.get("llm_council_fast_path_shadow_only", True)
+    )
+    decision_clause = (
+        "Esta revisão é gate auxiliar do fast path opt-in: só pode encurtar a sala se cobertura, "
+        "aceitação, baixa dispersão, sala paralela e gates determinísticos também passarem; "
+        "não substitui Monte Carlo nem validações. "
+        if fast_path_can_act
+        else "Isto é telemetria: sua resposta não altera a decisão do run. "
+    )
+    return (
+        "Revisão cega em shadow da sala do Brasil. Você receberá posições anônimas, sem nomes de modelos "
+        "e sem papel de coordenação. Não tente identificar autoria. Avalie somente accuracy + insight com base em "
+        "fontes, coerência com bracket/Monte Carlo, hipótese racional e utilidade para consenso. "
+        f"{decision_clause}"
+        "Responda JSON estrito com summary e scores=[{position_id, score, accepted, rationale}], "
+        "onde score vai de 0.0 a 1.0 e accepted é booleano. "
+        f"{_quantitative_qualitative_decision_instruction()} "
+        f"Data: {generated_at.isoformat()}. Rodada: {round_index}. "
+        f"Posições anônimas: {payload}"
+    )
+
+
+def _blind_peer_review_score_items(opinion: Any) -> list[dict[str, Any]]:
+    payload: dict[str, Any] = {}
+    for value in (
+        getattr(opinion, "raw_text", ""),
+        getattr(opinion, "answer", ""),
+        getattr(opinion, "summary", ""),
+    ):
+        payload = _json_payload_from_text(str(value or ""))
+        if payload:
+            break
+    raw_scores = payload.get("scores") or payload.get("rankings") or payload.get("reviews") or []
+    if isinstance(raw_scores, dict):
+        raw_scores = [
+            {"position_id": position_id, **(score if isinstance(score, dict) else {"score": score})}
+            for position_id, score in raw_scores.items()
+        ]
+    if not isinstance(raw_scores, list):
+        return []
+    items: list[dict[str, Any]] = []
+    for raw_item in raw_scores:
+        if not isinstance(raw_item, dict):
+            continue
+        position_id = str(raw_item.get("position_id") or raw_item.get("id") or raw_item.get("position") or "").strip()
+        if not position_id:
+            continue
+        try:
+            score = float(raw_item.get("score", raw_item.get("rating", 0.0)))
+        except (TypeError, ValueError):
+            continue
+        score = max(0.0, min(1.0, score))
+        accepted_value = raw_item.get("accepted")
+        accepted = bool(accepted_value) if isinstance(accepted_value, bool) else score >= 0.72
+        items.append(
+            {
+                "position_id": position_id,
+                "score": score,
+                "accepted": accepted,
+                "rationale": str(raw_item.get("rationale") or raw_item.get("reason") or "")[:280],
+            }
+        )
+    return items
+
+
+def _aggregate_blind_peer_reviews(
+    review_opinions: list[Any],
+    *,
+    positions: list[dict[str, Any]],
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    base = _blind_peer_review_empty_metadata(config)
+    author_by_position = {position["position_id"]: position["_agent"] for position in positions}
+    scores_by_position: dict[str, list[float]] = {position["position_id"]: [] for position in positions}
+    accepts_by_position: dict[str, int] = {position["position_id"]: 0 for position in positions}
+    self_scores: list[float] = []
+    external_scores_by_reviewer: dict[str, list[float]] = {}
+    threshold = _blind_peer_review_acceptance_threshold(config)
+
+    for opinion in review_opinions:
+        reviewer = str(getattr(opinion, "agent", "") or "")
+        external_scores_by_reviewer.setdefault(reviewer, [])
+        for item in _blind_peer_review_score_items(opinion):
+            position_id = item["position_id"]
+            if position_id not in author_by_position:
+                continue
+            score = float(item["score"])
+            if author_by_position[position_id] == reviewer:
+                self_scores.append(score)
+                continue
+            scores_by_position[position_id].append(score)
+            external_scores_by_reviewer[reviewer].append(score)
+            if bool(item.get("accepted", False)) or score >= threshold:
+                accepts_by_position[position_id] += 1
+
+    average_scores = {
+        position_id: round(sum(scores) / len(scores), 3)
+        for position_id, scores in scores_by_position.items()
+        if scores
+    }
+    top_position_id = ""
+    if average_scores:
+        top_position_id = max(
+            average_scores,
+            key=lambda position_id: (
+                average_scores[position_id],
+                accepts_by_position.get(position_id, 0),
+                position_id,
+            ),
+        )
+
+    external_means = [
+        sum(scores) / len(scores)
+        for scores in external_scores_by_reviewer.values()
+        if scores
+    ]
+    self_mean = sum(self_scores) / len(self_scores) if self_scores else 0.0
+    external_mean = sum(external_means) / len(external_means) if external_means else 0.0
+    leakage = round(max(0.0, self_mean - external_mean), 3) if self_scores else 0.0
+
+    base.update(
+        {
+            "blind_review_score": average_scores,
+            "blind_acceptance_by_position": accepts_by_position,
+            "blind_acceptance_count": int(accepts_by_position.get(top_position_id, 0)) if top_position_id else 0,
+            "blind_top_position_id": top_position_id,
+            "self_preference_leakage": {
+                "value": leakage,
+                "self_score_count": len(self_scores),
+                "reviewer_count": len(review_opinions),
+            },
+            "reviewer_count": len(review_opinions),
+            "position_count": len(positions),
+        }
+    )
+    return base
+
+
+async def _run_blind_peer_review_shadow(
+    *,
+    config: dict[str, Any],
+    round_index: int,
+    consensus_opinions: list[Any],
+    agent_specs: list[Any],
+    active_slots: list[str],
+    generated_at: datetime,
+    baseline_title_pct: float,
+    allow_agent_fallback: bool,
+    token_cost_ledger: dict[str, Any] | None,
+    watchdog: RunWatchdog | None,
+) -> dict[str, Any]:
+    metadata = _blind_peer_review_empty_metadata(config)
+    if not _blind_peer_review_enabled(config):
+        return metadata
+    room = str(config.get("_meeting_room", "main_brazil") or "main_brazil")
+    metadata["room"] = room
+    if room != "main_brazil" and not bool(config.get("blind_peer_review_include_side_rooms", False)):
+        metadata["errors"] = ["skipped_non_main_room"]
+        return metadata
+    positions = _blind_peer_review_positions(consensus_opinions, agent_slots=active_slots)
+    if len(positions) < 2:
+        metadata["errors"] = ["insufficient_positions"]
+        return metadata
+    timeout = int(config.get("blind_peer_review_timeout_seconds", min(90, int(config.get("agent_timeout_seconds", 90)))))
+    prompt = _blind_peer_review_prompt(
+        config=config,
+        round_index=round_index,
+        positions=positions,
+        generated_at=generated_at,
+    )
+    if watchdog:
+        watchdog.event(
+            "blind_peer_review",
+            "start",
+            detail=f"round={round_index}; room={room}; shadow_only={_blind_peer_review_shadow_only(config)}",
+            extra={
+                "round": round_index,
+                "room": room,
+                "shadow_only": _blind_peer_review_shadow_only(config),
+                "position_count": len(positions),
+            },
+        )
+    try:
+        review_opinions = await call_all_agents(
+            prompt,
+            specs=agent_specs,
+            baseline_title_pct=baseline_title_pct,
+            timeout=timeout,
+            allow_local_fallback=allow_agent_fallback,
+            call_role="blind_peer_review",
+        )
+    except Exception as exc:
+        metadata["errors"] = [str(exc)]
+        if watchdog:
+            watchdog.event(
+                "blind_peer_review",
+                "fail",
+                detail=f"round={round_index}; {exc}",
+                extra={"round": round_index, "room": room, "error": str(exc)},
+            )
+        return metadata
+    if token_cost_ledger is not None:
+        _record_token_costs(
+            token_cost_ledger,
+            config=config,
+            prompt=prompt,
+            opinions=review_opinions,
+            stage=f"blind_peer_review_round_{round_index}",
+        )
+    metadata = _aggregate_blind_peer_reviews(review_opinions, positions=positions, config=config)
+    metadata["room"] = room
+    metadata["round"] = round_index
+    metadata["rounds_reviewed"] = [round_index]
+    metadata["acted_on_decision"] = False
+    if watchdog:
+        watchdog.event(
+            "blind_peer_review",
+            "finish",
+            detail=(
+                f"round={round_index}; top={metadata.get('blind_top_position_id') or 'none'}; "
+                f"acceptances={metadata.get('blind_acceptance_count', 0)}; shadow only"
+            ),
+            extra=metadata,
+        )
+    return metadata
+
+
+def _blind_peer_review_metadata_from_transcript(
+    meeting_transcript: list[dict[str, Any]],
+    *,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    reviews = [
+        turn.get("blind_peer_review")
+        for turn in meeting_transcript
+        if isinstance(turn.get("blind_peer_review"), dict)
+    ]
+    if not reviews:
+        return _blind_peer_review_empty_metadata(config)
+    latest = dict(reviews[-1])
+    latest["rounds_reviewed"] = [
+        int(review.get("round", turn.get("round", 0)) or 0)
+        for turn, review in zip(
+            [turn for turn in meeting_transcript if isinstance(turn.get("blind_peer_review"), dict)],
+            reviews,
+            strict=False,
+        )
+    ]
+    latest["acted_on_decision"] = any(
+        bool((turn.get("llm_council_fast_path") or {}).get("acted_on_decision", False))
+        for turn in meeting_transcript
+        if isinstance(turn.get("llm_council_fast_path"), dict)
+    )
+    if latest["acted_on_decision"]:
+        latest["mode"] = "fast_path_gate"
+    latest["enabled"] = _blind_peer_review_enabled(config)
+    latest["shadow_only"] = _blind_peer_review_shadow_only(config)
+    return latest
+
+
+def _llm_council_fast_path_empty_metadata(config: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "enabled": bool(config.get("llm_council_fast_path_enabled", False)),
+        "shadow_only": bool(config.get("llm_council_fast_path_shadow_only", True)),
+        "acted_on_decision": False,
+        "eligible": False,
+        "round": None,
+        "blocked_reasons": [],
+        "blind_acceptance_count": 0,
+        "minimum_blind_acceptances": 0,
+        "valid_participants": 0,
+        "minimum_participants": int(
+            config.get(
+                "llm_council_fast_path_min_participants",
+                config.get("meeting_min_participants", config.get("meeting_min_real_agents", 3)),
+            )
+        ),
+        "consensus_dispersion_pct": None,
+        "max_dispersion_pct": float(
+            config.get("llm_council_fast_path_max_dispersion_pct", config.get("meeting_consensus_threshold_pct", 2.5))
+        ),
+    }
+
+
+def _parallel_opponent_briefing_allows_fast_path(config: dict[str, Any]) -> bool:
+    briefing = config.get("_parallel_opponent_briefing")
+    if not isinstance(briefing, dict) or not bool(briefing.get("enabled", False)):
+        return True
+    if bool(briefing.get("failed", False)):
+        return False
+    if "usable_for_main_room" in briefing:
+        return bool(briefing.get("usable_for_main_room", False))
+    return int(briefing.get("rounds", 0) or 0) > 0
+
+
+def _llm_council_fast_path_evaluation(
+    *,
+    config: dict[str, Any],
+    round_index: int,
+    consensus: Any,
+    consensus_opinions: list[Any],
+    turn: dict[str, Any],
+    coverage_ok: bool,
+    majority_accepts: bool,
+    room_quorum: int,
+    active_slots: list[str],
+) -> dict[str, Any]:
+    metadata = _llm_council_fast_path_empty_metadata(config)
+    metadata["round"] = round_index
+    metadata["valid_participants"] = sum(
+        1 for opinion in consensus_opinions if _counts_as_consensus_participant(opinion)
+    )
+    metadata["consensus_dispersion_pct"] = round(float(getattr(consensus, "dispersion_pct", 0.0) or 0.0), 3)
+    blind_review = turn.get("blind_peer_review") if isinstance(turn.get("blind_peer_review"), dict) else {}
+    metadata["blind_acceptance_count"] = int((blind_review or {}).get("blind_acceptance_count", 0) or 0)
+    metadata["minimum_blind_acceptances"] = int(room_quorum)
+
+    blocked: list[str] = []
+    if not metadata["enabled"]:
+        blocked.append("disabled")
+    if round_index != 1:
+        blocked.append("only_round_1")
+    if len(active_slots) < int(metadata["minimum_participants"]):
+        blocked.append("participant_floor")
+    if metadata["valid_participants"] < int(metadata["minimum_participants"]):
+        blocked.append("valid_participant_floor")
+    if not coverage_ok:
+        blocked.append("coverage_incomplete")
+    if not majority_accepts:
+        blocked.append("peer_acceptance_missing")
+    if float(metadata["consensus_dispersion_pct"] or 0.0) > float(metadata["max_dispersion_pct"]):
+        blocked.append("dispersion_too_high")
+    if not _blind_peer_review_enabled(config):
+        blocked.append("blind_review_disabled")
+    if not blind_review:
+        blocked.append("blind_review_missing")
+    elif (blind_review or {}).get("errors"):
+        blocked.append("blind_review_errors")
+    elif int(metadata["blind_acceptance_count"]) < int(metadata["minimum_blind_acceptances"]):
+        blocked.append("blind_acceptance_missing")
+    if not _parallel_opponent_briefing_allows_fast_path(config):
+        blocked.append("parallel_opponent_room_unusable")
+
+    metadata["blocked_reasons"] = blocked
+    metadata["eligible"] = not blocked
+    metadata["acted_on_decision"] = bool(metadata["eligible"]) and not bool(metadata["shadow_only"])
+    return metadata
+
+
+def _llm_council_fast_path_metadata_from_transcript(
+    meeting_transcript: list[dict[str, Any]],
+    *,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    candidates = [
+        turn.get("llm_council_fast_path")
+        for turn in meeting_transcript
+        if isinstance(turn.get("llm_council_fast_path"), dict)
+    ]
+    if not candidates:
+        return _llm_council_fast_path_empty_metadata(config)
+    latest = dict(candidates[-1])
+    latest["enabled"] = bool(config.get("llm_council_fast_path_enabled", False))
+    latest["shadow_only"] = bool(config.get("llm_council_fast_path_shadow_only", True))
+    latest["candidate_rounds"] = [
+        int(item.get("round", 0) or 0)
+        for item in candidates
+        if bool(item.get("eligible", False))
+    ]
+    latest["acted_rounds"] = [
+        int(item.get("round", 0) or 0)
+        for item in candidates
+        if bool(item.get("acted_on_decision", False))
+    ]
+    return latest
+
+
+def _numeric_chairman_metadata(
+    *,
+    config: dict[str, Any],
+    stage_probabilities: dict[str, float],
+) -> dict[str, Any]:
+    stage_source = _stage_probability_source(config)
+    return {
+        "enabled": bool(config.get("numeric_chairman_enabled", True)),
+        "number_owner": stage_source,
+        "primary_number_owner": "monte_carlo_reconciled_funnel",
+        "stage_probability_source": stage_source,
+        "llm_role": "narrative_and_bounded_adjustment",
+        "llm_decides_number": False,
+        "bounded_adjustment_only": True,
+        "hard_gate": "ReportCoherenceError",
+        "post_gate": "report_coherence",
+        "stage_probabilities_snapshot": {key: round(float(value), 1) for key, value in stage_probabilities.items()},
+    }
+
+
 async def _run_model_meeting(
     *,
     config: dict[str, Any],
@@ -3996,6 +4581,19 @@ async def _run_model_meeting(
                 )
         turn["coverage"] = _meeting_coverage_report([*meeting_transcript, turn], config)
         meeting_transcript.append(turn)
+        if _blind_peer_review_enabled(config) and round_index == 1:
+            turn["blind_peer_review"] = await _run_blind_peer_review_shadow(
+                config=config,
+                round_index=round_index,
+                consensus_opinions=consensus_opinions,
+                agent_specs=agent_specs,
+                active_slots=active_slots,
+                generated_at=generated_at,
+                baseline_title_pct=baseline_title_pct,
+                allow_agent_fallback=allow_agent_fallback,
+                token_cost_ledger=token_cost_ledger,
+                watchdog=watchdog,
+            )
         if watchdog:
             if invalid_question_reason:
                 watchdog.event(
@@ -4185,6 +4783,34 @@ async def _run_model_meeting(
         coverage_complete = bool(turn.get("coverage", {}).get("complete", False))
         coverage_ok = coverage_complete or not require_full_coverage
         majority_accepts = _enough_peer_acceptances(turn, required_acceptances=minimum_peer_acceptances)
+        turn["llm_council_fast_path"] = _llm_council_fast_path_evaluation(
+            config=config,
+            round_index=round_index,
+            consensus=consensus,
+            consensus_opinions=consensus_opinions,
+            turn=turn,
+            coverage_ok=coverage_ok,
+            majority_accepts=majority_accepts,
+            room_quorum=room_quorum,
+            active_slots=active_slots,
+        )
+        if bool(turn["llm_council_fast_path"].get("acted_on_decision", False)):
+            exited_with_consensus = True
+            object.__setattr__(consensus, "exit_status", "fast_path_consensus")
+            if isinstance(turn.get("blind_peer_review"), dict):
+                turn["blind_peer_review"]["acted_on_decision"] = True
+                turn["blind_peer_review"]["mode"] = "fast_path_gate"
+            if watchdog:
+                watchdog.event(
+                    "model_room",
+                    "fast_path_exit",
+                    detail=(
+                        "fast path opt-in acionado: revisão cega, cobertura, aceitação e baixa dispersão "
+                        f"fecharam consenso na rodada {round_index}"
+                    ),
+                    extra=dict(turn["llm_council_fast_path"]),
+                )
+            break
         title_stable = (
             previous_consensus_title is not None
             and abs(float(consensus.title_pct) - float(previous_consensus_title)) <= stability_delta_pp
@@ -4260,6 +4886,15 @@ async def _run_model_meeting(
                 )
             final_consensus = last_valid_consensus
             final_opinions = last_valid_opinions
+            object.__setattr__(final_consensus, "exit_status", "degraded_last_valid")
+            object.__setattr__(
+                final_consensus,
+                "exit_warning",
+                (
+                    f"teto de {max_rounds} rodadas atingido com rodada final estéril; "
+                    "publicado último consenso válido em modo degradado"
+                ),
+            )
         else:
             if watchdog:
                 watchdog.fail(
@@ -4269,6 +4904,20 @@ async def _run_model_meeting(
             raise MeetingConsensusError(
                 f"teto de {max_rounds} rodadas atingido sem nenhum voto válido na rodada final; "
                 "consenso não pode ser publicado a partir de fallbacks"
+            )
+    elif not exited_with_consensus:
+        object.__setattr__(final_consensus, "exit_status", "max_rounds_no_consensus")
+        object.__setattr__(
+            final_consensus,
+            "exit_warning",
+            f"teto de {max_rounds} rodadas atingido sem consenso explícito; publicar como leitura não consensual",
+        )
+        if watchdog:
+            watchdog.event(
+                "model_meeting",
+                "max_rounds_no_consensus",
+                detail=f"teto de {max_rounds} rodadas atingido sem consenso explícito",
+                extra={"max_rounds": max_rounds, "last_title_pct": final_consensus.title_pct},
             )
     if watchdog:
         watchdog.finish(
@@ -4860,6 +5509,8 @@ async def _run_parallel_opponent_debriefing(
         watchdog=meeting_watchdog,
         token_cost_ledger=token_cost_ledger,
     )
+    exit_status = str(getattr(consensus, "exit_status", "consensus") or "consensus")
+    exit_warning = str(getattr(consensus, "exit_warning", "") or "")
     return {
         "enabled": True,
         "consensus": consensus,
@@ -4868,6 +5519,9 @@ async def _run_parallel_opponent_debriefing(
         "all_opinions": all_opinions,
         "rounds": len(transcript),
         "participants": _slots_from_specs(agent_specs),
+        "exit_status": exit_status,
+        "exit_warning": exit_warning,
+        "usable_for_main_room": exit_status == "consensus",
     }
 
 
@@ -5712,13 +6366,23 @@ async def build_report_bundle(
                 *opponent_debriefing_result.get("final_opinions", []),
                 *opponent_debriefing_result.get("all_opinions", []),
             ]
-            _apply_meeting_knockout_scenarios(
-                knockout_estimates,
-                opponent_opinions,
-                config=config,
-                monte_carlo_result=monte_carlo_result,
-            )
-            _apply_meeting_match_probabilities(knockout_estimates, opponent_opinions)
+            side_room_usable = bool(opponent_debriefing_result.get("usable_for_main_room", False))
+            if side_room_usable:
+                _apply_meeting_knockout_scenarios(
+                    knockout_estimates,
+                    opponent_opinions,
+                    config=config,
+                    monte_carlo_result=monte_carlo_result,
+                )
+                _apply_meeting_match_probabilities(knockout_estimates, opponent_opinions)
+            else:
+                exit_status = str(opponent_debriefing_result.get("exit_status", "unknown") or "unknown")
+                exit_warning = str(opponent_debriefing_result.get("exit_warning", "") or "")
+                warnings.append(
+                    "Sala paralela de adversários terminou sem consenso explícito utilizável "
+                    f"({exit_status}); sala principal seguiu com Monte Carlo/top-2 base."
+                    + (f" {exit_warning}" if exit_warning else "")
+                )
             meeting_config["knockout_matches"] = _knockout_estimates_as_config_matches(knockout_estimates)
             meeting_config["_parallel_opponent_briefing"] = _parallel_opponent_briefing_for_prompt(
                 opponent_debriefing_result,
@@ -5748,10 +6412,19 @@ async def build_report_bundle(
                         )
                 watchdog.finish(
                     "opponent_model_meeting",
-                    detail=f"completed {opponent_debriefing_result.get('rounds', 0)} side opponent round(s); main room receives reconciled bracket top-2",
+                    detail=(
+                        f"completed {opponent_debriefing_result.get('rounds', 0)} side opponent round(s); "
+                        + (
+                            "main room receives reconciled bracket top-2"
+                            if side_room_usable
+                            else "main room keeps Monte Carlo/top-2 base because side room had no explicit consensus"
+                        )
+                    ),
                     extra={
                         "participants": opponent_debriefing_result.get("participants", []),
                         "rounds": opponent_debriefing_result.get("rounds", 0),
+                        "usable_for_main_room": side_room_usable,
+                        "exit_status": opponent_debriefing_result.get("exit_status"),
                         "knockout_matches_for_main_room": meeting_config.get("knockout_matches", []),
                     },
                 )
@@ -5805,6 +6478,10 @@ async def build_report_bundle(
         reentry_candidate_specs=reentry_candidate_specs,
         reentry_removed_reasons=removed_reason_by_agent,
     )
+    meeting_exit_status = str(getattr(consensus, "exit_status", "consensus") or "consensus")
+    meeting_exit_warning = str(getattr(consensus, "exit_warning", "") or "")
+    if meeting_exit_status != "consensus" and meeting_exit_warning:
+        warnings.append(meeting_exit_warning)
     _apply_meeting_knockout_scenarios(
         knockout_estimates,
         opinions,
@@ -5817,6 +6494,14 @@ async def build_report_bundle(
             "Removidos da jogada por não trazer plano de fontes próprio e verificável: "
             + ", ".join(removed_agent_slots)
             + "."
+        )
+    for agent, reason in removed_reason_by_agent.items():
+        if "Google Gemini billing action required" not in reason:
+            continue
+        warnings.append(
+            f"Ação necessária: {agent} removido porque os créditos pré-pagos do Gemini acabaram; "
+            "comprar créditos em https://ai.studio/projects para o modelo voltar à sala. "
+            f"Detalhe: {reason}"
         )
     configured_min_participants = int(config.get("meeting_min_participants", config.get("meeting_min_real_agents", 3)))
     if len(active_agent_specs) < configured_min_participants:
@@ -5910,7 +6595,21 @@ async def build_report_bundle(
             "stage_interval_metadata": config.get("_stage_interval_metadata", {}),
             "monte_carlo": monte_carlo_compact_summary(monte_carlo_result),
             "meeting_rounds": len(meeting_transcript),
+            "meeting_exit_status": meeting_exit_status,
+            "meeting_exit_warning": meeting_exit_warning,
             "meeting_transcript": meeting_transcript,
+            "blind_peer_review_shadow": _blind_peer_review_metadata_from_transcript(
+                meeting_transcript,
+                config=config,
+            ),
+            "llm_council_fast_path": _llm_council_fast_path_metadata_from_transcript(
+                meeting_transcript,
+                config=config,
+            ),
+            "numeric_chairman": _numeric_chairman_metadata(
+                config=config,
+                stage_probabilities=stage_probabilities,
+            ),
             "parallel_opponent_debriefing": {
                 "enabled": bool(opponent_debriefing_result.get("enabled", False)),
                 "failed": bool(opponent_debriefing_result.get("failed", False)),
@@ -5923,8 +6622,12 @@ async def build_report_bundle(
                 "participants": list(opponent_debriefing_result.get("participants", [])),
                 "meeting_transcript": list(opponent_debriefing_result.get("meeting_transcript", [])),
                 "error": str(opponent_debriefing_result.get("error", "")),
+                "exit_status": str(opponent_debriefing_result.get("exit_status", "") or ""),
+                "exit_warning": str(opponent_debriefing_result.get("exit_warning", "") or ""),
+                "usable_for_main_room": bool(opponent_debriefing_result.get("usable_for_main_room", False)),
             },
             "removed_agent_slots": removed_agent_slots,
+            "removed_agent_reasons": removed_reason_by_agent,
             "agent_source_planning": {
                 opinion.agent: {
                     "source_urls": opinion.source_urls,

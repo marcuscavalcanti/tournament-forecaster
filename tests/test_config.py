@@ -39,6 +39,13 @@ def test_example_config_uses_three_agent_source_quorum_and_repair_attempts() -> 
     assert config["source_planning_repair_attempts"] >= 1
     assert config["repair_format_removals_with_quorum"] is True
     assert config["source_planning_format_repair_timeout_seconds"] == 60
+    assert config["blind_peer_review_enabled"] is False
+    assert config["blind_peer_review_shadow_only"] is True
+    assert config["blind_peer_review_timeout_seconds"] == 90
+    assert config["numeric_chairman_enabled"] is True
+    assert config["llm_council_fast_path_enabled"] is False
+    assert config["llm_council_fast_path_shadow_only"] is True
+    assert config["llm_council_fast_path_min_participants"] == 3
     assert config["meeting_response_repair_attempts"] >= 1
     assert config["meeting_min_participants"] == 3
     assert "meeting_min_real_agents" not in config
@@ -83,6 +90,13 @@ def test_load_config_watchdog_payload_exposes_safe_operational_config() -> None:
         "source_planning_repair_attempts": 2,
         "repair_format_removals_with_quorum": True,
         "source_planning_format_repair_timeout_seconds": 60,
+        "blind_peer_review_enabled": False,
+        "blind_peer_review_shadow_only": True,
+        "blind_peer_review_timeout_seconds": 90,
+        "numeric_chairman_enabled": True,
+        "llm_council_fast_path_enabled": False,
+        "llm_council_fast_path_shadow_only": True,
+        "llm_council_fast_path_min_participants": 3,
         "meeting_response_repair_attempts": 1,
         "meeting_min_rounds": 6,
         "meeting_max_rounds": 18,
@@ -139,6 +153,13 @@ def test_load_config_watchdog_payload_exposes_safe_operational_config() -> None:
     assert extra["watchdog_config"]["source_planning_repair_attempts"] == 2
     assert extra["watchdog_config"]["repair_format_removals_with_quorum"] is True
     assert extra["watchdog_config"]["source_planning_format_repair_timeout_seconds"] == 60
+    assert extra["watchdog_config"]["blind_peer_review_enabled"] is False
+    assert extra["watchdog_config"]["blind_peer_review_shadow_only"] is True
+    assert extra["watchdog_config"]["blind_peer_review_timeout_seconds"] == 90
+    assert extra["watchdog_config"]["numeric_chairman_enabled"] is True
+    assert extra["watchdog_config"]["llm_council_fast_path_enabled"] is False
+    assert extra["watchdog_config"]["llm_council_fast_path_shadow_only"] is True
+    assert extra["watchdog_config"]["llm_council_fast_path_min_participants"] == 3
     assert extra["watchdog_config"]["meeting_response_repair_attempts"] == 1
     assert extra["watchdog_config"]["meeting_min_participants"] == 3
     assert extra["watchdog_config"]["meeting_quorum_rule"] == "maioria simples dos participantes ativos da sala"
