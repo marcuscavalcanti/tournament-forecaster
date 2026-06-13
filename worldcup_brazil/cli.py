@@ -331,6 +331,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", type=Path, default=Path("outputs"))
     parser.add_argument("--watchdog-log", type=Path, default=Path("data/watchdog.jsonl"))
     parser.add_argument("--calibration-log", type=Path, default=Path("data/calibration_predictions.json"))
+    parser.add_argument(
+        "--lock-file",
+        type=Path,
+        default=Path("data/.run.lock"),
+        help="Exclusive run lock path used to prevent concurrent daily runs.",
+    )
     parser.add_argument("--env-file", type=Path, default=Path(".env"), help="Optional dotenv file loaded before agent setup.")
     parser.add_argument(
         "--shell-env-file",
@@ -349,9 +355,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    run_lock_fd = _acquire_run_lock(Path("data/.run.lock"))
+    run_lock_fd = _acquire_run_lock(args.lock_file)
     if run_lock_fd is None and fcntl is not None:
-        print("skip: outro run ja esta em andamento (lock data/.run.lock)", file=sys.stderr)
+        print(f"skip: outro run ja esta em andamento (lock {args.lock_file})", file=sys.stderr)
         return 0
     try:
         return _run(args)

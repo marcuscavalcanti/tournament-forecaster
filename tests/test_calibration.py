@@ -105,7 +105,7 @@ def test_prediction_logger_appends_pending_run_records_without_duplicates(tmp_pa
         sources=[],
         agent_summaries={},
         warnings=[],
-        custom_hashtag="#copaComAchismo",
+        custom_hashtag="#CopaComAchismo",
     )
     log_path = tmp_path / "calibration_predictions.json"
 

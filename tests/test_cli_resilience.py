@@ -49,6 +49,8 @@ def _base_argv(tmp_path: Path) -> list[str]:
         str(tmp_path / "watchdog.jsonl"),
         "--calibration-log",
         str(tmp_path / "calibration.json"),
+        "--lock-file",
+        str(tmp_path / ".run.lock"),
         "--force",
         "--no-watchdog",
         "--no-model-preflight",

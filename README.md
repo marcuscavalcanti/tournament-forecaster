@@ -2,13 +2,29 @@
 
 Script agendável para gerar, a cada três dias, um post técnico de LinkedIn sobre até onde o Brasil pode ir na Copa do Mundo de 2026.
 
-Hashtag oficial da série: `#copaComAchismo`.
+Hashtag oficial da série: `#CopaComAchismo`.
 
 ## Rodar agora
 
 ```bash
-python3 scripts/run_daily_worldcup_brazil.py --force
+make doctor
+make force
 ```
+
+Use `make doctor` antes do run caro: ele testa quorum/fontes dos agentes sem renderizar post. Se passar, rode `make force` e acompanhe em outro terminal com:
+
+```bash
+make watch
+```
+
+Depois de um run completo, use:
+
+```bash
+make profile
+make debate
+```
+
+`make profile` mostra onde o tempo foi gasto. `make debate` renderiza a conversa das salas sem chamar modelos de novo.
 
 Saídas:
 
@@ -18,6 +34,22 @@ Saídas:
 - `outputs/linkedin_brazil_YYYY-MM-DD.json`
 - `data/run_state.json`
 - `data/watchdog.jsonl`
+
+## Estado operacional atual
+
+Este repo versiona `config/worldcup_brazil.example.json`. O `Makefile` aponta para `config/worldcup_brazil.json`, mas o loader cai automaticamente no exemplo quando esse arquivo local não existe. Para operação diária estável, copie o exemplo para `config/worldcup_brazil.json` quando quiser manter credenciais, knobs ou inputs locais fora do template versionado.
+
+O caminho recomendado é via `make`, porque ele usa `uv run python` e os paths esperados pelo projeto. `python3 scripts/run_daily_worldcup_brazil.py --force` ainda funciona se o ambiente Python local já tiver as dependências corretas, mas não é o caminho operacional preferido.
+
+Estado das features sensíveis:
+
+- `numeric_chairman_enabled=true`: o funil publicado vem do Monte Carlo/bracket reconciliado; LLM não escolhe o número final livremente.
+- `blind_peer_review_enabled=false`: revisão cega existe, mas fica desligada por padrão. Ela ainda não deve ser usada como gate decisório ativo.
+- `blind_peer_review_shadow_only=true`: quando ligada para telemetria, ela registra métricas sem alterar o consenso.
+- `llm_council_fast_path_enabled=false`: fast path está atrás de flag e desligado por padrão.
+- `llm_council_fast_path_shadow_only=true`: quando testado, deve começar como shadow até haver evidência em `make profile`/watchdog.
+
+Nota importante: a revisão cega atual é segura como telemetria, mas não substitui o debate deliberativo. Ela roda na primeira passada independente e serve para medir viés/autopreferência; não trate isso como consenso automático de produção.
 
 ## Configuração
 
@@ -72,7 +104,7 @@ openai responses create --model gpt-5.5 --input '"Responda apenas: funcionando"'
 
 Se `OPENAI_BROWSER_COMMAND`, `OPENAI_CLI_COMMAND`, `CHATGPT_CLI_COMMAND` ou `GPT_CLI_COMMAND` estiverem definidos, eles continuam como override explícito. Sem override, o script tenta `openai responses create --model "$OPENAI_GPT_MODEL" --input "{prompt_json}" --reasoning '{"effort":"high"}'`; se essa bridge falhar, cai para `codex --search exec --ignore-user-config --ignore-rules --ephemeral -s read-only "{prompt}"` como fallback do slot GPT. Via API OpenAI e CLI OpenAI, o default é `OPENAI_REASONING_EFFORT=high`; para alterar a régua, exporte `OPENAI_REASONING_EFFORT` explicitamente.
 
-Para Gemini, o modelo preferencial é `gemini-3.5-flash` e o fallback de versão é `gemini-3.1-flash-lite`. Se o binário `gemini` estiver no `PATH`, o script prefere `gemini --skip-trust -p "{prompt}" --output-format text --approval-mode plan -m "$GEMINI_MODEL"`. Se o CLI falhar, tenta a mesma bridge com `gemini-3.1-flash-lite`; se a bridge não responder e `GEMINI_API_KEY` existir, tenta a API HTTP `generateContent` com `gemini-3.5-flash` e depois `gemini-3.1-flash-lite`. A troca de versão só é indicada no output quando o fallback lite realmente é usado. Se você quiser API HTTP como caminho primário, use `GEMINI_PREFER_BRIDGE=false`. Os bridges Codex e Gemini removem variáveis `CODEX_*` de runtime herdadas da orquestração, preservando `CODEX_HOME`, para abrir uma execução própria. Quando uma bridge existe, ela é preferida por padrão mesmo com chave de API. DeepSeek não tem slot browser/free: existe apenas `DeepSeek V4 Pro` via `DEEPSEEK_API_KEY` e API DeepSeek. Sem API e sem bridge em um slot que aceite bridge, o slot vira fallback local e o post mostra essa limitação.
+Para Gemini, o modelo preferencial é `gemini-3.5-flash` no planejamento de fontes e `gemini-3.1-flash-lite` nas chamadas mais frequentes de sala/reparo, conforme `model_order_by_role` do config. Se o binário `gemini` estiver no `PATH`, o script prefere `gemini --skip-trust -p "{prompt}" --output-format text --approval-mode plan -m "$GEMINI_MODEL"`. Se o CLI falhar, tenta fallback de modelo; se a bridge não responder e `GEMINI_API_KEY` existir, tenta a API HTTP `generateContent`. A troca de versão só é indicada no output quando fallback realmente é usado. Se você quiser API HTTP como caminho primário, use `GEMINI_PREFER_BRIDGE=false`. Os bridges Codex e Gemini removem variáveis `CODEX_*` de runtime herdadas da orquestração, preservando `CODEX_HOME`, para abrir uma execução própria. Quando uma bridge existe, ela é preferida por padrão mesmo com chave de API. DeepSeek não tem slot browser/free: existe apenas `DeepSeek V4 Pro` via `DEEPSEEK_API_KEY` e API DeepSeek. Sem API e sem bridge em um slot que aceite bridge, o slot vira fallback local e o post mostra essa limitação.
 
 O CLI carrega primeiro `.env` e depois `~/.zshrc`, sem sobrescrever variáveis já presentes no processo. Linhas simples como `export GEMINI_API_KEY='...'` são aceitas para que o Gemini funcione também quando a chave está no shell do macOS.
 
@@ -89,6 +121,8 @@ Resiliência de rede:
 - Status retentáveis: `408`, `425`, `429`, `500`, `502`, `503`, `504`.
 - `AGENT_BULKHEAD_DEFAULT` limita chamadas simultâneas por provedor/chave de API, padrão `3`.
 - `AGENT_BULKHEAD_OPENAI_COMPATIBLE`, `AGENT_BULKHEAD_OPENAI`, `AGENT_BULKHEAD_ANTHROPIC` e `AGENT_BULKHEAD_GOOGLE_GEMINI` permitem override por provedor.
+- Quando a API do Gemini retorna `429` com mensagem de créditos pré-pagos esgotados (`prepayment credits are depleted`), o watchdog e os arquivos de diagnóstico exibem uma ação clara: comprar/prepagar créditos no AI Studio. Esse caso não é tratado como simples rate limit recuperável.
+- O runner usa lock local em `data/.run.lock` para evitar dois `make force` concorrentes sobrescrevendo artefatos ou gastando chamadas duplicadas. Se outro run estiver ativo, o CLI imprime `skip: outro run ja esta em andamento`. Para testes ou execuções isoladas, use `--lock-file /caminho/isolado/.run.lock`.
 
 O bloco `knockout_matches` aceita múltiplos cenários por fase. O renderer agrupa em `16 avos`, `Oitavas`, `Quartas`, `Semifinal` e `Final`, mantendo a mesma linguagem de probabilidade, intervalo de confiança, local e racional. Use `scenario_pct` para mostrar a chance daquele confronto específico acontecer; `brazil_pct` continua sendo a chance de o Brasil passar caso aquele confronto aconteça.
 
@@ -248,7 +282,7 @@ O script pode ser chamado todo dia. Ele só gera novo post se passaram três dia
 Exemplo de cron diário às 08:00:
 
 ```cron
-0 8 * * * cd "/Users/marcus/Documents/World Cup 2026" && /usr/bin/python3 scripts/run_daily_worldcup_brazil.py >> data/cron.log 2>&1
+0 8 * * * cd "/Users/marcus/Documents/World Cup 2026" && /usr/bin/make daily >> data/cron.log 2>&1
 ```
 
 ## Watchdog
@@ -264,11 +298,16 @@ Etapas registradas:
 - `run`
 - `load_config`
 - `model_preflight`
+- `slot_excluded`
 - `agent_source_planning`
 - `agent_source_quorum`
 - `agent_source_self_heal`
+- `recent_event_harness`
 - `estimate_matches`
+- `parallel_opponent_debriefing`
 - `model_meeting`
+- `blind_peer_review`
+- `report_coherence`
 - `render_post`
 - `write_outputs`
 
@@ -279,6 +318,7 @@ O watchdog também grava a sala de chat dos modelos com `step=model_room`:
 - `status=chat` para planejamento de fontes e troca de protagonismo.
 - `status=question` para a pergunta do protagonista da rodada.
 - `status=response` para a resposta de cada modelo, com `support_score`.
+- `status=degraded_publish` quando a sala preserva o último consenso válido e evita derrubar o run por uma última rodada estéril no teto operacional.
 
 O quórum mínimo operacional é de 3 modelos com plano de fontes próprio e verificável. Se a primeira rodada vier abaixo disso, a engine aciona `agent_source_self_heal`: apenas os agentes removidos são rechamados com um prompt de reparo operacional, exigindo JSON estrito e `source_urls` ou `source_queries` permitidas no Modelo Principal. O run só falha depois dessas tentativas, e nesse caso o evento `agent_source_quorum` mostra `ready_count`, `required_count`, agentes ativos, agentes removidos e motivo por agente.
 
@@ -305,6 +345,10 @@ Funil de probabilidades: com Monte Carlo ativo, o funil publicado (quartas/semif
 - Validador de bracket por proximidade e multi-caminho: menção de seleção só conta contra a fase do marcador mais próximo (janela de ~280 caracteres, com plurais), candidatos são a união dos caminhos do Brasil em 1º/2º do grupo, adversários de grupo e enumerações do universo configurado nunca são flagrados. A mensagem de remoção continua citando fase, seleção e candidatos permitidos.
 - `exclude_slots_failing_preflight` (default true): slot que falha duro no preflight (ex.: HTTP 429 em toda a cadeia) sai do run inteiro — sem chamadas de planejamento nem probes de reentrada. Evento `slot_excluded` no watchdog. Com `--strict-agents` a exclusão não se aplica.
 - `CLAUDE_CLI_ALLOWED_TOOLS` (default `WebSearch,WebFetch`): o bridge CLI do slot Opus concede ferramentas de busca via `--allowedTools`; string vazia desliga a flag.
+- `repair_format_removals_with_quorum` (default true): respostas de planejamento em JSON parcial podem receber reparo curto de formato mesmo quando o quorum já foi atingido. O objetivo é recuperar uma quarta/quinta voz antes da sala abrir sem pagar probe longo no meio da reunião.
+- `parallel_opponent_debriefing_enabled` (default true): abre sala separada para adversários prováveis do mata-mata. Ela tem contrato de rounds próprio e precisa sair com consenso para ser usada pelo fast path da sala principal.
+- `blind_peer_review_enabled` (default false): revisão cega está implementada, mas desativada por padrão. Use apenas para shadow/telemetria até corrigir e validar a cadência decisória.
+- `llm_council_fast_path_enabled` (default false): fast path está implementado atrás de flag, mas desligado por padrão. Quando ligado, ainda precisa passar gates de quorum, cobertura, aceitação, baixa dispersão, sala paralela utilizável e coerência do relatório. Com `llm_council_fast_path_shadow_only=true`, ele só registra candidato e não encurta a sala.
 
 Para ver o breakdown de tempo do último run (etapas, latência por rodada, fase de pergunta vs respostas, eventos de controle):
 
@@ -342,34 +386,36 @@ make debate DEBATE_INPUT=outputs/linkedin_brazil_2026-06-09.json
 
 ```mermaid
 flowchart LR
-    M["Mediador\ncontrato único"] --> A1["Opus 4.8"]
-    M --> A2["GPT 5.5"]
-    M --> A3["Perplexity Pro"]
-    M --> A4["DeepSeek V4 Pro"]
-    M --> A5["Gemini Pro"]
-    A1 --> P["Planejamento\nbusca fresca própria"]
-    A2 --> P
-    A3 --> P
-    A4 --> P
-    A5 --> P
-    P --> R["Sala de debriefing\npergunta, resposta, mérito"]
-    R --> C["Consenso\nprobabilidades e intervalos"]
-    C --> O["Markdown, audit, JSON, SVG"]
-    M -.-> X["mediador não faz fetch externo\nnão escolhe fonte\nnão usa cache"]
-    X -.-> R
+    H["#CopaComAchismo"] --> CFG["Config local\nexample fallback"]
+    CFG --> MC["Monte Carlo\nbracket oficial"]
+    CFG --> PF["Preflight\ncontrato mínimo"]
+    PF --> PLAN["Planejamento\nbusca fresca própria"]
+    PLAN --> OPP["Sala adversários\nscenario_pct e top-2"]
+    MC --> REC["Reconciliação\nMC + sala adversários"]
+    OPP --> REC
+    REC --> BR["Sala Brasil\nchance por confronto"]
+    PLAN --> BR
+    BR --> G["Hard gates\nbracket, fonte, coerência"]
+    G --> N["Numeric chairman\nfunil vem do MC reconciliado"]
+    N --> OUT["Markdown, audit, JSON, SVG"]
+    BR -. "blind review shadow\ndesligado por padrão" .-> T["Telemetria"]
+    BR -. "fast path shadow\ndesligado por padrão" .-> T
+    CFG -. "lock data/.run.lock" .-> OUT
 ```
 
 ### Diagrama funcional
 
 ```mermaid
 flowchart TD
-    O["Objetivo\naté onde o Brasil vai"] --> K["Regras iguais\nquanti e quali sem quota fixa"]
+    O["Objetivo\naté onde o Brasil vai"] --> K["Contrato único\nquanti e quali sem quota fixa"]
     K --> B["Cada modelo escolhe fontes\nBrasil e adversários"]
-    B --> D["Debate em sala\nhipótese, fatos, URLs, queries"]
-    D --> Q{"Consenso aceito?"}
-    Q -- "não" --> L["Discordante ou melhor pergunta\nassume protagonismo por mérito"]
+    B --> A["Sala adversários\nquem pode cruzar com o Brasil"]
+    A --> D["Sala Brasil\nhipótese, fatos, URLs, queries"]
+    D --> Q{"Maioria simples\naceita com cobertura?"}
+    Q -- "não" --> L["Discordante ou melhor resposta\nassume protagonismo por mérito"]
     L --> D
-    Q -- "sim" --> F["Post LinkedIn\npalpites, fontes, custos e IC"]
+    Q -- "sim" --> F["Numeric chairman\nfunil coerente e IC"]
+    F --> P["Post LinkedIn\n#CopaComAchismo"]
 ```
 
 ## Regra de decisão
@@ -381,7 +427,7 @@ flowchart TD
 - Pesquisa simétrica obrigatória: cada modelo deve buscar informação atualizada para Brasil e adversários/cenários configurados usando as mesmas famílias de fonte, para que a reunião compare forças reais e não apenas uma leitura interna do Brasil.
 - Contrato único: todos os modelos recebem as mesmas regras, objetivo e escopo. O mediador não faz fetch externo, não escolhe fonte, não injeta evidência central e não usa cache.
 - Bracket oficial obrigatório: os modelos definem os adversários prováveis dentro dos slots oficiais da fase; o mediador rejeita adversário impossível para o cruzamento e amplia o IC quando o adversário ainda é um conjunto amplo de candidatos oficiais.
-- Cinco slots de agentes entram em três momentos: `Opus 4.8`, `GPT 5.5`, `Perplexity Pro`, `DeepSeek V4 Pro`, `Gemini Pro`.
+- Cinco slots de agentes são configurados: `Opus 4.8`, `GPT 5.5`, `Perplexity Pro`, `DeepSeek V4 Pro`, `Gemini Pro`. Na execução real, slots podem ser excluídos no preflight por falha dura, quota, 429 ou falta de resposta auditável; a sala continua se o quorum mínimo for preservado.
 - Rodada 0: cada modelo faz busca fresca própria, sem cache, escolhe fontes e queries dentro do direcionamento macro e reporta `source_urls`/`source_queries`.
 - Rodadas de reunião: o protagonista faz uma pergunta, os demais respondem, a resposta mais aceita assume o protagonismo seguinte, e o ciclo continua. Não são "seis conversas"; são cinco participantes que podem falar várias vezes até a proposta ficar aceita pela maioria simples da sala.
 - Por padrão, a sala exige `meeting_min_rounds=6`, `meeting_max_rounds=18`, `meeting_min_participants=3`, `meeting_require_peer_acceptance=true` e `meeting_require_full_path_coverage=true`. As 6 rodadas são apenas um piso anti-consenso prematuro; o encerramento real exige baixa dispersão, maioria simples dos participantes ativos, aceite dos pares suficientes para formar essa maioria e cobertura explícita de fase de grupos, 16 avos, oitavas, quartas, semifinal, final e chance de título. O máximo é só um teto de segurança operacional.
@@ -392,3 +438,4 @@ flowchart TD
 - O gráfico limpo do racional fica em `outputs/decision_flow_brazil_YYYY-MM-DD.svg` e aparece referenciado no markdown do post.
 - Jogos e probabilidades finais carregam intervalo de confiança. A largura aumenta quando há dispersão entre modelos ou falhas de fonte/API.
 - Se uma API falha e `--strict-agents` não foi usado, o run aplica fallback local conservador e escreve warning no post. Com `--strict-agents`, falhas de agente derrubam o run.
+- Blind review e fast path existem para futura redução de latência/viés, mas permanecem desligados ou em shadow no config exemplo. Não trate essas flags como prontas para encurtar a sala principal sem medir antes com `make profile` e revisar o watchdog.

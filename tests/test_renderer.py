@@ -183,7 +183,7 @@ def test_render_linkedin_post_keeps_required_sections_and_custom_hashtag() -> No
             "Consenso: título em 12.2% com dispersão moderada.",
         ],
         warnings=[],
-        custom_hashtag="#copaComAchismo",
+        custom_hashtag="#CopaComAchismo",
         metadata={
             "uncertainty": {
                 "confidence_level": 0.99,
@@ -254,7 +254,7 @@ def test_render_linkedin_post_keeps_required_sections_and_custom_hashtag() -> No
     assert any("Discordar" in line for line in comment_bullets)
     assert any("Fallback" in line for line in comment_bullets)
     assert any("Quanti e quali" in line for line in comment_bullets)
-    assert "#copaComAchismo" in post
+    assert "#CopaComAchismo" in post
     assert "#BrasilCopa2026Radar" not in post
     assert len(post.splitlines()) <= 2500
 
@@ -269,7 +269,7 @@ def test_render_linkedin_post_includes_monte_carlo_path_summary() -> None:
         sources=[],
         agent_summaries={},
         warnings=[],
-        custom_hashtag="#copaComAchismo",
+        custom_hashtag="#CopaComAchismo",
         metadata={
             "monte_carlo": {
                 "enabled": True,
@@ -367,7 +367,7 @@ def test_render_linkedin_post_stays_publishable_and_audit_keeps_full_meeting_cha
             }
         ],
         warnings=[],
-        custom_hashtag="#copaComAchismo",
+        custom_hashtag="#CopaComAchismo",
     )
 
     post = render_linkedin_post(bundle)
@@ -412,7 +412,7 @@ def test_render_audit_report_formats_chat_turns_with_human_readable_leadership_d
             }
         ],
         warnings=[],
-        custom_hashtag="#copaComAchismo",
+        custom_hashtag="#CopaComAchismo",
     )
 
     audit = render_audit_report(bundle)
@@ -482,7 +482,7 @@ def test_render_linkedin_post_includes_transfermarkt_market_value_momentum_highl
             }
         },
         warnings=[],
-        custom_hashtag="#copaComAchismo",
+        custom_hashtag="#CopaComAchismo",
     )
 
     post = render_linkedin_post(bundle)
@@ -535,7 +535,7 @@ def test_render_meeting_invalidation_without_leaking_invalid_opponent() -> None:
             }
         ],
         warnings=[],
-        custom_hashtag="#copaComAchismo",
+        custom_hashtag="#CopaComAchismo",
     )
 
     post = render_linkedin_post(bundle)
@@ -561,7 +561,7 @@ def test_render_decision_flow_svg_creates_clean_visual_asset() -> None:
         model_influence_pct={"Perplexity Pro": 44.0, "GPT 5.5": 22.0, "Opus 4.8": 18.0},
         metadata={"meeting_rounds": 6},
         warnings=[],
-        custom_hashtag="#copaComAchismo",
+        custom_hashtag="#CopaComAchismo",
     )
 
     svg = render_decision_flow_svg(bundle)
@@ -677,7 +677,7 @@ def test_render_linkedin_post_groups_knockout_scenarios_by_phase() -> None:
         sources=[],
         agent_summaries={},
         warnings=[],
-        custom_hashtag="#copaComAchismo",
+        custom_hashtag="#CopaComAchismo",
     )
 
     post = render_linkedin_post(bundle)
@@ -720,7 +720,7 @@ def test_render_linkedin_post_labels_second_knockout_path_as_less_likely() -> No
         sources=[],
         agent_summaries={},
         warnings=[],
-        custom_hashtag="#copaComAchismo",
+        custom_hashtag="#CopaComAchismo",
     )
 
     post = render_linkedin_post(bundle)
@@ -753,7 +753,7 @@ def test_render_group_line_omits_zero_loss_bucket() -> None:
         sources=[],
         agent_summaries={},
         warnings=[],
-        custom_hashtag="#copaComAchismo",
+        custom_hashtag="#CopaComAchismo",
     )
 
     post = render_linkedin_post(bundle)

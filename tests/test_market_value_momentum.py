@@ -152,7 +152,7 @@ def test_build_report_bundle_carries_market_value_momentum_to_metadata_and_post(
         build_report_bundle(
             config={
                 "baseline_title_pct": 11.0,
-                "custom_hashtag": "#copaComAchismo",
+                "custom_hashtag": "#CopaComAchismo",
                 "minimum_source_ready_agents": 1,
                 "meeting_min_participants": 1,
                 "sources": [

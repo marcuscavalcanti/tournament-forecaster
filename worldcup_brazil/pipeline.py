@@ -51,7 +51,7 @@ from worldcup_brazil.sources import (
 from worldcup_brazil.watchdog import RunWatchdog
 
 
-DEFAULT_CUSTOM_HASHTAG = "#copaComAchismo"
+DEFAULT_CUSTOM_HASHTAG = "#CopaComAchismo"
 DEFAULT_USD_TO_BRL = 5.4
 DEFAULT_MODEL_PRICING_USD_PER_MILLION_TOKENS = {
     "Opus 4.8": {"input": 15.0, "output": 75.0},

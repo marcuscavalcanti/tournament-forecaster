@@ -71,7 +71,7 @@ def test_example_config_uses_three_agent_source_quorum_and_repair_attempts() -> 
 
 def test_load_config_watchdog_payload_exposes_safe_operational_config() -> None:
     config = {
-        "custom_hashtag": "#copaComAchismo",
+        "custom_hashtag": "#CopaComAchismo",
         "baseline_title_pct": 11.0,
         "group_name": "GRUPO C",
         "brazil_group": "C",
