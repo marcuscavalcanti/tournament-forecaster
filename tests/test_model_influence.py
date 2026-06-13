@@ -1,12 +1,23 @@
 from worldcup_brazil.consensus import AgentOpinion, build_consensus
 from worldcup_brazil.pipeline import (
     _drop_fallback_only_agent_slots,
+    _emit_low_influence_cost_alerts,
     _room_majority_quorum,
     _new_token_cost_ledger,
     _record_token_costs,
     calculate_model_influence,
     calculate_model_participation,
 )
+
+
+class _RecordingWatchdog:
+    """Watchdog mínimo que registra os eventos emitidos, sem I/O de arquivo."""
+
+    def __init__(self) -> None:
+        self.events: list[dict] = []
+
+    def event(self, step, status, *, detail="", extra=None) -> None:
+        self.events.append({"step": step, "status": status, "detail": detail, "extra": extra or {}})
 
 
 def test_calculate_model_influence_normalizes_and_penalizes_fallbacks() -> None:
@@ -245,3 +256,73 @@ def test_record_token_costs_counts_tokens_and_zeroes_fallback_cost() -> None:
     assert ledger["by_model"]["GPT 5.5"]["cost_usd"] > 0
     assert ledger["by_model"]["Opus 4.8"]["cost_usd"] == 0
     assert ledger["total"]["fallback_calls"] == 1
+
+
+def test_low_influence_cost_alert_fires_for_expensive_silent_agent() -> None:
+    """Regressão do run 615b0948 (11/jun): o Perplexity Pro custou US$0,954 (15% do total)
+    por 0,5% de influência, com exit 0 e zero sinais — agente que cobra mas quase não move o
+    consenso passava silencioso. No código antigo este teste falharia porque não havia nenhum
+    alerta; agora um agente abaixo de low_influence_alert_pct com custo > 0 gera watchdog event
+    'degraded' (step model_influence) e um aviso em bundle.warnings."""
+    watchdog = _RecordingWatchdog()
+    warnings: list[str] = []
+    model_influence_pct = {
+        "GPT 5.5": 60.0,
+        "Perplexity Pro": 0.5,  # caro mas quase sem influência
+        "Gemini Pro": 39.5,
+    }
+    model_token_costs = {
+        "by_model": {
+            "GPT 5.5": {"cost_usd": 0.30},
+            "Perplexity Pro": {"cost_usd": 0.954},
+            "Gemini Pro": {"cost_usd": 0.20},
+        }
+    }
+
+    _emit_low_influence_cost_alerts(
+        model_influence_pct=model_influence_pct,
+        model_token_costs=model_token_costs,
+        config={},  # usa default low_influence_alert_pct=2.0
+        warnings=warnings,
+        watchdog=watchdog,
+    )
+
+    degraded = [
+        e for e in watchdog.events if e["step"] == "model_influence" and e["status"] == "degraded"
+    ]
+    assert len(degraded) == 1
+    assert degraded[0]["extra"]["agent"] == "Perplexity Pro"
+    assert degraded[0]["extra"]["influence_pct"] == 0.5
+    assert degraded[0]["extra"]["cost_usd"] == 0.954
+    assert len(warnings) == 1
+    assert "Perplexity Pro" in warnings[0]
+    # GPT 5.5 e Gemini Pro estão acima do limiar: não alertam.
+
+
+def test_low_influence_cost_alert_silent_above_threshold_or_zero_cost() -> None:
+    """Acima do limiar de influência OU custo zero não deve alertar: o alerta existe só para
+    o caso patológico de gasto sem sinal. Um agente abaixo do limiar mas com custo zero (fallback
+    local, custo externo zero) também não alerta, porque não há gasto a questionar."""
+    watchdog = _RecordingWatchdog()
+    warnings: list[str] = []
+    model_influence_pct = {
+        "GPT 5.5": 50.0,  # acima do limiar, custo > 0 => sem alerta
+        "Gemini Pro": 1.0,  # abaixo do limiar mas custo 0 => sem alerta
+    }
+    model_token_costs = {
+        "by_model": {
+            "GPT 5.5": {"cost_usd": 0.40},
+            "Gemini Pro": {"cost_usd": 0.0},
+        }
+    }
+
+    _emit_low_influence_cost_alerts(
+        model_influence_pct=model_influence_pct,
+        model_token_costs=model_token_costs,
+        config={"low_influence_alert_pct": 2.0},
+        warnings=warnings,
+        watchdog=watchdog,
+    )
+
+    assert watchdog.events == []
+    assert warnings == []

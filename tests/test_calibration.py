@@ -2,7 +2,11 @@ import json
 import subprocess
 import sys
 
+import pytest
+
+from worldcup_brazil.atomic_io import atomic_write_text
 from worldcup_brazil.calibration import (
+    _load_prediction_log,
     append_prediction_log,
     evaluate_calibration,
     prediction_records_from_bundle,
@@ -155,3 +159,53 @@ def test_resolved_calibration_records_filters_pending_records() -> None:
 
     assert pending == 1
     assert resolved == [{"id": "resolved", "predicted_pct": 30.0, "outcome": 0, "resolved": True}]
+
+
+def test_corrupt_calibration_log_is_quarantined_and_load_returns_empty(tmp_path) -> None:
+    """Bug histórico (ITEM 5): um torn write de calibration_predictions.json fazia
+    _load_prediction_log estourar JSONDecodeError em todo append subsequente —
+    cada run completava o debate de US$6,43 e só então estourava ao gravar a
+    calibração, diariamente, até reparo manual.
+
+    No código antigo _load_prediction_log fazia json.loads sem try/except, então
+    este teste levantaria JSONDecodeError em vez de retornar []. O fix captura
+    (JSONDecodeError, ValueError), renomeia para sufixo .corrupt e retorna []."""
+    log_path = tmp_path / "calibration_predictions.json"
+    log_path.write_text('[{"id": "m1", "predicted_pct": 7', encoding="utf-8")  # torn JSON
+
+    assert _load_prediction_log(log_path) == []
+    assert not log_path.exists()
+    # sufixo único (.corrupt.<timestamp>) para não clobbar forense de incidente anterior
+    assert list(tmp_path.glob("calibration_predictions.json.corrupt*"))
+
+
+def test_atomic_write_text_writes_content_without_leaving_tmp_orphan(tmp_path) -> None:
+    """ITEM 5: atomic_write_text grava o conteúdo e não deixa tempfile órfão no
+    diretório do alvo após sucesso."""
+    target = tmp_path / "out" / "state.json"
+
+    atomic_write_text(target, '{"ok": true}')
+
+    assert target.read_text(encoding="utf-8") == '{"ok": true}'
+    assert [p.name for p in target.parent.iterdir()] == ["state.json"]
+
+
+def test_atomic_write_text_cleans_tmp_when_write_fails(tmp_path, monkeypatch) -> None:
+    """ITEM 5: se a escrita estourar no meio (aqui, no os.fsync logo após
+    handle.write), o tempfile criado no diretório do alvo é removido e o alvo
+    fica intocado — sem torn write, sem órfão. Sem o except/cleanup do
+    atomic_write_text, o .tmp ficaria órfão no diretório e este assert falharia."""
+    import worldcup_brazil.atomic_io as atomic_io
+
+    target = tmp_path / "state.json"
+
+    def boom_fsync(_fd):
+        raise RuntimeError("fsync falhou no meio da escrita")
+
+    monkeypatch.setattr(atomic_io.os, "fsync", boom_fsync)
+
+    with pytest.raises(RuntimeError):
+        atomic_write_text(target, "payload")
+
+    assert not target.exists()
+    assert list(tmp_path.iterdir()) == []

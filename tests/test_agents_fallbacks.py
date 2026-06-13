@@ -1,9 +1,12 @@
 import asyncio
+import http.client
 import io
 import json
 import subprocess
 import sys
 import urllib.error
+
+import pytest
 
 from worldcup_brazil.agents import (
     AgentSpec,
@@ -1435,3 +1438,130 @@ def test_retry_after_http_date_is_honored_and_past_dates_fall_back(monkeypatch) 
     )
     delay = agents._retry_delay_seconds(1, exc_past)
     assert 0.0 < delay <= 12.0  # exponencial com jitter, nunca 0
+
+
+def _two_provider_specs() -> list[AgentSpec]:
+    return [
+        AgentSpec(
+            slot="Perplexity Pro",
+            provider="openai-compatible",
+            model="sonar-pro",
+            env_api_key="PERPLEXITY_API_KEY",
+            endpoint="https://api.perplexity.ai/chat/completions",
+        ),
+        AgentSpec(
+            slot="Gemini Pro",
+            provider="google-gemini",
+            model="gemini-flash-latest",
+            env_api_key="GEMINI_API_KEY",
+            endpoint="https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+        ),
+    ]
+
+
+def test_call_all_agents_isolates_uncaught_incompleteread_to_failing_slot(monkeypatch) -> None:
+    """http.client.IncompleteRead NÃO é OSError/RuntimeError, então atravessa o except de
+    call_agent. Bug histórico: call_all_agents fazia gather SEM return_exceptions, então a
+    exceção propagava e matava o run inteiro (até 8 rodadas, ~US$6) em vez de custar só o
+    turno daquele slot.
+
+    No código antigo este teste FALHA porque asyncio.run propaga IncompleteRead.
+    No código novo o slot que falha vira fallback (used_fallback/removed_from_main) e os
+    outros respondem normalmente, sem propagação.
+    """
+    monkeypatch.delenv("PERPLEXITY_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    async def fake_text(mode, spec, prompt, *, timeout):
+        if spec.slot == "Perplexity Pro":
+            # IncompleteRead do http.client durante a leitura/decode do body remoto.
+            raise http.client.IncompleteRead(b"")
+        return json.dumps({"summary": "resposta real", "title_pct": 9.0})
+
+    monkeypatch.setattr("worldcup_brazil.agents._call_text_with_hard_timeout_async", fake_text)
+
+    opinions = asyncio.run(
+        call_all_agents(
+            "prompt",
+            specs=_two_provider_specs(),
+            baseline_title_pct=8.0,
+            timeout=10,
+            allow_local_fallback=True,
+        )
+    )
+
+    by_agent = {opinion.agent: opinion for opinion in opinions}
+    assert [opinion.agent for opinion in opinions] == ["Perplexity Pro", "Gemini Pro"]
+    # Slot que falhou: fallback operacional, fora do consenso principal.
+    assert by_agent["Perplexity Pro"].used_fallback is True
+    assert by_agent["Perplexity Pro"].removed_from_main is True
+    # Slot saudável: resposta normal, intocada.
+    assert by_agent["Gemini Pro"].used_fallback is False
+    assert by_agent["Gemini Pro"].removed_from_main is False
+    assert by_agent["Gemini Pro"].summary == "resposta real"
+
+
+def test_call_all_agents_isolates_uncaught_unicodedecodeerror(monkeypatch) -> None:
+    """UnicodeDecodeError (ValueError, não OSError) do decode do body remoto também
+    atravessa o except de call_agent. No código antigo o gather desguarnecido deixava a
+    exceção matar o run; no novo, vira fallback do slot e os demais seguem.
+
+    No código antigo: asyncio.run propaga UnicodeDecodeError → teste FALHA.
+    """
+    monkeypatch.delenv("PERPLEXITY_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    async def fake_text(mode, spec, prompt, *, timeout):
+        if spec.slot == "Gemini Pro":
+            raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+        return json.dumps({"summary": "resposta real", "title_pct": 9.0})
+
+    monkeypatch.setattr("worldcup_brazil.agents._call_text_with_hard_timeout_async", fake_text)
+
+    opinions = asyncio.run(
+        call_all_agents(
+            "prompt",
+            specs=_two_provider_specs(),
+            baseline_title_pct=8.0,
+            timeout=10,
+            allow_local_fallback=True,
+        )
+    )
+
+    by_agent = {opinion.agent: opinion for opinion in opinions}
+    assert [opinion.agent for opinion in opinions] == ["Perplexity Pro", "Gemini Pro"]
+    assert by_agent["Gemini Pro"].used_fallback is True
+    assert by_agent["Gemini Pro"].removed_from_main is True
+    assert by_agent["Perplexity Pro"].used_fallback is False
+    assert by_agent["Perplexity Pro"].summary == "resposta real"
+
+
+def test_call_all_agents_propagates_under_strict_agents(monkeypatch) -> None:
+    """Contrato de --strict-agents (allow_local_fallback=False, help: "Fail instead of
+    using local fallback"): erro de agente DEVE propagar e falhar o run, igual ao `raise`
+    de call_agent. A proteção do item 4 (return_exceptions → fallback) vale só para o run
+    diário (allow_local_fallback=True); strict é opt-in explícito para falhar.
+
+    Regressão da revisão adversarial: a 1ª versão do item 4 engolia a exceção sob strict
+    (convertia em opinion excluída), quebrando silenciosamente o contrato de fail-fast.
+    """
+    monkeypatch.delenv("PERPLEXITY_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    async def fake_text(mode, spec, prompt, *, timeout):
+        if spec.slot == "Perplexity Pro":
+            raise http.client.BadStatusLine("")
+        return json.dumps({"summary": "resposta real", "title_pct": 9.0})
+
+    monkeypatch.setattr("worldcup_brazil.agents._call_text_with_hard_timeout_async", fake_text)
+
+    with pytest.raises(http.client.BadStatusLine):
+        asyncio.run(
+            call_all_agents(
+                "prompt",
+                specs=_two_provider_specs(),
+                baseline_title_pct=8.0,
+                timeout=10,
+                allow_local_fallback=False,
+            )
+        )

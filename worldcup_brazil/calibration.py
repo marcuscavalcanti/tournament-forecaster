@@ -5,6 +5,8 @@ import math
 from pathlib import Path
 from typing import Any
 
+from worldcup_brazil.atomic_io import atomic_write_text, quarantine_corrupt
+
 
 CALIBRATION_RECORD_VERSION = 1
 
@@ -216,7 +218,13 @@ def prediction_records_from_bundle(
 def _load_prediction_log(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, ValueError):
+        # Torn/corrupt write: cada run completaria o debate de US$6,43 e só então
+        # estouraria. Isola o log ruim e segue como log vazio em vez de propagar.
+        quarantine_corrupt(path)
+        return []
     if not isinstance(payload, list):
         raise ValueError("calibration prediction log must be a JSON list")
     return [record for record in payload if isinstance(record, dict)]
@@ -232,8 +240,7 @@ def append_prediction_log(path: Path | str, records: list[dict[str, Any]]) -> li
             continue
         by_id[record_id] = record
     merged = list(by_id.values())
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(merged, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    atomic_write_text(path, json.dumps(merged, ensure_ascii=False, indent=2, sort_keys=True))
     return merged
 
 

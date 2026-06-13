@@ -5,3 +5,7 @@ __pycache__/
 data/
 outputs/
 .DS_Store
+
+# lock de run concorrente (item 6) — artefato de runtime
+data/.run.lock
+*.corrupt.*

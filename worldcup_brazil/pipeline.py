@@ -3598,6 +3598,8 @@ async def _run_model_meeting(
     meeting_transcript: list[dict[str, Any]] = []
     final_consensus = None
     final_opinions: list[Any] = []
+    last_valid_consensus = None
+    last_valid_opinions: list[Any] = []
     max_rounds = int(config.get("meeting_max_rounds", 9))
     min_rounds = int(config.get("meeting_min_rounds", 6))
     configured_min_participants = int(config.get("meeting_min_participants", config.get("meeting_min_real_agents", 3)))
@@ -3929,6 +3931,8 @@ async def _run_model_meeting(
             consensus = build_consensus(consensus_opinions, agent_slots=active_slots)
             last_round_consensus_valid = True
             consecutive_sterile = 0
+            last_valid_consensus = consensus
+            last_valid_opinions = consensus_opinions
         except DegenerateConsensusError as exc:
             last_round_consensus_valid = False
             consecutive_sterile += 1
@@ -4239,15 +4243,33 @@ async def _run_model_meeting(
             watchdog.fail("model_meeting", detail="nenhuma rodada produziu consenso válido")
         raise MeetingConsensusError("nenhuma rodada produziu consenso válido")
     if not exited_with_consensus and not last_round_consensus_valid:
-        if watchdog:
-            watchdog.fail(
-                "model_meeting",
-                detail=f"teto de {max_rounds} rodadas atingido sem nenhum voto válido na rodada final",
+        if last_valid_consensus is not None:
+            if watchdog:
+                watchdog.event(
+                    "model_meeting",
+                    "degraded_publish",
+                    detail=(
+                        f"teto de {max_rounds} rodadas atingido com rodada final estéril; "
+                        f"publicando o último consenso válido de rodada anterior "
+                        f"(título {last_valid_consensus.title_pct:.1f}%) em modo degradado"
+                    ),
+                    extra={
+                        "max_rounds": max_rounds,
+                        "last_valid_title_pct": last_valid_consensus.title_pct,
+                    },
+                )
+            final_consensus = last_valid_consensus
+            final_opinions = last_valid_opinions
+        else:
+            if watchdog:
+                watchdog.fail(
+                    "model_meeting",
+                    detail=f"teto de {max_rounds} rodadas atingido sem nenhum voto válido na rodada final",
+                )
+            raise MeetingConsensusError(
+                f"teto de {max_rounds} rodadas atingido sem nenhum voto válido na rodada final; "
+                "consenso não pode ser publicado a partir de fallbacks"
             )
-        raise MeetingConsensusError(
-            f"teto de {max_rounds} rodadas atingido sem nenhum voto válido na rodada final; "
-            "consenso não pode ser publicado a partir de fallbacks"
-        )
     if watchdog:
         watchdog.finish(
             "model_meeting",
@@ -5198,6 +5220,44 @@ def calculate_model_influence(opening_opinions: list[Any], final_opinions: list[
     return normalized
 
 
+def _emit_low_influence_cost_alerts(
+    *,
+    model_influence_pct: dict[str, float],
+    model_token_costs: dict[str, Any] | None,
+    config: dict[str, Any],
+    warnings: list[str],
+    watchdog: RunWatchdog | None,
+) -> None:
+    """Regressão do run 615b0948 (11/jun): o Perplexity Pro custou US$0,954 (15% do total)
+    por 0,5% de influência, com exit 0 e zero sinais. Agente que cobra mas quase não move o
+    consenso passava silencioso. Agora: agente abaixo de low_influence_alert_pct com custo > 0
+    gera watchdog event 'degraded' e um aviso em bundle.warnings."""
+    threshold = float(config.get("low_influence_alert_pct", 2.0))
+    by_model = (model_token_costs or {}).get("by_model", {})
+    for agent, influence_pct in model_influence_pct.items():
+        cost_usd = float(by_model.get(agent, {}).get("cost_usd", 0.0) or 0.0)
+        if cost_usd <= 0 or float(influence_pct) >= threshold:
+            continue
+        if watchdog:
+            watchdog.event(
+                "model_influence",
+                "degraded",
+                detail=(
+                    f"{agent} custou US${cost_usd:.3f} por apenas {float(influence_pct):.1f}% de "
+                    f"influência (limiar {threshold:.1f}%); revise se vale manter o slot no run"
+                ),
+                extra={
+                    "agent": agent,
+                    "influence_pct": float(influence_pct),
+                    "cost_usd": cost_usd,
+                },
+            )
+        warnings.append(
+            f"{agent} custou US${cost_usd:.3f} por apenas {float(influence_pct):.1f}% de influência "
+            f"(abaixo do limiar de {threshold:.1f}%); avalie remover o slot para conter custo sem sinal."
+        )
+
+
 def _phase_labels_for_consensus_questions(config: dict[str, Any] | None) -> list[str]:
     if not config:
         return []
@@ -5780,6 +5840,15 @@ async def build_report_bundle(
             "Nenhum modelo reportou source_urls/source_queries auditáveis; revise APIs/bridges antes de publicar."
         )
 
+    model_influence_pct = calculate_model_influence([*active_planning_opinions, *meeting_opinions], opinions, consensus)
+    _emit_low_influence_cost_alerts(
+        model_influence_pct=model_influence_pct,
+        model_token_costs=token_cost_ledger,
+        config=config,
+        warnings=warnings,
+        watchdog=watchdog,
+    )
+
     stage_probabilities = _stage_probabilities(consensus.title_pct, config)
     stage_confidence_intervals = _stage_confidence_intervals(
         stage_probabilities,
@@ -5827,7 +5896,7 @@ async def build_report_bundle(
         debate_transcript=[],
         meeting_transcript=meeting_transcript,
         source_plan_by_model=_source_plan_by_model(active_planning_opinions),
-        model_influence_pct=calculate_model_influence([*active_planning_opinions, *meeting_opinions], opinions, consensus),
+        model_influence_pct=model_influence_pct,
         model_participation=calculate_model_participation(meeting_transcript, config=config),
         agent_effort_profiles=agent_effort_profiles(active_agent_specs),
         model_token_costs=token_cost_ledger,

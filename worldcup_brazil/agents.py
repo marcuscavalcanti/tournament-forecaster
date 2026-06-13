@@ -1698,7 +1698,30 @@ async def call_all_agents(
         run_with_bulkhead(by_slot[slot])
         for slot in slots
     ]
-    return list(await asyncio.gather(*tasks))
+    # return_exceptions=True: um responder que levanta um tipo não convertido por
+    # call_agent (ex. http.client.IncompleteRead/BadStatusLine, UnicodeDecodeError do
+    # decode do body) não pode propagar pelo gather e matar o run inteiro depois de até
+    # 8 rodadas e ~US$6 gastos. Cada falha custa só o turno daquele slot. gather preserva
+    # ordem, então results[i] corresponde a slots[i].
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    opinions: list[AgentOpinion] = []
+    for slot, result in zip(slots, results):
+        if isinstance(result, BaseException):
+            if isinstance(result, (asyncio.CancelledError, KeyboardInterrupt, SystemExit)):
+                raise result
+            spec = by_slot[slot]
+            if not allow_local_fallback:
+                # Contrato de --strict-agents ("Fail instead of using local fallback"):
+                # erro de agente DEVE propagar e falhar o run, igual ao `raise` de
+                # call_agent. A proteção do item 4 (return_exceptions) vale para o run
+                # diário (allow_local_fallback=True); strict é opt-in explícito p/ falhar.
+                raise result
+            opinions.append(
+                _local_fallback_opinion(spec, str(result), baseline_title_pct=baseline_title_pct)
+            )
+            continue
+        opinions.append(result)
+    return opinions
 
 
 def load_agent_specs_from_config(config: dict[str, Any]) -> list[AgentSpec]:

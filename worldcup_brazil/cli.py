@@ -7,6 +7,11 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+try:
+    import fcntl  # POSIX-only; ausente no Windows.
+except ImportError:  # pragma: no cover - plataforma sem fcntl
+    fcntl = None
+
 from worldcup_brazil.agents import (
     load_agent_specs_from_config,
     render_agent_preflight_stdout,
@@ -74,6 +79,27 @@ def _run_post_editor_append(config: dict, base_text: str, *, watchdog: RunWatchd
             detail="append aceito" if final_text != base_text else "sem append (texto original mantido)",
         )
     return final_text
+
+
+def _acquire_run_lock(path: Path):
+    """Adquire lock exclusivo não-bloqueante em ``path`` e devolve o fd aberto.
+
+    Retorna ``None`` se outro run já segura o lock (BlockingIOError/OSError) ou se
+    fcntl não estiver disponível (Windows). O chamador DEVE manter o fd vivo
+    durante todo o run — fechar/coletar libera o lock. Sem isso, 3 runs no mesmo
+    dia gastam o dobro, sobrescrevem artefatos date-stamped e rasgam o
+    read-modify-write da calibração.
+    """
+    if fcntl is None:
+        return None
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (BlockingIOError, OSError):
+        os.close(fd)
+        return None
+    return fd
 
 
 def _parse_datetime(value: str | None) -> datetime:
@@ -311,6 +337,21 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    run_lock_fd = _acquire_run_lock(Path("data/.run.lock"))
+    if run_lock_fd is None and fcntl is not None:
+        print("skip: outro run ja esta em andamento (lock data/.run.lock)", file=sys.stderr)
+        return 0
+    try:
+        return _run(args)
+    finally:
+        # Libera o lock só no fim do run (ou da falha). Mantê-lo durante todo o
+        # processamento é o que bloqueia runs concorrentes; fechar aqui evita
+        # vazar o fd entre invocações no mesmo processo.
+        if run_lock_fd is not None:
+            os.close(run_lock_fd)
+
+
+def _run(args: argparse.Namespace) -> int:
     now = _parse_datetime(args.now)
     state = RunState(args.state)
     watchdog = None if args.no_watchdog else RunWatchdog(path=args.watchdog_log, verbose=not args.quiet_watchdog)
@@ -411,31 +452,10 @@ def main(argv: list[str] | None = None) -> int:
         json_path = args.output_dir / f"linkedin_brazil_{stamp}.json"
         audit_path = args.output_dir / f"audit_brazil_{stamp}.md"
         graph_path = args.output_dir / f"decision_flow_brazil_{stamp}.svg"
-        post_path.write_text(artifacts.post, encoding="utf-8")
-        audit_path.write_text(render_audit_report(artifacts.bundle), encoding="utf-8")
-        graph_path.write_text(render_decision_flow_svg(artifacts.bundle), encoding="utf-8")
-        template_post_path = args.output_dir / f"linkedin_post_brazil_{stamp}.md"
-        try:
-            post_index = (
-                len(
-                    [
-                        p
-                        for p in args.output_dir.glob("linkedin_post_brazil_*.md")
-                        if p.name != template_post_path.name
-                    ]
-                )
-                + 1
-            )
-            template_post = render_template_post(artifacts.bundle, post_index=post_index)
-            if bool(config.get("post_editor_enabled", False)):
-                template_post = _run_post_editor_append(config, template_post, watchdog=watchdog)
-            validate_template_post(template_post, artifacts.bundle)
-            template_post_path.write_text(template_post, encoding="utf-8")
-        except ValueError as exc:
-            template_post_path = None
-            if watchdog:
-                watchdog.event("post_template", "fail", detail=str(exc)[:200])
-            print(f"aviso: post de template não gerado ({exc})", file=sys.stderr)
+        # Resiliência: o JSON é o ÚNICO registro em disco de meeting_transcript,
+        # model_influence_pct e model_token_costs (~US$6,43 de debate). É escrito
+        # PRIMEIRO; se qualquer render (post/audit/svg/template) estourar depois, o
+        # registro já está salvo. Caminho feliz idêntico; só muda a ORDEM.
         json_path.write_text(
             json.dumps(
                 {
@@ -481,12 +501,47 @@ def main(argv: list[str] | None = None) -> int:
             ),
             encoding="utf-8",
         )
-        calibration_records = prediction_records_from_bundle(
-            artifacts.bundle,
-            run_id=watchdog.run_id if watchdog else now.astimezone(timezone.utc).strftime("%Y%m%d%H%M%S"),
-            artifact_path=str(json_path),
-        )
-        append_prediction_log(args.calibration_log, calibration_records)
+        post_path.write_text(artifacts.post, encoding="utf-8")
+        audit_path.write_text(render_audit_report(artifacts.bundle), encoding="utf-8")
+        graph_path.write_text(render_decision_flow_svg(artifacts.bundle), encoding="utf-8")
+        template_post_path = args.output_dir / f"linkedin_post_brazil_{stamp}.md"
+        try:
+            post_index = (
+                len(
+                    [
+                        p
+                        for p in args.output_dir.glob("linkedin_post_brazil_*.md")
+                        if p.name != template_post_path.name
+                    ]
+                )
+                + 1
+            )
+            template_post = render_template_post(artifacts.bundle, post_index=post_index)
+            if bool(config.get("post_editor_enabled", False)):
+                template_post = _run_post_editor_append(config, template_post, watchdog=watchdog)
+            validate_template_post(template_post, artifacts.bundle)
+            template_post_path.write_text(template_post, encoding="utf-8")
+        except ValueError as exc:
+            template_post_path = None
+            if watchdog:
+                watchdog.event("post_template", "fail", detail=str(exc)[:200])
+            print(f"aviso: post de template não gerado ({exc})", file=sys.stderr)
+        # Calibração é best-effort: uma falha aqui (ex.: log corrompido, disco
+        # cheio) NÃO pode impedir state.mark_success — senão o run de US$6,43 é
+        # marcado como "não-feito" e roda de novo no próximo agendamento.
+        calibration_records: list = []
+        try:
+            calibration_records = prediction_records_from_bundle(
+                artifacts.bundle,
+                run_id=watchdog.run_id if watchdog else now.astimezone(timezone.utc).strftime("%Y%m%d%H%M%S"),
+                artifact_path=str(json_path),
+            )
+            append_prediction_log(args.calibration_log, calibration_records)
+        except Exception as exc:  # noqa: BLE001 - calibração não derruba o run
+            calibration_records = []
+            if watchdog:
+                watchdog.event("calibration", "fail", detail=str(exc)[:200])
+            print(f"aviso: calibração não registrada ({exc})", file=sys.stderr)
         state.mark_success(now)
         if watchdog:
             watchdog.finish(

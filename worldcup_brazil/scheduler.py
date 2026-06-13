@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from worldcup_brazil.atomic_io import atomic_write_text, quarantine_corrupt
+
 
 @dataclass
 class RunState:
@@ -13,7 +15,13 @@ class RunState:
     def last_success_at(self) -> datetime | None:
         if not self.path.exists():
             return None
-        payload = json.loads(self.path.read_text(encoding="utf-8"))
+        try:
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, ValueError):
+            # Torn/corrupt write: não propagar JSONDecodeError a cada run (falha
+            # auto-perpetuante). Isola o arquivo ruim e trata como "sem estado".
+            quarantine_corrupt(self.path)
+            return None
         value = payload.get("last_success_at")
         if not value:
             return None
@@ -25,9 +33,8 @@ class RunState:
     def mark_success(self, when: datetime) -> None:
         if when.tzinfo is None:
             when = when.replace(tzinfo=timezone.utc)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = {"last_success_at": when.astimezone(timezone.utc).isoformat()}
-        self.path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        atomic_write_text(self.path, json.dumps(payload, indent=2))
 
 
 def should_run(state: RunState, *, now: datetime, interval: timedelta = timedelta(days=3)) -> bool:

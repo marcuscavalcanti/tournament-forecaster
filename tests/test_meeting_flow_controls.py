@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import datetime, timezone
 
 import pytest
@@ -10,6 +11,7 @@ from worldcup_brazil.pipeline import (
     _format_impossible_opponent_reason,
     _run_model_meeting,
 )
+from worldcup_brazil.watchdog import RunWatchdog
 
 
 def _specs() -> list[AgentSpec]:
@@ -729,3 +731,111 @@ def test_opponent_debriefing_room_has_own_round_contract_fitting_budget() -> Non
     warning = _opponent_debriefing_budget_warning(tight)
     assert warning is not None
     assert "não cabe no orçamento" in warning
+
+
+def test_meeting_at_ceiling_publishes_last_valid_consensus_when_final_round_is_sterile(monkeypatch, tmp_path) -> None:
+    """Regressão do run 10/jun/2026: um burst de rate-limit tornava a ÚLTIMA rodada estéril
+    (DegenerateConsensusError) ao bater o teto de rodadas, mesmo após rodadas anteriores terem
+    produzido consenso válido. O guard do teto levantava MeetingConsensusError e o run morria
+    exit 1 após ~8 rodadas e quase todo o gasto. No código antigo este teste falharia porque
+    o teto sempre levantava quando a rodada final era estéril; agora a sala publica DEGRADADO o
+    último consenso válido e emite watchdog event 'degraded_publish'. A streak estéril (1) fica
+    abaixo de meeting_sterile_round_limit (2), então o abort de sala estéril não dispara."""
+    config = {
+        **_base_config(),
+        "meeting_min_rounds": 99,  # nunca sair por consensus_reached
+        "meeting_max_rounds": 3,
+        "meeting_sterile_round_limit": 2,
+        "meeting_slot_breaker_threshold": 99,
+        "meeting_stability_rounds": 99,  # nunca sair por estabilidade
+    }
+
+    # O protagonista (call_agent) abre cada rodada; usamos isso como contador de rodada.
+    # A rodada final precisa ser estéril POR INTEIRO (protagonista + respostas todas fallback)
+    # para que build_consensus levante DegenerateConsensusError — se só as respostas forem
+    # fallback, o voto do protagonista ainda dá peso e a rodada não fica estéril.
+    round_counter = {"n": 0}
+
+    async def fake_call_agent(spec, prompt, **kwargs):
+        round_counter["n"] += 1
+        if round_counter["n"] >= 3:
+            return _invalid_response(spec.slot)
+        return _healthy_question_opinion(spec.slot)
+
+    async def fake_call_all_agents(prompt, *, specs, **kwargs):
+        # Rodada final (3) é estéril: todos fallback => build_consensus levanta
+        # DegenerateConsensusError. Rodadas anteriores são válidas.
+        if round_counter["n"] >= 3:
+            return [_invalid_response(spec.slot) for spec in specs]
+        return [
+            _healthy_response(spec.slot, 9.0 if spec.slot == "Gemini Pro" else 10.0)
+            for spec in specs
+        ]
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_agent", fake_call_agent)
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+
+    watchdog_path = tmp_path / "watchdog.jsonl"
+    consensus, opinions, transcript, _all = asyncio.run(
+        _run_model_meeting(
+            config=config,
+            planning_opinions=_planning_opinions(),
+            generated_at=datetime(2026, 6, 14, tzinfo=timezone.utc),
+            agent_specs=_specs(),
+            baseline_title_pct=11.0,
+            allow_agent_fallback=True,
+            watchdog=RunWatchdog(path=watchdog_path, verbose=False),
+        )
+    )
+
+    # Bateu o teto: 3 rodadas no transcript.
+    assert len(transcript) == 3
+    # Publicou degradado o consenso da rodada VÁLIDA anterior, não levantou.
+    # No código antigo o guard do teto sempre levantava MeetingConsensusError aqui;
+    # chegar a esta linha com um consenso já prova a publicação degradada.
+    assert consensus is not None
+    assert abs(float(consensus.title_pct) - 10.0) < 1.0  # consenso da rodada válida, não baseline fallback (11.0)
+    assert opinions, "deveria devolver as opiniões da última rodada válida"
+
+    events = [json.loads(line) for line in watchdog_path.read_text(encoding="utf-8").splitlines()]
+    degraded = [e for e in events if e.get("step") == "model_meeting" and e.get("status") == "degraded_publish"]
+    assert degraded, "deveria emitir watchdog event degraded_publish no teto com rodada final estéril"
+    assert degraded[0]["extra"]["last_valid_title_pct"] == consensus.title_pct
+    assert not any(e.get("step") == "model_meeting" and e.get("status") == "fail" for e in events)
+
+
+def test_meeting_at_ceiling_still_raises_when_no_round_was_ever_valid(monkeypatch) -> None:
+    """Contraprova do degraded publish: se NENHUMA rodada produziu consenso válido (todas
+    estéreis) e o teto é atingido, a sala continua levantando MeetingConsensusError — não há
+    consenso anterior para publicar. Aqui sterile_round_limit é alto o bastante para não abortar
+    antes do teto, isolando o guard do teto."""
+    config = {
+        **_base_config(),
+        "meeting_min_rounds": 99,
+        "meeting_max_rounds": 3,
+        "meeting_sterile_round_limit": 99,  # não abortar por sala estéril; chegar ao teto
+        "meeting_slot_breaker_threshold": 99,
+        "meeting_stability_rounds": 99,
+    }
+
+    async def fake_call_agent(spec, prompt, **kwargs):
+        return _invalid_response(spec.slot)
+
+    async def fake_call_all_agents(prompt, *, specs, **kwargs):
+        return [_invalid_response(spec.slot) for spec in specs]
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_agent", fake_call_agent)
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+
+    with pytest.raises(MeetingConsensusError):
+        asyncio.run(
+            _run_model_meeting(
+                config=config,
+                planning_opinions=_planning_opinions(),
+                generated_at=datetime(2026, 6, 14, tzinfo=timezone.utc),
+                agent_specs=_specs(),
+                baseline_title_pct=11.0,
+                allow_agent_fallback=True,
+                watchdog=None,
+            )
+        )
