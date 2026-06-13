@@ -113,6 +113,26 @@ def test_acquire_run_lock_second_acquisition_returns_none(tmp_path) -> None:
         os.close(first)
 
 
+def test_previous_template_bundle_ignores_current_run_json(tmp_path) -> None:
+    output_dir = tmp_path / "outputs"
+    output_dir.mkdir()
+    previous = output_dir / "linkedin_brazil_2026-06-11.json"
+    current = output_dir / "linkedin_brazil_2026-06-13.json"
+    previous.write_text(
+        json.dumps({"bundle": {"generated_at_iso": "2026-06-11T12:00:00+00:00"}}),
+        encoding="utf-8",
+    )
+    current.write_text(
+        json.dumps({"bundle": {"generated_at_iso": "2026-06-13T12:00:00+00:00"}}),
+        encoding="utf-8",
+    )
+
+    bundle = cli._previous_template_bundle(output_dir, current)
+
+    assert bundle is not None
+    assert bundle.generated_at_iso == "2026-06-11T12:00:00+00:00"
+
+
 def test_calibration_append_failure_does_not_block_mark_success(tmp_path, monkeypatch, capsys) -> None:
     """Bug histórico (ITEM 5): se append_prediction_log estourar (log corrompido,
     disco cheio), o run de US$6,43 não podia ser marcado como sucesso — então

@@ -207,6 +207,40 @@ def test_backstage_prefers_source_correction_and_protagonist_behavior() -> None:
     assert "convergência auditável" not in backstage
 
 
+def test_template_post_includes_change_bullets_when_previous_bundle_is_available() -> None:
+    previous = _bundle()
+    current = _bundle()
+    current.generated_at_iso = "2026-06-13T18:43:54+00:00"
+    current.stage_probabilities = {"quartas": 40.3, "semifinal": 20.5, "final": 9.2, "titulo": 3.7}
+    for match in current.knockout_matches:
+        if match.phase == "Quartas" and match.most_likely:
+            match.scenario_pct = 38.7
+            match.brazil_pct = 37.0
+            match.opponent_pct = 63.0
+    current.meeting_transcript = [
+        {
+            "round": 3,
+            "responses": [
+                {
+                    "agent": "Opus 4.8",
+                    "answer": "Polymarket 72% é Grupo C, não título — não sustenta 4% de título.",
+                    "disagreed": True,
+                    "removed_from_main": False,
+                    "used_fallback": False,
+                },
+            ],
+        }
+    ]
+
+    text = render_template_post(current, post_index=2, run_date=date(2026, 6, 13), previous_bundle=previous)
+
+    assert "O QUE MUDOU DESDE 11/JUN:" in text
+    assert "• Hexa 8,6%→3,7%; final 16%→9%." in text
+    assert "• Quartas: Inglaterra 31%→39%; Brasil 49%→37%." in text
+    assert "• Por quê: Polymarket era Grupo C; caminho recalculado." in text
+    assert "Esse mapa muda a cada rodada" not in text
+
+
 def test_validate_rejects_unresolved_placeholder_and_oversize() -> None:
     bundle = _bundle()
     good = render_template_post(bundle, post_index=1, run_date=date(2026, 6, 11))

@@ -28,6 +28,7 @@ from worldcup_brazil.pipeline import (
 )
 from worldcup_brazil.post_template import (
     apply_editor_append,
+    bundle_from_json,
     render_template_post,
     validate_template_post,
 )
@@ -79,6 +80,20 @@ def _run_post_editor_append(config: dict, base_text: str, *, watchdog: RunWatchd
             detail="append aceito" if final_text != base_text else "sem append (texto original mantido)",
         )
     return final_text
+
+
+def _previous_template_bundle(output_dir: Path, current_json_path: Path) -> object | None:
+    candidates = [
+        path
+        for path in sorted(output_dir.glob("linkedin_brazil_*.json"))
+        if path.name != current_json_path.name
+    ]
+    if not candidates:
+        return None
+    try:
+        return bundle_from_json(candidates[-1])
+    except Exception:  # noqa: BLE001 - comparação histórica não pode derrubar o post
+        return None
 
 
 def _acquire_run_lock(path: Path):
@@ -534,7 +549,11 @@ def _run(args: argparse.Namespace) -> int:
                 )
                 + 1
             )
-            template_post = render_template_post(artifacts.bundle, post_index=post_index)
+            template_post = render_template_post(
+                artifacts.bundle,
+                post_index=post_index,
+                previous_bundle=_previous_template_bundle(args.output_dir, json_path),
+            )
             if bool(config.get("post_editor_enabled", False)):
                 template_post = _run_post_editor_append(config, template_post, watchdog=watchdog)
             validate_template_post(template_post, artifacts.bundle)

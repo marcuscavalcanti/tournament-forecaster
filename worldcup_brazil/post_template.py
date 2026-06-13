@@ -33,7 +33,7 @@ TEMPLATE = """{round_header}
 
 {title}
 
-Como prometi: na véspera de cada jogo do Brasil, os 5 modelos de IA (Opus, GPT, Gemini, DeepSeek e Perplexity) se reúnem, pesquisam casas de apostas, rankings de força e notícias do dia, e saem com uma decisão em grupo.
+Como prometi: na véspera de cada jogo, os 5 modelos pesquisam odds, rankings e notícias, debatem e fecham uma decisão em grupo.
 
 👉 {next_game_header}
 
@@ -45,8 +45,7 @@ O CAMINHO ATÉ O HEXA, adversário por adversário (no mata-mata não tem empate
 
 {path_blocks}RESUMO DA CAMINHADA: o Brasil chega nos 16 avos em {r16_pct} dos cenários, oitavas em {r8_pct}, quartas em {qf_pct}, na semifinal em {sf_pct}, na final em {final_pct}... e levanta a taça em {title_pct} 🏆.
 
-Esse mapa MUDA a cada rodada, pois o modelo calcula o resultado dos outros grupos e troca os adversários pelo caminho. Por isso o modelo roda de novo na véspera/dia de cada jogo e eu posto o mapa atualizado.
-
+{change_section}
 {backstage_section}📊 NÚMEROS DA RODADA:
 {round_stats}
 
@@ -97,6 +96,15 @@ def _short_date(raw: Any) -> str:
 
 def _post_game_label(match: Any) -> str:
     return f"{getattr(match, 'opponent', '')} ({_short_date(getattr(match, 'match_date', ''))})"
+
+
+def _analysis_short_date(bundle: Any) -> str:
+    raw = str(getattr(bundle, "generated_at_iso", "") or "")
+    try:
+        parsed = datetime.fromisoformat(raw).date()
+        return _short_date(parsed.isoformat()).upper()
+    except ValueError:
+        return "ÚLTIMA ANÁLISE"
 
 
 def _parse_group_date(raw: Any, *, year: int) -> date | None:
@@ -481,7 +489,84 @@ def _knockout_pairs(bundle: Any) -> dict[str, dict[str, Any]]:
     return pairs
 
 
-def render_template_post(bundle: Any, *, post_index: int, run_date: date | None = None) -> str:
+def _stage_number(bundle: Any, key: str) -> float | None:
+    try:
+        return float((getattr(bundle, "stage_probabilities", {}) or {}).get(key))
+    except (TypeError, ValueError):
+        return None
+
+
+def _most_likely_phase_match(bundle: Any, phase: str) -> Any | None:
+    for match in getattr(bundle, "knockout_matches", []) or []:
+        if str(getattr(match, "phase", "")).strip() == phase and bool(getattr(match, "most_likely", False)):
+            return match
+    return None
+
+
+def _changed_stage_bullet(previous_bundle: Any, bundle: Any) -> str | None:
+    prev_title, title = _stage_number(previous_bundle, "titulo"), _stage_number(bundle, "titulo")
+    prev_final, final = _stage_number(previous_bundle, "final"), _stage_number(bundle, "final")
+    if prev_title is None or title is None or prev_final is None or final is None:
+        return None
+    return f"• Hexa {_pct(prev_title)}→{_pct(title)}; final {_pct_int(prev_final)}→{_pct_int(final)}."
+
+
+def _changed_quarter_bullet(previous_bundle: Any, bundle: Any) -> str | None:
+    previous = _most_likely_phase_match(previous_bundle, "Quartas")
+    current = _most_likely_phase_match(bundle, "Quartas")
+    if previous is None or current is None:
+        return None
+    prev_opp = str(getattr(previous, "opponent", "") or "adversário")
+    curr_opp = str(getattr(current, "opponent", "") or "adversário")
+    prev_scn, curr_scn = getattr(previous, "scenario_pct", None), getattr(current, "scenario_pct", None)
+    prev_br, curr_br = getattr(previous, "brazil_pct", None), getattr(current, "brazil_pct", None)
+    if prev_opp == curr_opp:
+        return (
+            f"• Quartas: {curr_opp} {_pct_int(prev_scn)}→{_pct_int(curr_scn)}; "
+            f"Brasil {_pct_int(prev_br)}→{_pct_int(curr_br)}."
+        )
+    return (
+        f"• Quartas: {prev_opp} ({_pct_int(prev_scn)}) → {curr_opp} ({_pct_int(curr_scn)}); "
+        f"Brasil {_pct_int(prev_br)}→{_pct_int(curr_br)}."
+    )
+
+
+def _changed_reason_bullet(bundle: Any) -> str:
+    correction = _source_correction_beat(bundle)
+    if correction and "Polymarket 72%" in correction:
+        return "• Por quê: Polymarket era Grupo C; caminho recalculado."
+    return "• Por quê: cruzamentos, notícias e mercados foram reponderados."
+
+
+def _change_section(bundle: Any, previous_bundle: Any | None) -> str:
+    if previous_bundle is None:
+        return (
+            "Mapa muda: recalculo grupos, cruzamentos e mercados antes de cada post.\n\n"
+        )
+    bullets = [
+        bullet
+        for bullet in (
+            _changed_stage_bullet(previous_bundle, bundle),
+            _changed_quarter_bullet(previous_bundle, bundle),
+            _changed_reason_bullet(bundle),
+        )
+        if bullet
+    ]
+    if not bullets:
+        return (
+            "O QUE MUDOU DESDE A ÚLTIMA ANÁLISE:\n"
+            "• O mapa foi recalculado, mas sem mudança material suficiente para virar headline.\n\n"
+        )
+    return f"O QUE MUDOU DESDE {_analysis_short_date(previous_bundle)}:\n" + "\n".join(bullets[:3]) + "\n\n"
+
+
+def render_template_post(
+    bundle: Any,
+    *,
+    post_index: int,
+    run_date: date | None = None,
+    previous_bundle: Any | None = None,
+) -> str:
     if run_date is None:
         run_date = datetime.fromisoformat(str(bundle.generated_at_iso)).date()
 
@@ -584,6 +669,7 @@ def render_template_post(bundle: Any, *, post_index: int, run_date: date | None 
         sf_pct=_pct_int(stage.get("semifinal")),
         final_pct=_pct_int(stage.get("final")),
         title_pct=title_pct_text,
+        change_section=_change_section(bundle, previous_bundle),
         backstage_section=backstage,
         next_post_game=_post_game_label(next_post_match),
         palpite_bolao=palpite,
