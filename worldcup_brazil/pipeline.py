@@ -4,6 +4,7 @@ import asyncio
 import json
 import math
 import os
+import random
 import re
 import unicodedata
 import urllib.parse
@@ -11,7 +12,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import NormalDist
-from typing import Any
+from typing import Any, Callable
 
 from worldcup_brazil.agents import agent_effort_profiles, call_agent, call_all_agents, load_agent_specs_from_config
 from worldcup_brazil.bracket import (
@@ -3707,11 +3708,103 @@ def _blind_peer_review_empty_metadata(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _blind_peer_review_public_text(text: str, *, agent_slots: list[str]) -> str:
-    clean = str(text or "")
+_BLIND_REVIEW_CURATED_MASK_TERMS = {
+    "anthropic",
+    "claude",
+    "codex",
+    "deepseek",
+    "gemini",
+    "gpt",
+    "openai",
+    "perplexity",
+    "sonar",
+    "opus",
+}
+_BLIND_REVIEW_MASK_STOPWORDS = {
+    "api",
+    "cli",
+    "pro",
+    "v4",
+    "v5",
+}
+
+
+def _blind_peer_review_mask_pattern(term: str) -> str:
+    tokens = [token for token in re.split(r"[\s_\-/.]+", str(term or "").strip()) if token]
+    if not tokens:
+        return ""
+    if len(tokens) == 1:
+        return rf"\b{re.escape(tokens[0])}\b"
+    return r"\b" + r"[\s_\-/.]*".join(re.escape(token) for token in tokens) + r"\b"
+
+
+def _blind_peer_review_identity_fragments(term: str) -> set[str]:
+    fragments: set[str] = set()
+    raw_tokens = [token for token in re.split(r"[\s_\-/.]+", str(term or "").strip()) if token]
+    for token in raw_tokens:
+        normalized = token.strip().lower()
+        if re.fullmatch(r"\d+(?:\.\d+)+", normalized):
+            fragments.add(token)
+    for left, right in zip(raw_tokens, raw_tokens[1:]):
+        left_normalized = left.strip().lower()
+        right_normalized = right.strip().lower()
+        if re.fullmatch(r"v\d+", left_normalized) and right_normalized == "pro":
+            fragments.add(f"{left} {right}")
+    return fragments
+
+
+def _blind_peer_review_mask_terms(*, agent_specs: list[Any] | None, agent_slots: list[str]) -> list[str]:
+    terms: set[str] = set(_BLIND_REVIEW_CURATED_MASK_TERMS)
     for slot in agent_slots:
-        if slot:
-            clean = re.sub(re.escape(slot), "modelo", clean, flags=re.I)
+        slot_text = str(slot or "").strip()
+        if not slot_text:
+            continue
+        terms.add(slot_text)
+        terms.update(_blind_peer_review_identity_fragments(slot_text))
+        for token in re.split(r"[\s_\-/.]+", slot_text):
+            normalized = token.strip().lower()
+            if len(normalized) >= 4 and normalized not in _BLIND_REVIEW_MASK_STOPWORDS:
+                terms.add(token)
+    for spec in agent_specs or []:
+        raw_values: list[Any] = [
+            getattr(spec, "slot", ""),
+            getattr(spec, "provider", ""),
+            getattr(spec, "model", ""),
+            *(getattr(spec, "model_fallbacks", None) or []),
+        ]
+        role_models = getattr(spec, "model_order_by_role", None) or {}
+        if isinstance(role_models, dict):
+            for values in role_models.values():
+                if isinstance(values, list):
+                    raw_values.extend(values)
+                else:
+                    raw_values.append(values)
+        for value in raw_values:
+            term = str(value or "").strip()
+            if not term:
+                continue
+            terms.add(term)
+            terms.update(_blind_peer_review_identity_fragments(term))
+            for token in re.split(r"[\s_\-/.]+", term):
+                normalized = token.strip().lower()
+                if len(normalized) >= 4 and normalized not in _BLIND_REVIEW_MASK_STOPWORDS:
+                    terms.add(token)
+    return sorted(terms, key=lambda value: (-len(value), value.lower()))
+
+
+def _blind_peer_review_public_text(
+    text: str,
+    *,
+    agent_slots: list[str],
+    mask_terms: list[str] | None = None,
+) -> str:
+    clean = str(text or "")
+    terms = _blind_peer_review_mask_terms(agent_specs=None, agent_slots=agent_slots)
+    terms.extend(mask_terms or [])
+    for term in sorted(set(terms), key=lambda value: (-len(value), value.lower())):
+        pattern = _blind_peer_review_mask_pattern(term)
+        if pattern:
+            clean = re.sub(pattern, "modelo", clean, flags=re.I)
     replacements = {
         r"\bprotagonista\b": "posição",
         r"\blíder\b": "posição",
@@ -3723,25 +3816,44 @@ def _blind_peer_review_public_text(text: str, *, agent_slots: list[str]) -> str:
     return clean
 
 
-def _blind_peer_review_positions(opinions: list[Any], *, agent_slots: list[str]) -> list[dict[str, Any]]:
+def _blind_peer_review_shuffle_seed(
+    *,
+    config: dict[str, Any],
+    generated_at: datetime,
+    round_index: int,
+    room: str,
+) -> str:
+    base = str(config.get("blind_peer_review_shuffle_seed") or config.get("run_id") or generated_at.isoformat())
+    return f"{base}|room={room}|round={round_index}"
+
+
+def _blind_peer_review_positions(
+    opinions: list[Any],
+    *,
+    agent_slots: list[str],
+    mask_terms: list[str] | None = None,
+    round_index: int = 0,
+    shuffle_seed: str = "",
+) -> list[dict[str, Any]]:
     by_agent = {str(getattr(opinion, "agent", "")): opinion for opinion in opinions}
-    positions: list[dict[str, Any]] = []
+    raw_positions: list[dict[str, Any]] = []
     for slot in agent_slots:
         opinion = by_agent.get(slot)
         if opinion is None or not _counts_as_consensus_participant(opinion):
             continue
-        positions.append(
+        raw_positions.append(
             {
-                "position_id": f"position_{len(positions) + 1}",
                 "_agent": slot,
                 "title_pct": round(float(getattr(opinion, "title_pct", 0.0) or 0.0), 1),
                 "summary": _blind_peer_review_public_text(
                     str(getattr(opinion, "summary", "") or ""),
                     agent_slots=agent_slots,
+                    mask_terms=mask_terms,
                 )[:700],
                 "answer": _blind_peer_review_public_text(
                     str(getattr(opinion, "answer", "") or ""),
                     agent_slots=agent_slots,
+                    mask_terms=mask_terms,
                 )[:900],
                 "source_count": len(getattr(opinion, "source_urls", []) or [])
                 + len(getattr(opinion, "source_queries", []) or []),
@@ -3749,6 +3861,17 @@ def _blind_peer_review_positions(opinions: list[Any], *, agent_slots: list[str])
                 "has_scenario_probabilities": bool(getattr(opinion, "scenario_probabilities", {}) or {}),
             }
         )
+    original_order = [position["_agent"] for position in raw_positions]
+    if len(raw_positions) > 1:
+        rng = random.Random(f"{shuffle_seed}|round={round_index}")
+        rng.shuffle(raw_positions)
+        if [position["_agent"] for position in raw_positions] == original_order:
+            raw_positions = [*raw_positions[1:], raw_positions[0]]
+    positions: list[dict[str, Any]] = []
+    for index, position in enumerate(raw_positions, start=1):
+        position = dict(position)
+        position["position_id"] = f"position_{index}"
+        positions.append(position)
     return positions
 
 
@@ -3924,7 +4047,19 @@ async def _run_blind_peer_review_shadow(
     if room != "main_brazil" and not bool(config.get("blind_peer_review_include_side_rooms", False)):
         metadata["errors"] = ["skipped_non_main_room"]
         return metadata
-    positions = _blind_peer_review_positions(consensus_opinions, agent_slots=active_slots)
+    mask_terms = _blind_peer_review_mask_terms(agent_specs=agent_specs, agent_slots=active_slots)
+    positions = _blind_peer_review_positions(
+        consensus_opinions,
+        agent_slots=active_slots,
+        mask_terms=mask_terms,
+        round_index=round_index,
+        shuffle_seed=_blind_peer_review_shuffle_seed(
+            config=config,
+            generated_at=generated_at,
+            round_index=round_index,
+            room=room,
+        ),
+    )
     if len(positions) < 2:
         metadata["errors"] = ["insufficient_positions"]
         return metadata
@@ -4060,6 +4195,18 @@ def _parallel_opponent_briefing_allows_fast_path(config: dict[str, Any]) -> bool
     return int(briefing.get("rounds", 0) or 0) > 0
 
 
+def _llm_council_fast_path_report_coherence_error(config: dict[str, Any], consensus: Any) -> str:
+    try:
+        _validate_report_coherence(
+            stage_probabilities=_stage_probabilities(float(getattr(consensus, "title_pct", 0.0) or 0.0), config),
+            knockout_estimates=[],
+            monte_carlo_result=config.get("_monte_carlo_result"),
+        )
+    except ReportCoherenceError as exc:
+        return str(exc)
+    return ""
+
+
 def _llm_council_fast_path_evaluation(
     *,
     config: dict[str, Any],
@@ -4071,6 +4218,7 @@ def _llm_council_fast_path_evaluation(
     majority_accepts: bool,
     room_quorum: int,
     active_slots: list[str],
+    report_coherence_error: str = "",
 ) -> dict[str, Any]:
     metadata = _llm_council_fast_path_empty_metadata(config)
     metadata["round"] = round_index
@@ -4107,7 +4255,14 @@ def _llm_council_fast_path_evaluation(
         blocked.append("blind_acceptance_missing")
     if not _parallel_opponent_briefing_allows_fast_path(config):
         blocked.append("parallel_opponent_room_unusable")
+    if metadata["enabled"] and not report_coherence_error:
+        report_coherence_error = _llm_council_fast_path_report_coherence_error(config, consensus)
+        if report_coherence_error:
+            blocked.append("report_coherence_failed")
+    elif report_coherence_error:
+        blocked.append("report_coherence_failed")
 
+    metadata["report_coherence_error"] = report_coherence_error
     metadata["blocked_reasons"] = blocked
     metadata["eligible"] = not blocked
     metadata["acted_on_decision"] = bool(metadata["eligible"]) and not bool(metadata["shadow_only"])
@@ -4174,6 +4329,7 @@ async def _run_model_meeting(
     token_cost_ledger: dict[str, Any] | None = None,
     reentry_candidate_specs: list[Any] | None = None,
     reentry_removed_reasons: dict[str, str] | None = None,
+    fast_path_report_coherence_check: Callable[[Any], str] | None = None,
 ) -> tuple[Any, list[Any], list[dict[str, Any]], list[Any]]:
     agent_specs = list(agent_specs)
     planning_opinions = list(planning_opinions)
@@ -4783,6 +4939,9 @@ async def _run_model_meeting(
         coverage_complete = bool(turn.get("coverage", {}).get("complete", False))
         coverage_ok = coverage_complete or not require_full_coverage
         majority_accepts = _enough_peer_acceptances(turn, required_acceptances=minimum_peer_acceptances)
+        report_coherence_error = ""
+        if fast_path_report_coherence_check is not None and bool(config.get("llm_council_fast_path_enabled", False)):
+            report_coherence_error = str(fast_path_report_coherence_check(consensus) or "")
         turn["llm_council_fast_path"] = _llm_council_fast_path_evaluation(
             config=config,
             round_index=round_index,
@@ -4793,6 +4952,7 @@ async def _run_model_meeting(
             majority_accepts=majority_accepts,
             room_quorum=room_quorum,
             active_slots=active_slots,
+            report_coherence_error=report_coherence_error,
         )
         if bool(turn["llm_council_fast_path"].get("acted_on_decision", False)):
             exited_with_consensus = True
@@ -6466,6 +6626,21 @@ async def build_report_bundle(
         "_parallel_opponent_briefing",
         _parallel_opponent_briefing_for_prompt(opponent_debriefing_result, knockout_estimates),
     )
+
+    def _main_room_fast_path_report_coherence_check(candidate_consensus: Any) -> str:
+        try:
+            _validate_report_coherence(
+                stage_probabilities=_stage_probabilities(
+                    float(getattr(candidate_consensus, "title_pct", 0.0) or 0.0),
+                    meeting_config,
+                ),
+                knockout_estimates=knockout_estimates,
+                monte_carlo_result=monte_carlo_result,
+            )
+        except ReportCoherenceError as exc:
+            return str(exc)
+        return ""
+
     consensus, opinions, meeting_transcript, meeting_opinions = await _run_model_meeting(
         config=meeting_config,
         planning_opinions=active_planning_opinions,
@@ -6477,6 +6652,7 @@ async def build_report_bundle(
         token_cost_ledger=token_cost_ledger,
         reentry_candidate_specs=reentry_candidate_specs,
         reentry_removed_reasons=removed_reason_by_agent,
+        fast_path_report_coherence_check=_main_room_fast_path_report_coherence_check,
     )
     meeting_exit_status = str(getattr(consensus, "exit_status", "consensus") or "consensus")
     meeting_exit_warning = str(getattr(consensus, "exit_warning", "") or "")
