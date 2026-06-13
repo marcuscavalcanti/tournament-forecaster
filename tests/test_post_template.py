@@ -101,6 +101,9 @@ def test_template_post_fills_all_placeholders_within_limit() -> None:
     assert "Rodada 6 — Opus 4.8 bateu de frente: Cotações de gol assumem que o jogador joga" in text
     assert "Rodada 4 — GPT 5.5 foi conferir antes: Rodrygo está fora do ano por lesão" in text
     assert "Modelo Principal" not in text.split("DOIS BASTIDORES")[1].split("⚠️")[0]
+    assert "Próximo post: véspera/dia de Brasil x Haiti (19/jun), com o mapa recalculado." in text
+    assert "Próximo post: véspera/dia de Brasil x Marrocos (13/jun)" not in text
+    assert "#Hexa #WorldCup #CopaDoMundo" in text
     assert "Galera do bolão: 59 / 24 / 17." in text
 
 
@@ -132,7 +135,76 @@ def test_template_post_uses_next_unplayed_game_and_ordinal() -> None:
     assert "\n\nSEGUNDO PALPITE DA SÉRIE: Brasil x Haiti\n" in text
     assert "O PRÓXIMO JOGO (sexta-feira, Filadélfia):" in text
     assert "BRASIL x HAITI — 92% vitória | 8% empate" in text
+    assert "Próximo post: véspera/dia de Brasil x Escócia (24/jun), com o mapa recalculado." in text
     assert "derrota" not in text.split("O CAMINHO")[0]
+
+
+def test_round_stats_prioritize_discussion_profile_over_cost() -> None:
+    bundle = _bundle()
+    bundle.model_participation = {
+        "total_messages": 24,
+        "total_rounds": 6,
+        "protagonist_counts": {"Opus 4.8": 3, "GPT 5.5": 1, "DeepSeek V4 Pro": 1, "Perplexity Pro": 1},
+    }
+    bundle.model_influence_pct = {
+        "Opus 4.8": 29.9,
+        "GPT 5.5": 34.8,
+        "DeepSeek V4 Pro": 34.8,
+        "Perplexity Pro": 0.5,
+    }
+    bundle.model_token_costs = {"total": {"cost_usd": 5.348506, "calls": 40, "total_tokens": 565761}}
+
+    text = render_template_post(bundle, post_index=1, run_date=date(2026, 6, 11))
+
+    stats = text.split("📊 NÚMEROS DA RODADA:\n", 1)[1].split("\n\n⚠️", 1)[0]
+    first_bullet = stats.splitlines()[0]
+    assert "24 mensagens" in first_bullet
+    assert "6 rodadas" in first_bullet
+    assert "GPT e DeepSeek" in first_bullet
+    assert "Perplexity quase não moveu" in first_bullet
+    assert "US$" not in first_bullet
+
+
+def test_backstage_prefers_source_correction_and_protagonist_behavior() -> None:
+    bundle = _bundle()
+    bundle.model_participation = {
+        "total_messages": 24,
+        "total_rounds": 6,
+        "protagonist_counts": {"Opus 4.8": 3, "GPT 5.5": 1, "DeepSeek V4 Pro": 1, "Perplexity Pro": 1},
+        "last_consensus_protagonist": "Opus 4.8",
+    }
+    bundle.meeting_transcript = [
+        {
+            "round": 3,
+            "responses": [
+                {
+                    "agent": "Opus 4.8",
+                    "answer": (
+                        "Discordo do protagonista por erro de fonte e por seleção de âncora. "
+                        "Verificação fresca: FanDuel lista Brasil +900, não 4,3%; "
+                        "Polymarket 72% é Grupo C, não título — não sustenta 4% de título."
+                    ),
+                    "disagreed": True,
+                    "removed_from_main": False,
+                    "used_fallback": False,
+                },
+                {
+                    "agent": "DeepSeek V4 Pro",
+                    "answer": "A chance de título em 5,4% é uma convergência auditável entre o simulação configurado.",
+                    "disagreed": True,
+                    "removed_from_main": False,
+                    "used_fallback": False,
+                },
+            ],
+        }
+    ]
+
+    text = render_template_post(bundle, post_index=1, run_date=date(2026, 6, 11))
+
+    backstage = text.split("DOIS BASTIDORES DA REUNIÃO DE HOJE:\n\n", 1)[1].split("📊", 1)[0]
+    assert "Polymarket 72% era Grupo C, não título" in backstage
+    assert "Opus 4.8 virou protagonista 3 vezes" in backstage
+    assert "convergência auditável" not in backstage
 
 
 def test_validate_rejects_unresolved_placeholder_and_oversize() -> None:

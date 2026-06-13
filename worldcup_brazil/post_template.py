@@ -59,7 +59,7 @@ Próximo post: véspera/dia de Brasil x {next_post_game}, com o mapa recalculado
 
 Galera do bolão: {palpite_bolao}. Usem com moderação.
 
-#CopaComAchismo #Brasil #Brazil #WorldCup2026 #Futebol #Football #Soccer #Hexa
+#CopaComAchismo #Brasil #Brazil #WorldCup2026 #Futebol #Football #Soccer #Hexa #WorldCup #CopaDoMundo
 """
 
 PHASE_BLOCK = """➡️ {header} ({phase_date}){phase_venue}
@@ -93,6 +93,10 @@ def _short_date(raw: Any) -> str:
         parsed = date.fromisoformat(text)
         return f"{parsed.day}/{MONTHS_PT[parsed.month - 1]}"
     return text or "data a definir"
+
+
+def _post_game_label(match: Any) -> str:
+    return f"{getattr(match, 'opponent', '')} ({_short_date(getattr(match, 'match_date', ''))})"
 
 
 def _parse_group_date(raw: Any, *, year: int) -> date | None:
@@ -151,6 +155,12 @@ JARGON_GLOSSARY = [
     ("monte carlo", "simulação"),
     ("weak_prior", "modo cauteloso"),
     ("prior", "ponto de partida"),
+    ("de-vigado", "sem margem das casas"),
+    ("de-vig", "sem margem das casas"),
+    ("overround", "margem total das casas"),
+    ("prediction market", "mercado de previsão"),
+    ("prior_rating_sigma", "incerteza da nota"),
+    ("ci", "intervalo"),
 ]
 
 # Comparados em forma normalizada (sem acento, minúsculas) — ver _normalize_beat.
@@ -158,6 +168,15 @@ EVENT_HINTS = (
     "lesao", "lesion", "fora da copa", "fora do ano", "corte", "cortado", "suspens",
     "stale", "fantasma", "errado", "errada", "apto", "duvida", "desfalque",
     "mercado", "odds", "cotac", "titular",
+)
+
+BEHAVIOR_HINTS = (
+    "erro de fonte", "fonte nova", "verificacao fresca", "nao sustenta", "grupo c",
+    "nao titulo", "disputo a lideranca", "assumo o protagonismo", "rejeito",
+)
+
+ABSTRACT_HINTS = (
+    "convergencia auditavel", "simulacao configurad", "premissa", "central de consenso",
 )
 
 
@@ -171,10 +190,14 @@ def _plain_language(sentence: str) -> str:
 def _sentence_score(sentence: str) -> int:
     lowered = _normalize_beat(sentence)
     score = 0
+    if any(hint in lowered for hint in BEHAVIOR_HINTS):
+        score += 4
     if any(hint in lowered for hint in EVENT_HINTS):
         score += 2
     if re.search(r"\d", sentence):
         score += 1
+    if any(hint in lowered for hint in ABSTRACT_HINTS) and not any(hint in lowered for hint in BEHAVIOR_HINTS):
+        score -= 2
     if lowered.startswith(("concordo", "discordo", "sim,")):
         score -= 1
     return score
@@ -197,19 +220,79 @@ def _best_sentence(answer: str) -> tuple[int, str]:
     return best_score, best
 
 
+def _valid_room_response(response: Any) -> bool:
+    return not (response.get("removed_from_main") or response.get("used_fallback"))
+
+
+def _source_correction_beat(bundle: Any) -> str | None:
+    for turn in getattr(bundle, "meeting_transcript", []) or []:
+        if not isinstance(turn, dict):
+            continue
+        round_index = turn.get("round")
+        for response in turn.get("responses", []) or []:
+            if not _valid_room_response(response):
+                continue
+            answer = str(response.get("answer") or "")
+            normalized = _normalize_beat(answer)
+            if "polymarket" in normalized and "grupo c" in normalized and "titulo" in normalized:
+                return (
+                    f"Rodada {round_index} — {response.get('agent')} travou o consenso: "
+                    "Polymarket 72% era Grupo C, não título; a sala rejeitou usar essa leitura para derrubar o Hexa."
+                )
+            if "erro de fonte" in normalized and ("nao sustenta" in normalized or "seleção de âncora" in answer.lower()):
+                score, sentence = _best_sentence(answer)
+                if score >= 3 and sentence:
+                    fact = _truncate_words(_plain_language(sentence), 125)
+                    if not fact.endswith((".", "!", "?", "…")):
+                        fact += "."
+                    return f"Rodada {round_index} — {response.get('agent')} travou o consenso: {fact}"
+    return None
+
+
+def _protagonist_behavior_beat(bundle: Any) -> str | None:
+    participation = getattr(bundle, "model_participation", {}) or {}
+    protagonist_counts = participation.get("protagonist_counts") or {}
+    if not protagonist_counts:
+        return None
+    agent, count = max(protagonist_counts.items(), key=lambda kv: kv[1])
+    try:
+        count_int = int(count)
+    except (TypeError, ValueError):
+        return None
+    if count_int < 2:
+        return None
+    unit = "vez" if count_int == 1 else "vezes"
+    final_agent = participation.get("last_consensus_protagonist")
+    if final_agent == agent:
+        return (
+            f"{agent} virou protagonista {count_int} {unit}; "
+            "a pergunta final combinou simulação, apostas e mercado."
+        )
+    return (
+        f"{agent} virou protagonista {count_int} {unit}: a sala trocou liderança por mérito, "
+        "não por ordem fixa."
+    )
+
+
+def _curated_behavior_beats(bundle: Any) -> list[str]:
+    beats = [_source_correction_beat(bundle), _protagonist_behavior_beat(bundle)]
+    return [beat for beat in beats if beat]
+
+
 def _extract_beats(bundle: Any) -> list[str]:
     """Bastidores com a substância minerada das falas válidas da sala.
 
     Cada bastidor carrega o fato concreto (jogador, evento, número) da sentença
     mais rica da fala, com jargão traduzido. Regra do Marcus (11/jun): bastidor
     sem substância não vale a tinta — sem 2 lances fortes, a seção sai do post."""
+    curated = _curated_behavior_beats(bundle)
     scored: list[tuple[int, str, str]] = []
     for turn in getattr(bundle, "meeting_transcript", []) or []:
         if not isinstance(turn, dict):
             continue
         round_index = turn.get("round")
         for response in turn.get("responses", []) or []:
-            if response.get("removed_from_main") or response.get("used_fallback"):
+            if not _valid_room_response(response):
                 continue
             if not response.get("disagreed"):
                 continue
@@ -236,12 +319,27 @@ def _extract_beats(bundle: Any) -> list[str]:
             )
     scored.sort(key=lambda item: -item[0])
     if not scored:
-        return []
+        return curated[:2]
+    fallback: list[str] = []
     top_score, top_agent, top_beat = scored[0]
     second = next((beat for _, agent, beat in scored[1:] if agent != top_agent), None)
     if second is None and len(scored) > 1:
         second = scored[1][2]
-    return [top_beat, second] if second else [top_beat]
+    fallback = [top_beat, second] if second else [top_beat]
+
+    beats: list[str] = []
+    seen: set[str] = set()
+    for beat in curated + fallback:
+        if not beat:
+            continue
+        key = _normalize_beat(beat)
+        if key in seen:
+            continue
+        seen.add(key)
+        beats.append(beat)
+        if len(beats) >= 2:
+            break
+    return beats
 
 
 def _backstage_section(beats: list[str]) -> str:
@@ -262,6 +360,27 @@ def _build_round_stats(bundle: Any, *, slots: int = 3) -> str:
     candidates: list[tuple[float, str, str]] = []
     metadata = getattr(bundle, "metadata", {}) or {}
 
+    influence = getattr(bundle, "model_influence_pct", {}) or {}
+    valid_influence = {k: float(v) for k, v in influence.items() if v is not None}
+    participation = getattr(bundle, "model_participation", {}) or {}
+    messages = participation.get("total_messages")
+    rounds = participation.get("total_rounds")
+    if messages and rounds and len(valid_influence) >= 3:
+        top_agent, top_value = max(valid_influence.items(), key=lambda kv: kv[1])
+        low_agent, low_value = min(valid_influence.items(), key=lambda kv: kv[1])
+        tied = [k for k, v in valid_influence.items() if k != top_agent and abs(v - top_value) < 0.05]
+        if tied:
+            influence_text = (
+                f"{top_agent.split()[0]} e {tied[0].split()[0]} lideraram ({_pct(top_value)}); "
+                f"{low_agent.split()[0]} quase não moveu ({_pct(low_value)})"
+            )
+        else:
+            influence_text = (
+                f"{top_agent.split()[0]} liderou ({_pct(top_value)}); "
+                f"{low_agent.split()[0]} quase não moveu ({_pct(low_value)})"
+            )
+        candidates.append((110, "perfil_sala", f"💬 {messages} mensagens em {rounds} rodadas; {influence_text}"))
+
     costs = (getattr(bundle, "model_token_costs", {}) or {}).get("total") or {}
     cost_usd = costs.get("cost_usd")
     calls = costs.get("calls")
@@ -269,18 +388,16 @@ def _build_round_stats(bundle: Any, *, slots: int = 3) -> str:
     if cost_usd and calls and tokens_k:
         usd = f"{float(cost_usd):.2f}".replace(".", ",")
         candidates.append(
-            (95, "custo", f"💰 US$ {usd} a reunião — {calls} chamadas, {tokens_k} mil tokens")
+            (55, "custo", f"💰 US$ {usd} a reunião — {calls} chamadas, {tokens_k} mil tokens")
         )
     elif cost_usd:
         usd = f"{float(cost_usd):.2f}".replace(".", ",")
-        candidates.append((90, "custo", f"💰 reunião inteira: US$ {usd} de IA"))
+        candidates.append((50, "custo", f"💰 reunião inteira: US$ {usd} de IA"))
     if tokens_k >= 350:
         candidates.append(
-            (85, "custo", f"📚 {tokens_k} mil tokens lidos e escritos — um 'Senhor dos Anéis' por reunião")
+            (45, "custo", f"📚 {tokens_k} mil tokens lidos e escritos — um 'Senhor dos Anéis' por reunião")
         )
 
-    influence = getattr(bundle, "model_influence_pct", {}) or {}
-    valid_influence = {k: float(v) for k, v in influence.items() if v is not None}
     if len(valid_influence) >= 3:
         top_agent, top_value = max(valid_influence.items(), key=lambda kv: kv[1])
         low_agent, low_value = min(valid_influence.items(), key=lambda kv: kv[1])
@@ -298,9 +415,6 @@ def _build_round_stats(bundle: Any, *, slots: int = 3) -> str:
             )
         candidates.append((gap_weight, "influencia", line))
 
-    participation = getattr(bundle, "model_participation", {}) or {}
-    messages = participation.get("total_messages")
-    rounds = participation.get("total_rounds")
     sources = getattr(bundle, "sources", None) or []
     if messages and rounds and sources:
         candidates.append(
@@ -398,6 +512,7 @@ def render_template_post(bundle: Any, *, post_index: int, run_date: date | None 
     next_game_line = f"BRASIL x {str(getattr(featured, 'opponent', '')).upper()} — " + " | ".join(parts)
 
     remaining = [m for m, d in dated if m is not featured and d is not None and d > (featured_date or run_date)]
+    next_post_match = remaining[0] if remaining else featured
     group_summary = str(getattr(bundle, "group_summary", "") or "")
     first_place = re.search(r"1º:\s*~?(\d+)%", group_summary)
     first_place_pct = f"{first_place.group(1)}%" if first_place else "—"
@@ -470,7 +585,7 @@ def render_template_post(bundle: Any, *, post_index: int, run_date: date | None 
         final_pct=_pct_int(stage.get("final")),
         title_pct=title_pct_text,
         backstage_section=backstage,
-        next_post_game=f"{getattr(featured, 'opponent', '')} ({_short_date(getattr(featured, 'match_date', ''))})",
+        next_post_game=_post_game_label(next_post_match),
         palpite_bolao=palpite,
     )
 
