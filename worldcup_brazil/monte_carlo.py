@@ -9,7 +9,7 @@ from itertools import combinations
 from statistics import NormalDist
 from typing import Any
 
-from worldcup_brazil.bracket import PHASE_LABELS, PHASE_SEQUENCE
+from worldcup_brazil.bracket import PHASE_LABELS, PHASE_SEQUENCE, brazil_bracket_path
 
 
 DEFAULT_ITERATIONS = 40000
@@ -452,15 +452,26 @@ def _apply_match_result_to_rows(rows: dict[str, dict[str, Any]], team_a: str, te
         rows[row_b]["points"] += 1
 
 
-def _completed_current_table(config: dict[str, Any], completed_matches: list[dict[str, Any]], *, ratings: dict[str, float]) -> list[dict[str, Any]]:
-    brazil_group = str(config.get("brazil_group") or "").strip().upper()
-    if not brazil_group:
-        brazil = _normalize(config.get("brazil_team_name", "Brasil"))
-        for group, teams in _groups(config).items():
-            if any(_normalize(_team_name(team)) == brazil for team in teams):
-                brazil_group = str(group).strip().upper()
-                break
-    teams = _groups(config).get(brazil_group, [])
+def _brazil_group(config: dict[str, Any]) -> str:
+    configured = str(config.get("brazil_group") or "").strip().upper()
+    if configured:
+        return configured
+    brazil = _normalize(config.get("brazil_team_name", "Brasil"))
+    for group, teams in _groups(config).items():
+        if any(_normalize(_team_name(team)) == brazil for team in teams):
+            return str(group).strip().upper()
+    return ""
+
+
+def _completed_current_table(
+    config: dict[str, Any],
+    completed_matches: list[dict[str, Any]],
+    *,
+    ratings: dict[str, float],
+    group: str | None = None,
+) -> list[dict[str, Any]]:
+    target_group = str(group or _brazil_group(config)).strip().upper()
+    teams = _groups(config).get(target_group, [])
     rows = {
         _team_name(team): {
             "team": _team_name(team),
@@ -475,7 +486,7 @@ def _completed_current_table(config: dict[str, Any], completed_matches: list[dic
         if _team_name(team)
     }
     for match in completed_matches:
-        if str(match.get("group") or "").strip().upper() != brazil_group:
+        if str(match.get("group") or "").strip().upper() != target_group:
             continue
         _apply_match_result_to_rows(
             rows,
@@ -510,6 +521,89 @@ def _completed_current_table(config: dict[str, Any], completed_matches: list[dic
         reverse=True,
     )
     return rendered
+
+
+def _completed_results_for_group(completed_matches: list[dict[str, Any]], group: str) -> list[dict[str, Any]]:
+    target_group = str(group or "").strip().upper()
+    return [
+        {
+            "group": match.get("group"),
+            "date": match.get("date"),
+            "score": match.get("score"),
+            "source": match.get("source"),
+        }
+        for match in completed_matches
+        if str(match.get("group") or "").strip().upper() == target_group
+    ]
+
+
+def _completed_results_for_all_groups(completed_matches: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "group": match.get("group"),
+            "date": match.get("date"),
+            "score": match.get("score"),
+            "source": match.get("source"),
+        }
+        for match in completed_matches
+    ]
+
+
+def _phase_relevant_groups(config: dict[str, Any]) -> dict[str, list[str]]:
+    by_phase: dict[str, list[str]] = {}
+    for entry in brazil_bracket_path(config):
+        phase = str(entry.get("phase") or "").strip()
+        groups = [
+            str(group).strip().upper()
+            for group in entry.get("allowed_opponent_groups", []) or []
+            if str(group).strip()
+        ]
+        if phase and groups:
+            by_phase[phase] = list(dict.fromkeys(groups))
+    return by_phase
+
+
+def _relevant_groups_for_brazil_path(config: dict[str, Any]) -> list[str]:
+    ordered: list[str] = []
+
+    def add(group: str) -> None:
+        normalized = str(group or "").strip().upper()
+        if normalized and normalized not in ordered:
+            ordered.append(normalized)
+
+    add(_brazil_group(config))
+    for groups in _phase_relevant_groups(config).values():
+        for group in groups:
+            add(group)
+    return ordered
+
+
+def _relevant_group_states_summary(
+    config: dict[str, Any],
+    *,
+    ratings: dict[str, float],
+    completed_matches: list[dict[str, Any]],
+) -> dict[str, Any]:
+    phase_groups = _phase_relevant_groups(config)
+    states: dict[str, Any] = {}
+    for group in _relevant_groups_for_brazil_path(config):
+        phases = [
+            phase
+            for phase, groups in phase_groups.items()
+            if group in groups
+        ]
+        states[group] = {
+            "group": group,
+            "phases": phases,
+            "current_table": _completed_current_table(
+                config,
+                completed_matches,
+                ratings=ratings,
+                group=group,
+            ),
+            "completed_results": _completed_results_for_group(completed_matches, group),
+        }
+    return states
 
 
 @functools.lru_cache(maxsize=32768)
@@ -953,19 +1047,11 @@ def _group_state_summary(
         str(position): _round_pct(count, iterations)
         for position, count in sorted(position_counts.items(), key=lambda item: int(item[0]))
     }
-    brazil_group = str(config.get("brazil_group") or _team_group_map(config).get(_normalize(config.get("brazil_team_name", "Brasil")), "")).strip().upper()
+    brazil_group = _brazil_group(config)
     return {
         "brazil_group": brazil_group,
         "current_table": _completed_current_table(config, completed_matches, ratings=ratings),
-        "completed_results": [
-            {
-                "group": match.get("group"),
-                "date": match.get("date"),
-                "score": match.get("score"),
-                "source": match.get("source"),
-            }
-            for match in completed_matches
-        ],
+        "completed_results": _completed_results_for_group(completed_matches, brazil_group),
         "brazil_position_counts": position_counts,
         "brazil_position_pct": position_pct,
         "brazil_first_pct": position_pct.get("1", 0.0),
@@ -1284,6 +1370,12 @@ def run_brazil_monte_carlo(config: dict[str, Any]) -> dict[str, Any]:
         diagnostics=simulation_diagnostics,
         iterations=iterations,
     )
+    phase_relevant_groups = _phase_relevant_groups(config)
+    relevant_group_states = _relevant_group_states_summary(
+        config,
+        ratings=ratings,
+        completed_matches=completed_group_matches,
+    )
     return {
         "enabled": True,
         "iterations": iterations,
@@ -1304,8 +1396,10 @@ def run_brazil_monte_carlo(config: dict[str, Any]) -> dict[str, Any]:
         "simulation_diagnostics": simulation_diagnostics,
         "completed_group_matches": {
             "count": len(completed_group_matches),
-            "matches": list(group_state.get("completed_results", [])),
+            "matches": _completed_results_for_all_groups(completed_group_matches),
         },
+        "phase_relevant_groups": phase_relevant_groups,
+        "relevant_group_states": relevant_group_states,
         "group_state": group_state,
         "title_count": title_count,
         "phases": phases,
@@ -1347,6 +1441,8 @@ def monte_carlo_compact_summary(result: dict[str, Any], *, top_n: int = 3) -> di
         "rating_uncertainty": result.get("rating_uncertainty", {"enabled": False}),
         "simulation_diagnostics": result.get("simulation_diagnostics", {}),
         "completed_group_matches": result.get("completed_group_matches", {"count": 0, "matches": []}),
+        "phase_relevant_groups": result.get("phase_relevant_groups", {}),
+        "relevant_group_states": result.get("relevant_group_states", {}),
         "group_state": result.get("group_state", {}),
         "path_gate": result.get("path_gate", {}),
         "phases": phases,

@@ -1553,6 +1553,36 @@ def test_opponent_debriefing_room_has_own_round_contract_fitting_budget() -> Non
     assert "não cabe no orçamento" in warning
 
 
+def test_opponent_debriefing_room_keeps_live_crossing_group_results_in_scope() -> None:
+    from pathlib import Path
+
+    from worldcup_brazil.monte_carlo import run_brazil_monte_carlo
+    from worldcup_brazil.pipeline import _opponent_debriefing_config, load_config
+
+    config = load_config(Path("config/worldcup_brazil.example.json"))
+    config["monte_carlo"]["iterations"] = 3000
+    config["completed_group_matches"] = [
+        {
+            "group": "F",
+            "team_a": "Holanda",
+            "team_b": "Japão",
+            "score_a": 2,
+            "score_b": 2,
+            "date": "2026-06-14",
+        },
+    ]
+    config["_monte_carlo_result"] = run_brazil_monte_carlo(config)
+
+    sub_config = _opponent_debriefing_config(config)
+
+    assert sub_config["completed_group_matches"][0]["group"] == "F"
+    assert sub_config["_path_relevant_group_states"]["F"]["completed_results"][0]["score"] == "Holanda 2-2 Japão"
+    direction = sub_config["macro_direction"].lower()
+    assert "placares realizados" in direction
+    assert "tabelas vivas" in direction
+    assert "grupos de cruzamento" in direction
+
+
 def test_meeting_at_ceiling_publishes_last_valid_consensus_when_final_round_is_sterile(monkeypatch, tmp_path) -> None:
     """Regressão do run 10/jun/2026: um burst de rate-limit tornava a ÚLTIMA rodada estéril
     (DegenerateConsensusError) ao bater o teto de rodadas, mesmo após rodadas anteriores terem

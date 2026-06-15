@@ -275,7 +275,8 @@
       "team_b": "Marrocos",
       "score_a": 1,
       "score_b": 1,
-      "date": "2026-06-13"
+      "date": "2026-06-13",
+      "source_url": "https://www.theguardian.com/football/2026/jun/14/ayyoub-bouaddi-morocco-brazil-world-cup-football-vinicius-junior"
     },
     {
       "group": "C",
@@ -283,7 +284,44 @@
       "team_b": "Haiti",
       "score_a": 1,
       "score_b": 0,
-      "date": "2026-06-13"
+      "date": "2026-06-13",
+      "source_url": "https://www.axios.com/local/boston/2026/06/14/scotland-world-cup-boston-stadium"
+    },
+    {
+      "group": "E",
+      "team_a": "Costa do Marfim",
+      "team_b": "Equador",
+      "score_a": 1,
+      "score_b": 0,
+      "date": "2026-06-14",
+      "source_url": "https://www.theguardian.com/football/live/2026/jun/14/cote-d-ivoire-v-ecuador-world-cup-2026-live"
+    },
+    {
+      "group": "E",
+      "team_a": "Alemanha",
+      "team_b": "Curaçau",
+      "score_a": 7,
+      "score_b": 1,
+      "date": "2026-06-14",
+      "source_url": "https://www.theguardian.com/football/2026/jun/14/germany-curacao-world-cup-match-report"
+    },
+    {
+      "group": "F",
+      "team_a": "Holanda",
+      "team_b": "Japão",
+      "score_a": 2,
+      "score_b": 2,
+      "date": "2026-06-14",
+      "source_url": "https://www.theguardian.com/football/2026/jun/14/netherlands-japan-world-cup-match-report"
+    },
+    {
+      "group": "F",
+      "team_a": "Suécia",
+      "team_b": "Tunísia",
+      "score_a": 5,
+      "score_b": 1,
+      "date": "2026-06-15",
+      "source_url": "https://www.theguardian.com/football/live/2026/jun/15/fifa-world-cup-2026-live-sweden-v-tunisia-updates-swe-vs-tun-group-f-match-score-latest"
     }
   ],
   "knockout_matches": [

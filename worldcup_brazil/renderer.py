@@ -244,6 +244,41 @@ def _render_model_predictions_no_opta(bundle: ReportBundle) -> list[str]:
     return lines
 
 
+def _render_path_live_group_state_lines(monte_carlo: dict[str, object]) -> list[str]:
+    states = monte_carlo.get("relevant_group_states") if isinstance(monte_carlo, dict) else {}
+    if not isinstance(states, dict):
+        return []
+    chunks: list[str] = []
+    for group, state in sorted(states.items()):
+        if not isinstance(state, dict):
+            continue
+        completed = [
+            str(item.get("score") or "").strip()
+            for item in state.get("completed_results", []) or []
+            if isinstance(item, dict) and str(item.get("score") or "").strip()
+        ]
+        if not completed:
+            continue
+        phases = [
+            str(phase).strip()
+            for phase in state.get("phases", []) or []
+            if str(phase).strip()
+        ]
+        table = state.get("current_table") if isinstance(state.get("current_table"), list) else []
+        leader = ""
+        if table and isinstance(table[0], dict):
+            leader = str(table[0].get("team") or "").strip()
+        phase_text = ", ".join(phases[:2]) if phases else "caminho"
+        leader_text = f"; líder {leader}" if leader else ""
+        chunks.append(
+            f"Grupo {group} ({phase_text}{leader_text}): "
+            f"{'; '.join(completed[:3])}"
+        )
+    if not chunks:
+        return []
+    return ["- Placares do caminho já incorporados: " + " | ".join(chunks[:5]) + "."]
+
+
 def _render_monte_carlo_summary(bundle: ReportBundle) -> list[str]:
     monte_carlo = bundle.metadata.get("monte_carlo", {})
     if not isinstance(monte_carlo, dict) or not monte_carlo.get("enabled"):
@@ -285,6 +320,7 @@ def _render_monte_carlo_summary(bundle: ReportBundle) -> list[str]:
             f"{mode}; mínimo {_fmt_int(path_gate.get('min_iterations', 0))} simulações e "
             f"{_fmt_pct(float(path_gate.get('min_rating_coverage_pct', 0.0)))} de cobertura."
         )
+    lines.extend(_render_path_live_group_state_lines(monte_carlo))
     team_context = monte_carlo.get("team_context") if isinstance(monte_carlo, dict) else {}
     if isinstance(team_context, dict) and int(team_context.get("applied_signal_count") or 0) > 0:
         families = ", ".join(str(item) for item in team_context.get("source_families", [])[:5])

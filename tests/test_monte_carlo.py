@@ -39,6 +39,7 @@ def _mc_config(iterations: int = 6000) -> dict:
         {"opponent": "Haiti", "brazil_pct": 98.0, "draw_pct": 1.0},
         {"opponent": "Escócia", "brazil_pct": 96.0, "draw_pct": 2.0},
     ]
+    config["completed_group_matches"] = []
     return config
 
 
@@ -76,6 +77,52 @@ def test_monte_carlo_conditions_group_on_completed_results() -> None:
     assert sum(group_state["brazil_position_counts"].values()) == conditioned["iterations"]
     assert group_state["brazil_first_pct"] == group_state["brazil_position_pct"]["1"]
     assert group_state["completed_results"][0]["score"] == "Brasil 1-1 Marrocos"
+
+
+def test_monte_carlo_exposes_completed_results_for_brazil_crossing_groups() -> None:
+    config = _mc_config(iterations=3000)
+    config["completed_group_matches"] = [
+        {
+            "group": "C",
+            "team_a": "Brasil",
+            "team_b": "Marrocos",
+            "score_a": 1,
+            "score_b": 1,
+            "date": "2026-06-13",
+        },
+        {
+            "group": "F",
+            "team_a": "Holanda",
+            "team_b": "Japão",
+            "score_a": 2,
+            "score_b": 2,
+            "date": "2026-06-14",
+        },
+        {
+            "group": "F",
+            "team_a": "Suécia",
+            "team_b": "Tunísia",
+            "score_a": 5,
+            "score_b": 1,
+            "date": "2026-06-15",
+        },
+    ]
+
+    conditioned = run_brazil_monte_carlo(config)
+
+    assert conditioned["completed_group_matches"]["count"] == 3
+    assert any(match["score"] == "Holanda 2-2 Japão" for match in conditioned["completed_group_matches"]["matches"])
+    assert conditioned["phase_relevant_groups"]["16 avos"] == ["F"]
+    group_f = conditioned["relevant_group_states"]["F"]
+    assert "16 avos" in group_f["phases"]
+    assert group_f["completed_results"][0]["score"] == "Holanda 2-2 Japão"
+    assert group_f["current_table"][0]["team"] == "Suécia"
+    assert group_f["current_table"][0]["points"] == 3
+    assert group_f["current_table"][0]["goal_difference"] == 4
+
+    compact = monte_carlo_compact_summary(conditioned)
+    assert compact["relevant_group_states"]["F"]["current_table"][0]["team"] == "Suécia"
+    assert compact["completed_group_matches"]["count"] == 3
 
 
 def test_completed_group_result_overrides_extreme_pre_match_probability() -> None:
@@ -515,5 +562,5 @@ def test_monte_carlo_output_is_bit_identical_after_hot_loop_memoization() -> Non
         )
     )
 
-    assert _hash(result_off) == "c4376f4536eab88049fcf4eff5864117d511380fb4850721b522e11ff986ac7c"
-    assert _hash(result_on) == "8ca8cbad6ad27470ef54b0ab9b6c77b050f0cf45dc4217ccfb63db32fb997aba"
+    assert _hash(result_off) == "d8af00efcc686ffe488820ea8b3b82b28fa9d22dacada1f87dff086e274a04f9"
+    assert _hash(result_on) == "ee08f86964498888362112ef0b1b7e031bf1c258e7d6e4e3f2681f423f6f8c1b"

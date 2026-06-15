@@ -344,6 +344,19 @@ def test_render_linkedin_post_includes_monte_carlo_path_summary() -> None:
                         "specialist_press_recent_friendlies",
                     ],
                 },
+                "relevant_group_states": {
+                    "F": {
+                        "phases": ["16 avos"],
+                        "current_table": [
+                            {"team": "Suécia", "points": 3, "goal_difference": 4},
+                            {"team": "Holanda", "points": 1, "goal_difference": 0},
+                        ],
+                        "completed_results": [
+                            {"score": "Holanda 2-2 Japão"},
+                            {"score": "Suécia 5-1 Tunísia"},
+                        ],
+                    }
+                },
                 "stage_probabilities": {
                     "quartas": 71.2,
                     "semifinal": 42.8,
@@ -372,6 +385,7 @@ def test_render_linkedin_post_includes_monte_carlo_path_summary() -> None:
     assert "variância total desconta ruído interno" in post
     assert "- Banda epistêmica MC: título 2.0%-22.0%." in post
     assert "- Gate do caminho: prior fraco de caminho; mínimo 10.000 simulações e 65.0% de cobertura." in post
+    assert "Placares do caminho já incorporados: Grupo F (16 avos; líder Suécia): Holanda 2-2 Japão; Suécia 5-1 Tunísia." in post
     assert "Contexto por seleção: 4 sinais em 3 seleções" in post
     assert "bets_prediction_markets" in post
     assert "injuries_cuts_news" in post

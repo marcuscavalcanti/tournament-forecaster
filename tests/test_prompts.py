@@ -4,6 +4,7 @@ from pathlib import Path
 from worldcup_brazil.pipeline import (
     _agent_debate_prompt,
     _agent_prompt,
+    _configured_matches_for_prompt,
     _has_fixed_quanti_quali_allocation,
     _invalid_protagonist_question_reason,
     load_config,
@@ -14,6 +15,7 @@ from worldcup_brazil.pipeline import (
     _source_planning_prompt,
 )
 from worldcup_brazil.consensus import AgentOpinion
+from worldcup_brazil.monte_carlo import run_brazil_monte_carlo
 
 
 def test_agent_prompt_tells_models_to_choose_sources_and_write_for_linkedin() -> None:
@@ -454,6 +456,28 @@ def test_protagonist_question_accepts_completed_match_context_from_ledger() -> N
     )
 
     assert reason is None
+
+
+def test_main_room_scope_includes_live_tables_for_brazil_crossing_groups() -> None:
+    config = load_config(Path("config/worldcup_brazil.example.json"))
+    config["monte_carlo"]["iterations"] = 3000
+    config["completed_group_matches"] = [
+        {
+            "group": "F",
+            "team_a": "Holanda",
+            "team_b": "Japão",
+            "score_a": 2,
+            "score_b": 2,
+            "date": "2026-06-14",
+        },
+    ]
+    config["_monte_carlo_result"] = run_brazil_monte_carlo(config)
+
+    scope = _configured_matches_for_prompt(config)
+
+    assert scope["path_phase_relevant_groups"]["16 avos"] == ["F"]
+    assert scope["path_relevant_group_states"]["F"]["completed_results"][0]["score"] == "Holanda 2-2 Japão"
+    assert scope["monte_carlo"]["relevant_group_states"]["F"]["completed_results"][0]["score"] == "Holanda 2-2 Japão"
 
 
 def test_sanitize_protagonist_question_removes_reserved_benchmark_from_main_room() -> None:

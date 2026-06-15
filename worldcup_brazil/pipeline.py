@@ -2474,11 +2474,16 @@ def _normalize_text(value: str) -> str:
 
 
 def _configured_matches_for_prompt(config: dict[str, Any]) -> dict[str, Any]:
+    monte_carlo_summary = monte_carlo_compact_summary(config.get("_monte_carlo_result", {"enabled": False}))
     return {
         "group_matches": _default_group_matches(config),
         "completed_group_matches": list(config.get("completed_group_matches", []) or []),
         "knockout_matches": _default_knockout_matches(config),
-        "monte_carlo": monte_carlo_compact_summary(config.get("_monte_carlo_result", {"enabled": False})),
+        "monte_carlo": monte_carlo_summary,
+        "path_phase_relevant_groups": config.get("_path_phase_relevant_groups")
+        or monte_carlo_summary.get("phase_relevant_groups", {}),
+        "path_relevant_group_states": config.get("_path_relevant_group_states")
+        or monte_carlo_summary.get("relevant_group_states", {}),
         "parallel_opponent_briefing": config.get("_parallel_opponent_briefing", {}),
         "recent_event_impacts": _recent_event_impacts(config),
         "event_impact_criteria": _event_impact_criteria_for_prompt(),
@@ -2583,12 +2588,15 @@ def _compact_source_planning_scope(config: dict[str, Any]) -> dict[str, Any]:
         for entry in brazil_bracket_path(config)
     ]
 
+    monte_carlo_summary = monte_carlo_compact_summary(config.get("_monte_carlo_result", {"enabled": False}))
     return {
         "group_matches": [_compact_group_match_label(match) for match in _default_group_matches(config)],
         "completed_group_matches": list(config.get("completed_group_matches", []) or []),
         "knockout_matches": [_compact_knockout_match_label(match) for match in _default_knockout_matches(config)],
         "bracket_path": bracket_path,
-        "monte_carlo": monte_carlo_compact_summary(config.get("_monte_carlo_result", {"enabled": False})),
+        "monte_carlo": monte_carlo_summary,
+        "path_phase_relevant_groups": monte_carlo_summary.get("phase_relevant_groups", {}),
+        "path_relevant_group_states": monte_carlo_summary.get("relevant_group_states", {}),
         "recent_event_impacts": [_compact_dict(event, event_keys) for event in _recent_event_impacts(config)],
         "event_impact_criteria": {
             "rule": "mesmos critérios da fase de grupos até a Final; não invente evento, fonte ou efeito",
@@ -5728,6 +5736,7 @@ def _opponent_debriefing_config(config: dict[str, Any]) -> dict[str, Any]:
         )
     if not knockout_matches:
         knockout_matches = [dict(match) for match in _default_knockout_matches(config)]
+    monte_carlo_summary = monte_carlo_compact_summary(config.get("_monte_carlo_result", {"enabled": False}))
 
     return {
         **config,
@@ -5745,9 +5754,14 @@ def _opponent_debriefing_config(config: dict[str, Any]) -> dict[str, Any]:
         "protagonist_timeout_seconds": int(config.get("opponent_debriefing_protagonist_timeout_seconds", 120)),
         "group_matches": [],
         "knockout_matches": knockout_matches,
+        "_path_relevant_group_states": monte_carlo_summary.get("relevant_group_states", {}),
+        "_path_phase_relevant_groups": monte_carlo_summary.get("phase_relevant_groups", {}),
         "macro_direction": (
             "Sala paralela de debriefing para adversários prováveis do cruzamento do Brasil. "
             "Simule 16 avos, Oitavas, Quartas, Semifinal e Final dentro do bracket oficial; "
+            "use os placares realizados e as tabelas vivas dos grupos de cruzamento expostos em "
+            "monte_carlo.relevant_group_states/_path_relevant_group_states como premissa forte; "
+            "placar realizado substitui probabilidade pré-jogo, e tabela viva muda seed, cenário e adversário provável; "
             "para cada candidato permitido, estime scenario_probabilities e match_probabilities com as "
             "mesmas famílias de dados usadas para o Brasil: bets/prediction markets, ratings, Monte Carlo, "
             "Sofascore/performance, lesões/cortes/notícias, amistosos recentes, arbitragem/VAR/cartões, descanso "
