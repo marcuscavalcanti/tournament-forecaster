@@ -42,6 +42,64 @@ def _mc_config(iterations: int = 6000) -> dict:
     return config
 
 
+def test_monte_carlo_conditions_group_on_completed_results() -> None:
+    baseline = run_brazil_monte_carlo(_mc_config(iterations=3000))
+    config = _mc_config(iterations=3000)
+    config["completed_group_matches"] = [
+        {
+            "group": "C",
+            "team_a": "Brasil",
+            "team_b": "Marrocos",
+            "score_a": 1,
+            "score_b": 1,
+            "date": "2026-06-13",
+        },
+        {
+            "group": "C",
+            "team_a": "Escócia",
+            "team_b": "Haiti",
+            "score_a": 1,
+            "score_b": 0,
+            "date": "2026-06-13",
+        },
+    ]
+
+    conditioned = run_brazil_monte_carlo(config)
+
+    group_state = conditioned["group_state"]
+    current = {row["team"]: row for row in group_state["current_table"]}
+    assert conditioned["completed_group_matches"]["count"] == 2
+    assert current["Escócia"]["points"] == 3
+    assert current["Brasil"]["points"] == 1
+    assert current["Marrocos"]["points"] == 1
+    assert current["Haiti"]["points"] == 0
+    assert sum(group_state["brazil_position_counts"].values()) == conditioned["iterations"]
+    assert group_state["brazil_first_pct"] == group_state["brazil_position_pct"]["1"]
+    assert group_state["completed_results"][0]["score"] == "Brasil 1-1 Marrocos"
+
+
+def test_completed_group_result_overrides_extreme_pre_match_probability() -> None:
+    baseline = run_brazil_monte_carlo(_mc_config(iterations=3000))
+    config = _mc_config(iterations=3000)
+    config["group_matches"][0]["brazil_pct"] = 99.0
+    config["group_matches"][0]["draw_pct"] = 0.5
+    config["completed_group_matches"] = [
+        {
+            "group": "C",
+            "team_a": "Brasil",
+            "team_b": "Marrocos",
+            "score_a": 0,
+            "score_b": 1,
+            "date": "2026-06-13",
+        },
+    ]
+
+    conditioned = run_brazil_monte_carlo(config)
+
+    assert conditioned["group_state"]["current_table"][0]["team"] == "Marrocos"
+    assert conditioned["group_state"]["brazil_first_pct"] < baseline["group_state"]["brazil_first_pct"]
+
+
 def test_monte_carlo_confidence_level_controls_wilson_interval_width() -> None:
     config_95 = _mc_config(iterations=5000)
     config_95["uncertainty"]["confidence_level"] = 0.95
@@ -418,9 +476,10 @@ def test_monte_carlo_output_is_bit_identical_after_hot_loop_memoization() -> Non
     """Gate de regressão da otimização de performance (item 14 da auditoria 11/jun).
 
     As memoizações de _normalize/_slot_kind/_rating_*_probability são puras: o
-    resultado COMPLETO do Monte Carlo (todas as fases, CIs, diagnostics, título)
-    deve ser byte a byte idêntico ao código pré-cache. Hashes capturados do código
-    original; qualquer mudança futura que altere um único número quebra aqui.
+    resultado COMPLETO do Monte Carlo (todas as fases, CIs, diagnostics, título
+    e placares realizados condicionantes) deve permanecer byte a byte estável
+    para o contrato atual. Qualquer mudança futura que altere um único número
+    quebra aqui.
 
     Ao contrário do red-green usual, este teste PASSA no código antigo e no novo —
     é exatamente o que prova que a otimização não mudou o comportamento."""
@@ -456,5 +515,5 @@ def test_monte_carlo_output_is_bit_identical_after_hot_loop_memoization() -> Non
         )
     )
 
-    assert _hash(result_off) == "3a8112323212d0884ef7b9882feae17776ac49570e9d1c185b21f00e21cf9ca7"
-    assert _hash(result_on) == "44176e8de29adae1cac6a8f9532bfbbe60e2d55b76d7cd0f8a7653bf5b1cb878"
+    assert _hash(result_off) == "c4376f4536eab88049fcf4eff5864117d511380fb4850721b522e11ff986ac7c"
+    assert _hash(result_on) == "8ca8cbad6ad27470ef54b0ab9b6c77b050f0cf45dc4217ccfb63db32fb997aba"

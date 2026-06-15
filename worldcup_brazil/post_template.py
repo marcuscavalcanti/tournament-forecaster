@@ -98,6 +98,44 @@ def _post_game_label(match: Any) -> str:
     return f"{getattr(match, 'opponent', '')} ({_short_date(getattr(match, 'match_date', ''))})"
 
 
+def _group_state(bundle: Any) -> dict[str, Any]:
+    metadata = getattr(bundle, "metadata", {}) or {}
+    direct = metadata.get("group_state")
+    if isinstance(direct, dict) and direct:
+        return direct
+    monte_carlo = metadata.get("monte_carlo") if isinstance(metadata.get("monte_carlo"), dict) else {}
+    state = monte_carlo.get("group_state") if isinstance(monte_carlo, dict) else {}
+    return state if isinstance(state, dict) else {}
+
+
+def _first_place_pct(bundle: Any) -> str:
+    state = _group_state(bundle)
+    if state.get("brazil_first_pct") is not None:
+        return _pct_int(state.get("brazil_first_pct"))
+    group_summary = str(getattr(bundle, "group_summary", "") or "")
+    first_place = re.search(r"1º:\s*~?(\d+(?:[,.]\d+)?)%", group_summary)
+    if first_place:
+        return _pct_int(first_place.group(1).replace(",", "."))
+    return "—"
+
+
+def _completed_group_context(bundle: Any) -> str:
+    state = _group_state(bundle)
+    results = state.get("completed_results") or []
+    if not isinstance(results, list):
+        return ""
+    scores = [
+        str(item.get("score") or "").strip()
+        for item in results
+        if isinstance(item, dict) and str(item.get("score") or "").strip()
+    ]
+    if not scores:
+        return ""
+    if len(scores) == 1:
+        return f"Com {scores[0]}, "
+    return f"Com {' e '.join(scores[:2])}, "
+
+
 def _analysis_short_date(bundle: Any) -> str:
     raw = str(getattr(bundle, "generated_at_iso", "") or "")
     try:
@@ -598,18 +636,22 @@ def render_template_post(
 
     remaining = [m for m, d in dated if m is not featured and d is not None and d > (featured_date or run_date)]
     next_post_match = remaining[0] if remaining else featured
-    group_summary = str(getattr(bundle, "group_summary", "") or "")
-    first_place = re.search(r"1º:\s*~?(\d+)%", group_summary)
-    first_place_pct = f"{first_place.group(1)}%" if first_place else "—"
+    first_place_pct = _first_place_pct(bundle)
+    completed_context = _completed_group_context(bundle)
     if remaining:
         listed = " e ".join(
             f"{getattr(m, 'opponent', '')} ({_pct_int(getattr(m, 'brazil_pct', None))} de vitória)" for m in remaining
         )
+        lead = f"{completed_context}depois" if completed_context else "Depois"
         rest_group_line = (
-            f"Depois vêm {listed}. Brasil termina em 1º do grupo em {first_place_pct} dos cenários."
+            f"{lead} vêm {listed}. Brasil termina em 1º do grupo em {first_place_pct} dos cenários."
         )
     else:
-        rest_group_line = f"Fase de grupos encerrada. Brasil terminou o grupo com 1º lugar projetado em {first_place_pct} dos cenários."
+        lead = f"{completed_context}fase" if completed_context else "Fase"
+        rest_group_line = (
+            f"{lead} de grupos encerrada. Brasil terminou o grupo com "
+            f"1º lugar projetado em {first_place_pct} dos cenários."
+        )
 
     pairs = _knockout_pairs(bundle)
     blocks: list[str] = []

@@ -2,7 +2,7 @@
   "custom_hashtag": "#CopaComAchismo",
   "macro_direction": "Brasil na Copa do Mundo de 2026, usando dados quantitativos e qualitativos como direcional inicial. Os modelos devem escolher fontes, comparar premissas e chegar a consenso jogo a jogo sem viés pró-Brasil, sem percentual fixo entre quanti e quali.",
   "group_name": "GRUPO C",
-  "group_summary": "Brasil em 1º: ~66% (faixa 61% modelo conservador-72% mercado). Avança: ~97%. Único rival real: Marrocos (lidera ~29%).",
+  "group_summary": "Resumo do grupo recalculado pelo Monte Carlo condicionado aos placares realizados no ledger.",
   "groups_config_path": "groups.config.json",
   "bracket_config_path": "bracket.config.json",
   "brazil_team_name": "Brasil",
@@ -146,6 +146,7 @@
   "meeting_response_repair_attempts": 1,
   "blind_peer_review_enabled": false,
   "blind_peer_review_shadow_only": true,
+  "blind_peer_review_on_consensus_exit": true,
   "blind_peer_review_timeout_seconds": 90,
   "blind_peer_review_acceptance_threshold": 0.72,
   "numeric_chairman_enabled": true,
@@ -265,6 +266,24 @@
       "brazil_pct": 73.0,
       "draw_pct": 19.0,
       "qualitative_shift_pct": 0.0
+    }
+  ],
+  "completed_group_matches": [
+    {
+      "group": "C",
+      "team_a": "Brasil",
+      "team_b": "Marrocos",
+      "score_a": 1,
+      "score_b": 1,
+      "date": "2026-06-13"
+    },
+    {
+      "group": "C",
+      "team_a": "Escócia",
+      "team_b": "Haiti",
+      "score_a": 1,
+      "score_b": 0,
+      "date": "2026-06-13"
     }
   ],
   "knockout_matches": [

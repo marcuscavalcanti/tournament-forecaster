@@ -107,6 +107,25 @@ def test_template_post_fills_all_placeholders_within_limit() -> None:
     assert "Galera do bolão: 59 / 24 / 17." in text
 
 
+def test_template_post_uses_monte_carlo_group_state_instead_of_static_summary() -> None:
+    bundle = _bundle()
+    bundle.group_summary = "Brasil em 1º: ~11% (valor estático obsoleto)."
+    bundle.metadata["monte_carlo"]["group_state"] = {
+        "brazil_first_pct": 42.4,
+        "completed_results": [
+            {"score": "Brasil 1-1 Marrocos"},
+            {"score": "Escócia 1-0 Haiti"},
+        ],
+    }
+
+    text = render_template_post(bundle, post_index=2, run_date=date(2026, 6, 15))
+
+    assert "Brasil termina em 1º do grupo em 42%" in text
+    assert "Brasil 1-1 Marrocos" in text
+    assert "Escócia 1-0 Haiti" in text
+    assert "11%" not in text
+
+
 def test_backstage_section_omitted_when_beats_lack_substance() -> None:
     bundle = _bundle()
     bundle.meeting_transcript = [

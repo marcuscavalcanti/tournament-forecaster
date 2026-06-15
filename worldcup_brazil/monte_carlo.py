@@ -340,6 +340,178 @@ def _explicit_brazil_group_probabilities(config: dict[str, Any]) -> dict[tuple[s
     return probabilities
 
 
+def _team_group_map(config: dict[str, Any]) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for group, teams in _groups(config).items():
+        for team in teams:
+            name = _team_name(team)
+            if name:
+                mapping[_normalize(name)] = str(group).strip().upper()
+    return mapping
+
+
+def _completed_pair_key(team_a: str, team_b: str) -> tuple[str, str]:
+    return tuple(sorted((_normalize(team_a), _normalize(team_b))))
+
+
+def _score_value(record: dict[str, Any], *keys: str) -> int | None:
+    for key in keys:
+        if key not in record:
+            continue
+        try:
+            return int(record[key])
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _completed_group_matches(config: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_matches = config.get("completed_group_matches") or config.get("group_results") or []
+    if not isinstance(raw_matches, list):
+        return []
+    team_groups = _team_group_map(config)
+    completed: list[dict[str, Any]] = []
+    for raw in raw_matches:
+        if not isinstance(raw, dict):
+            continue
+        team_a = str(raw.get("team_a") or raw.get("home") or raw.get("team1") or "").strip()
+        team_b = str(raw.get("team_b") or raw.get("away") or raw.get("team2") or "").strip()
+        if not team_a or not team_b:
+            continue
+        score_a = _score_value(raw, "score_a", "home_score", "goals_a", "team_a_score")
+        score_b = _score_value(raw, "score_b", "away_score", "goals_b", "team_b_score")
+        if score_a is None or score_b is None:
+            score_text = str(raw.get("score") or "").strip()
+            score_match = re.fullmatch(r"\s*(\d+)\s*[-xX]\s*(\d+)\s*", score_text)
+            if score_match:
+                score_a = int(score_match.group(1))
+                score_b = int(score_match.group(2))
+        if score_a is None or score_b is None:
+            continue
+        group = str(raw.get("group") or "").strip().upper()
+        if not group:
+            group_a = team_groups.get(_normalize(team_a), "")
+            group_b = team_groups.get(_normalize(team_b), "")
+            if group_a and group_a == group_b:
+                group = group_a
+        if not group:
+            continue
+        completed.append(
+            {
+                "group": group,
+                "team_a": team_a,
+                "team_b": team_b,
+                "score_a": score_a,
+                "score_b": score_b,
+                "date": raw.get("date"),
+                "source": raw.get("source") or raw.get("source_url"),
+                "score": f"{team_a} {score_a}-{score_b} {team_b}",
+            }
+        )
+    return completed
+
+
+def _completed_group_match_lookup(completed_matches: list[dict[str, Any]]) -> dict[str, dict[tuple[str, str], dict[str, Any]]]:
+    lookup: dict[str, dict[tuple[str, str], dict[str, Any]]] = {}
+    for match in completed_matches:
+        group = str(match.get("group") or "").strip().upper()
+        team_a = str(match.get("team_a") or "")
+        team_b = str(match.get("team_b") or "")
+        if not group or not team_a or not team_b:
+            continue
+        lookup.setdefault(group, {})[_completed_pair_key(team_a, team_b)] = match
+    return lookup
+
+
+def _row_team_key(rows: dict[str, dict[str, Any]], team: str) -> str | None:
+    if team in rows:
+        return team
+    team_key = _normalize(team)
+    return next((name for name in rows if _normalize(name) == team_key), None)
+
+
+def _apply_match_result_to_rows(rows: dict[str, dict[str, Any]], team_a: str, team_b: str, score_a: int, score_b: int) -> None:
+    row_a = _row_team_key(rows, team_a)
+    row_b = _row_team_key(rows, team_b)
+    if row_a is None or row_b is None:
+        return
+    rows[row_a]["played"] = int(rows[row_a].get("played", 0)) + 1
+    rows[row_b]["played"] = int(rows[row_b].get("played", 0)) + 1
+    rows[row_a]["goals_for"] = int(rows[row_a].get("goals_for", 0)) + score_a
+    rows[row_a]["goals_against"] = int(rows[row_a].get("goals_against", 0)) + score_b
+    rows[row_b]["goals_for"] = int(rows[row_b].get("goals_for", 0)) + score_b
+    rows[row_b]["goals_against"] = int(rows[row_b].get("goals_against", 0)) + score_a
+    if score_a > score_b:
+        rows[row_a]["points"] += 3
+        rows[row_a]["wins"] += 1
+    elif score_b > score_a:
+        rows[row_b]["points"] += 3
+        rows[row_b]["wins"] += 1
+    else:
+        rows[row_a]["points"] += 1
+        rows[row_b]["points"] += 1
+
+
+def _completed_current_table(config: dict[str, Any], completed_matches: list[dict[str, Any]], *, ratings: dict[str, float]) -> list[dict[str, Any]]:
+    brazil_group = str(config.get("brazil_group") or "").strip().upper()
+    if not brazil_group:
+        brazil = _normalize(config.get("brazil_team_name", "Brasil"))
+        for group, teams in _groups(config).items():
+            if any(_normalize(_team_name(team)) == brazil for team in teams):
+                brazil_group = str(group).strip().upper()
+                break
+    teams = _groups(config).get(brazil_group, [])
+    rows = {
+        _team_name(team): {
+            "team": _team_name(team),
+            "played": 0,
+            "points": 0,
+            "wins": 0,
+            "goals_for": 0,
+            "goals_against": 0,
+            "rating": ratings.get(_team_name(team), 0.0),
+        }
+        for team in teams
+        if _team_name(team)
+    }
+    for match in completed_matches:
+        if str(match.get("group") or "").strip().upper() != brazil_group:
+            continue
+        _apply_match_result_to_rows(
+            rows,
+            str(match["team_a"]),
+            str(match["team_b"]),
+            int(match["score_a"]),
+            int(match["score_b"]),
+        )
+    rendered = []
+    for row in rows.values():
+        goals_for = int(row.get("goals_for", 0))
+        goals_against = int(row.get("goals_against", 0))
+        rendered.append(
+            {
+                "team": row["team"],
+                "played": int(row.get("played", 0)),
+                "points": int(row.get("points", 0)),
+                "wins": int(row.get("wins", 0)),
+                "goals_for": goals_for,
+                "goals_against": goals_against,
+                "goal_difference": goals_for - goals_against,
+            }
+        )
+    rendered.sort(
+        key=lambda row: (
+            row["points"],
+            row["wins"],
+            row["goal_difference"],
+            row["goals_for"],
+            ratings.get(str(row["team"]), 0.0),
+        ),
+        reverse=True,
+    )
+    return rendered
+
+
 @functools.lru_cache(maxsize=32768)
 def _rating_win_probability(rating_a: float, rating_b: float, *, scale: float) -> float:
     # Pura: depende só de (rating_a, rating_b, scale). Por outer-sample os ratings
@@ -419,6 +591,7 @@ def _simulate_groups(
     *,
     ratings: dict[str, float],
     explicit_brazil_probs: dict[tuple[str, str], tuple[float, float, float]],
+    completed_group_lookup: dict[str, dict[tuple[str, str], dict[str, Any]]] | None = None,
     default_draw_pct: float,
     rating_scale: float,
 ) -> tuple[dict[str, list[str]], list[dict[str, Any]]]:
@@ -431,12 +604,26 @@ def _simulate_groups(
                 "team": name,
                 "points": 0,
                 "wins": 0,
+                "played": 0,
+                "goals_for": 0,
+                "goals_against": 0,
                 "rating": ratings[name],
                 "tie_noise": rng.random(),
             }
             for name in names
         }
+        group_completed = (completed_group_lookup or {}).get(str(group).strip().upper(), {})
+        for match in group_completed.values():
+            _apply_match_result_to_rows(
+                rows,
+                str(match["team_a"]),
+                str(match["team_b"]),
+                int(match["score_a"]),
+                int(match["score_b"]),
+            )
         for team_a, team_b in combinations(names, 2):
+            if _completed_pair_key(team_a, team_b) in group_completed:
+                continue
             outcome = _sample_group_match(
                 rng,
                 team_a,
@@ -623,6 +810,19 @@ def _merge_phase_bucket(target: dict[str, Any], source: dict[str, Any]) -> None:
             target_counts[item] = int(target_counts.get(item) or 0) + int(count)
 
 
+def _merge_simulation_diagnostics(target: dict[str, Any], source: dict[str, Any]) -> None:
+    for diagnostic_key, diagnostic_value in source.items():
+        if isinstance(diagnostic_value, dict):
+            bucket = target.setdefault(diagnostic_key, {})
+            if not isinstance(bucket, dict):
+                bucket = {}
+                target[diagnostic_key] = bucket
+            for item, count in diagnostic_value.items():
+                bucket[str(item)] = int(bucket.get(str(item), 0) or 0) + int(count or 0)
+            continue
+        target[diagnostic_key] = int(target.get(diagnostic_key, 0) or 0) + int(diagnostic_value or 0)
+
+
 def _stage_probabilities_from_buckets(
     phase_buckets: dict[str, dict[str, Any]],
     *,
@@ -737,6 +937,42 @@ def _round_pct(count: int, total: int) -> float:
     return round(count / total * 100.0, 1)
 
 
+def _group_state_summary(
+    config: dict[str, Any],
+    *,
+    ratings: dict[str, float],
+    completed_matches: list[dict[str, Any]],
+    diagnostics: dict[str, Any],
+    iterations: int,
+) -> dict[str, Any]:
+    position_counts = {
+        str(position): int(count)
+        for position, count in (diagnostics.get("brazil_group_position_counts") or {}).items()
+    }
+    position_pct = {
+        str(position): _round_pct(count, iterations)
+        for position, count in sorted(position_counts.items(), key=lambda item: int(item[0]))
+    }
+    brazil_group = str(config.get("brazil_group") or _team_group_map(config).get(_normalize(config.get("brazil_team_name", "Brasil")), "")).strip().upper()
+    return {
+        "brazil_group": brazil_group,
+        "current_table": _completed_current_table(config, completed_matches, ratings=ratings),
+        "completed_results": [
+            {
+                "group": match.get("group"),
+                "date": match.get("date"),
+                "score": match.get("score"),
+                "source": match.get("source"),
+            }
+            for match in completed_matches
+        ],
+        "brazil_position_counts": position_counts,
+        "brazil_position_pct": position_pct,
+        "brazil_first_pct": position_pct.get("1", 0.0),
+        "brazil_top2_pct": round(position_pct.get("1", 0.0) + position_pct.get("2", 0.0), 1),
+    }
+
+
 def _simulate_tournament_counts(
     config: dict[str, Any],
     *,
@@ -744,14 +980,18 @@ def _simulate_tournament_counts(
     iterations: int,
     rng: random.Random,
     explicit_brazil_probs: dict[tuple[str, str], tuple[float, float, float]],
+    completed_group_lookup: dict[str, dict[tuple[str, str], dict[str, Any]]] | None,
     default_draw_pct: float,
     rating_scale: float,
     brazil: str,
-) -> tuple[dict[str, dict[str, Any]], int, dict[str, int]]:
+) -> tuple[dict[str, dict[str, Any]], int, dict[str, Any]]:
     phase_buckets = {PHASE_LABELS[key]: _empty_phase_bucket() for key in PHASE_SEQUENCE}
     title_count = 0
     third_allocation_relaxed_count = 0
     unresolved_match_count = 0
+    brazil_group_position_counts: dict[str, int] = {}
+    team_groups = _team_group_map(config)
+    brazil_group = team_groups.get(_normalize(brazil), str(config.get("brazil_group") or "").strip().upper())
 
     for _ in range(iterations):
         rankings, qualified_thirds = _simulate_groups(
@@ -759,9 +999,13 @@ def _simulate_tournament_counts(
             config,
             ratings=ratings,
             explicit_brazil_probs=explicit_brazil_probs,
+            completed_group_lookup=completed_group_lookup,
             default_draw_pct=default_draw_pct,
             rating_scale=rating_scale,
         )
+        if brazil_group and brazil in rankings.get(brazil_group, []):
+            position = rankings[brazil_group].index(brazil) + 1
+            brazil_group_position_counts[str(position)] = brazil_group_position_counts.get(str(position), 0) + 1
         third_assignment, relaxed = _allocate_best_thirds(config, qualified_thirds)
         third_allocation_relaxed_count += relaxed
         used_third_groups: set[str] = set()
@@ -824,6 +1068,7 @@ def _simulate_tournament_counts(
     return phase_buckets, title_count, {
         "third_allocation_relaxed_count": third_allocation_relaxed_count,
         "unresolved_match_count": unresolved_match_count,
+        "brazil_group_position_counts": brazil_group_position_counts,
     }
 
 
@@ -840,7 +1085,7 @@ class MonteCarloIntegrityError(RuntimeError):
     falha hard ANTES de publicar número errado."""
 
 
-def _check_simulation_integrity(diagnostics: dict[str, int], *, iterations: int) -> None:
+def _check_simulation_integrity(diagnostics: dict[str, Any], *, iterations: int) -> None:
     unresolved = int(diagnostics.get("unresolved_match_count", 0))
     relaxed = int(diagnostics.get("third_allocation_relaxed_count", 0))
     relaxed_cap = int(iterations * RELAXED_THIRD_ALLOCATION_MAX_FRACTION)
@@ -876,6 +1121,8 @@ def run_brazil_monte_carlo(config: dict[str, Any]) -> dict[str, Any]:
     ratings, rating_coverage_pct, explicit_team_names = _build_rating_table_with_sources(config)
     team_context = _apply_team_context_adjustments(config, ratings)
     explicit_brazil_probs = _explicit_brazil_group_probabilities(config)
+    completed_group_matches = _completed_group_matches(config)
+    completed_group_lookup = _completed_group_match_lookup(completed_group_matches)
     default_draw_pct = float(mc_config.get("default_draw_pct", DEFAULT_DRAW_PCT))
     rating_scale = float(mc_config.get("rating_scale", DEFAULT_RATING_SCALE))
     brazil = str(config.get("brazil_team_name", "Brasil"))
@@ -883,9 +1130,10 @@ def run_brazil_monte_carlo(config: dict[str, Any]) -> dict[str, Any]:
     rating_uncertainty_enabled = bool(mc_config.get("rating_uncertainty_enabled", False))
     stage_uncertainty_intervals: dict[str, tuple[float, float]] = {}
     rating_uncertainty = {"enabled": False}
-    simulation_diagnostics: dict[str, int] = {
+    simulation_diagnostics: dict[str, Any] = {
         "third_allocation_relaxed_count": 0,
         "unresolved_match_count": 0,
+        "brazil_group_position_counts": {},
     }
     phase_buckets = {PHASE_LABELS[key]: _empty_phase_bucket() for key in PHASE_SEQUENCE}
     title_count = 0
@@ -928,14 +1176,12 @@ def run_brazil_monte_carlo(config: dict[str, Any]) -> dict[str, Any]:
                 iterations=inner_iterations,
                 rng=rng,
                 explicit_brazil_probs=explicit_brazil_probs,
+                completed_group_lookup=completed_group_lookup,
                 default_draw_pct=default_draw_pct,
                 rating_scale=rating_scale,
                 brazil=brazil,
             )
-            for diagnostic_key, diagnostic_value in sample_diagnostics.items():
-                simulation_diagnostics[diagnostic_key] = (
-                    simulation_diagnostics.get(diagnostic_key, 0) + int(diagnostic_value)
-                )
+            _merge_simulation_diagnostics(simulation_diagnostics, sample_diagnostics)
             for phase in phase_buckets:
                 _merge_phase_bucket(phase_buckets[phase], sample_buckets[phase])
             title_count += sample_title_count
@@ -974,14 +1220,12 @@ def run_brazil_monte_carlo(config: dict[str, Any]) -> dict[str, Any]:
             iterations=iterations,
             rng=rng,
             explicit_brazil_probs=explicit_brazil_probs,
+            completed_group_lookup=completed_group_lookup,
             default_draw_pct=default_draw_pct,
             rating_scale=rating_scale,
             brazil=brazil,
         )
-        for diagnostic_key, diagnostic_value in single_run_diagnostics.items():
-            simulation_diagnostics[diagnostic_key] = (
-                simulation_diagnostics.get(diagnostic_key, 0) + int(diagnostic_value)
-            )
+        _merge_simulation_diagnostics(simulation_diagnostics, single_run_diagnostics)
         stage_probabilities = _stage_probabilities_from_buckets(
             phase_buckets,
             title_count=title_count,
@@ -1033,6 +1277,13 @@ def run_brazil_monte_carlo(config: dict[str, Any]) -> dict[str, Any]:
         iterations >= path_gate_min_iterations
         and rating_coverage_pct >= path_gate_min_rating_coverage_pct
     )
+    group_state = _group_state_summary(
+        config,
+        ratings=ratings,
+        completed_matches=completed_group_matches,
+        diagnostics=simulation_diagnostics,
+        iterations=iterations,
+    )
     return {
         "enabled": True,
         "iterations": iterations,
@@ -1051,6 +1302,11 @@ def run_brazil_monte_carlo(config: dict[str, Any]) -> dict[str, Any]:
         "stage_uncertainty_intervals": stage_uncertainty_intervals,
         "rating_uncertainty": rating_uncertainty,
         "simulation_diagnostics": simulation_diagnostics,
+        "completed_group_matches": {
+            "count": len(completed_group_matches),
+            "matches": list(group_state.get("completed_results", [])),
+        },
+        "group_state": group_state,
         "title_count": title_count,
         "phases": phases,
         "path_gate": {
@@ -1090,6 +1346,8 @@ def monte_carlo_compact_summary(result: dict[str, Any], *, top_n: int = 3) -> di
         "stage_uncertainty_intervals": result.get("stage_uncertainty_intervals", {}),
         "rating_uncertainty": result.get("rating_uncertainty", {"enabled": False}),
         "simulation_diagnostics": result.get("simulation_diagnostics", {}),
+        "completed_group_matches": result.get("completed_group_matches", {"count": 0, "matches": []}),
+        "group_state": result.get("group_state", {}),
         "path_gate": result.get("path_gate", {}),
         "phases": phases,
     }

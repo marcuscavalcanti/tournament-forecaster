@@ -126,6 +126,17 @@ def _parse_datetime(value: str | None) -> datetime:
     return parsed
 
 
+def _bundle_output_stamp(bundle, fallback: datetime) -> str:
+    raw = str(getattr(bundle, "generated_at_iso", "") or "").strip()
+    try:
+        parsed = datetime.fromisoformat(raw)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+    except ValueError:
+        parsed = fallback
+    return parsed.astimezone(timezone.utc).strftime("%Y-%m-%d")
+
+
 def load_env_file(path: Path) -> None:
     if not path.exists():
         return
@@ -217,6 +228,7 @@ def _config_watchdog_extra(
             ),
             "blind_peer_review_enabled": config.get("blind_peer_review_enabled", False),
             "blind_peer_review_shadow_only": config.get("blind_peer_review_shadow_only", True),
+            "blind_peer_review_on_consensus_exit": config.get("blind_peer_review_on_consensus_exit", True),
             "blind_peer_review_timeout_seconds": config.get("blind_peer_review_timeout_seconds", 90),
             "numeric_chairman_enabled": config.get("numeric_chairman_enabled", True),
             "llm_council_fast_path_enabled": config.get("llm_council_fast_path_enabled", False),
@@ -480,7 +492,7 @@ def _run(args: argparse.Namespace) -> int:
         if watchdog:
             watchdog.start("write_outputs", detail=str(args.output_dir))
         args.output_dir.mkdir(parents=True, exist_ok=True)
-        stamp = now.astimezone(timezone.utc).strftime("%Y-%m-%d")
+        stamp = _bundle_output_stamp(artifacts.bundle, now)
         post_path = args.output_dir / f"linkedin_brazil_{stamp}.md"
         json_path = args.output_dir / f"linkedin_brazil_{stamp}.json"
         audit_path = args.output_dir / f"audit_brazil_{stamp}.md"

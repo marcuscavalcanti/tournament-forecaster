@@ -41,6 +41,7 @@ def test_example_config_uses_three_agent_source_quorum_and_repair_attempts() -> 
     assert config["source_planning_format_repair_timeout_seconds"] == 60
     assert config["blind_peer_review_enabled"] is False
     assert config["blind_peer_review_shadow_only"] is True
+    assert config["blind_peer_review_on_consensus_exit"] is True
     assert config["blind_peer_review_timeout_seconds"] == 90
     assert config["numeric_chairman_enabled"] is True
     assert config["llm_council_fast_path_enabled"] is False
@@ -67,6 +68,9 @@ def test_example_config_uses_three_agent_source_quorum_and_repair_attempts() -> 
     assert config["monte_carlo"]["prior_rating_sigma"] == 150.0
     assert len(teams) == 48
     assert configured_rating_teams == teams
+    assert config["completed_group_matches"][0]["team_a"] == "Brasil"
+    assert config["completed_group_matches"][0]["score_a"] == 1
+    assert config["completed_group_matches"][0]["score_b"] == 1
 
 
 def test_load_config_watchdog_payload_exposes_safe_operational_config() -> None:
@@ -92,6 +96,7 @@ def test_load_config_watchdog_payload_exposes_safe_operational_config() -> None:
         "source_planning_format_repair_timeout_seconds": 60,
         "blind_peer_review_enabled": False,
         "blind_peer_review_shadow_only": True,
+        "blind_peer_review_on_consensus_exit": True,
         "blind_peer_review_timeout_seconds": 90,
         "numeric_chairman_enabled": True,
         "llm_council_fast_path_enabled": False,
@@ -155,6 +160,7 @@ def test_load_config_watchdog_payload_exposes_safe_operational_config() -> None:
     assert extra["watchdog_config"]["source_planning_format_repair_timeout_seconds"] == 60
     assert extra["watchdog_config"]["blind_peer_review_enabled"] is False
     assert extra["watchdog_config"]["blind_peer_review_shadow_only"] is True
+    assert extra["watchdog_config"]["blind_peer_review_on_consensus_exit"] is True
     assert extra["watchdog_config"]["blind_peer_review_timeout_seconds"] == 90
     assert extra["watchdog_config"]["numeric_chairman_enabled"] is True
     assert extra["watchdog_config"]["llm_council_fast_path_enabled"] is False

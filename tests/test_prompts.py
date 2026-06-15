@@ -5,6 +5,7 @@ from worldcup_brazil.pipeline import (
     _agent_debate_prompt,
     _agent_prompt,
     _has_fixed_quanti_quali_allocation,
+    _invalid_protagonist_question_reason,
     load_config,
     _meeting_response_prompt,
     _protagonist_question_prompt,
@@ -422,6 +423,37 @@ def test_sanitize_protagonist_question_rejects_impossible_knockout_opponent_for_
     assert "Holanda" in question
     assert "Japão" in question
     assert "concorda ou discorda" in question
+
+
+def test_protagonist_question_rejects_future_match_claimed_as_completed_context() -> None:
+    config = load_config(Path("config/worldcup_brazil.example.json"))
+    config["completed_group_matches"] = [
+        {"group": "C", "team_a": "Brasil", "team_b": "Marrocos", "score_a": 1, "score_b": 1},
+        {"group": "C", "team_a": "Escócia", "team_b": "Haiti", "score_a": 1, "score_b": 0},
+    ]
+
+    reason = _invalid_protagonist_question_reason(
+        "Depois dos jogos França x Senegal e Inglaterra x Croácia, concordam com reduzir o Brasil?",
+        config,
+    )
+
+    assert reason is not None
+    assert "sem placar no ledger" in reason
+
+
+def test_protagonist_question_accepts_completed_match_context_from_ledger() -> None:
+    config = load_config(Path("config/worldcup_brazil.example.json"))
+    config["completed_group_matches"] = [
+        {"group": "C", "team_a": "Brasil", "team_b": "Marrocos", "score_a": 1, "score_b": 1},
+        {"group": "C", "team_a": "Escócia", "team_b": "Haiti", "score_a": 1, "score_b": 0},
+    ]
+
+    reason = _invalid_protagonist_question_reason(
+        "Depois dos jogos Brasil x Marrocos e Escócia x Haiti, concordam com atualizar o Grupo C?",
+        config,
+    )
+
+    assert reason is None
 
 
 def test_sanitize_protagonist_question_removes_reserved_benchmark_from_main_room() -> None:

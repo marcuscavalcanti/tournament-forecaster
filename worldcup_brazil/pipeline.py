@@ -660,6 +660,7 @@ def _agent_source_planning_watchdog_extra(config: dict[str, Any]) -> dict[str, A
             ),
             "blind_peer_review_enabled": bool(config.get("blind_peer_review_enabled", False)),
             "blind_peer_review_shadow_only": bool(config.get("blind_peer_review_shadow_only", True)),
+            "blind_peer_review_on_consensus_exit": bool(config.get("blind_peer_review_on_consensus_exit", True)),
             "blind_peer_review_timeout_seconds": int(config.get("blind_peer_review_timeout_seconds", 90)),
             "numeric_chairman_enabled": bool(config.get("numeric_chairman_enabled", True)),
             "llm_council_fast_path_enabled": bool(config.get("llm_council_fast_path_enabled", False)),
@@ -2475,6 +2476,7 @@ def _normalize_text(value: str) -> str:
 def _configured_matches_for_prompt(config: dict[str, Any]) -> dict[str, Any]:
     return {
         "group_matches": _default_group_matches(config),
+        "completed_group_matches": list(config.get("completed_group_matches", []) or []),
         "knockout_matches": _default_knockout_matches(config),
         "monte_carlo": monte_carlo_compact_summary(config.get("_monte_carlo_result", {"enabled": False})),
         "parallel_opponent_briefing": config.get("_parallel_opponent_briefing", {}),
@@ -2583,6 +2585,7 @@ def _compact_source_planning_scope(config: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "group_matches": [_compact_group_match_label(match) for match in _default_group_matches(config)],
+        "completed_group_matches": list(config.get("completed_group_matches", []) or []),
         "knockout_matches": [_compact_knockout_match_label(match) for match in _default_knockout_matches(config)],
         "bracket_path": bracket_path,
         "monte_carlo": monte_carlo_compact_summary(config.get("_monte_carlo_result", {"enabled": False})),
@@ -2692,6 +2695,65 @@ def _configured_opponents(config: dict[str, Any]) -> set[str]:
 def _mentioned_national_teams(text: str) -> set[str]:
     normalized = _normalize_text(text)
     return {team for team in COMMON_NATIONAL_TEAM_MARKERS if re.search(rf"\b{re.escape(team)}\b", normalized)}
+
+
+_COMPLETED_MATCH_CONTEXT_MARKERS = (
+    "depois dos jogos",
+    "apos os jogos",
+    "após os jogos",
+    "depois do jogo",
+    "apos o jogo",
+    "após o jogo",
+    "com o placar",
+    "placar real",
+    "resultado real",
+    "jogo de ontem",
+    "jogos do final de semana",
+    "jogos ja disputados",
+    "jogos já disputados",
+)
+
+
+def _completed_match_pairs_from_config(config: dict[str, Any]) -> set[tuple[str, str]]:
+    pairs: set[tuple[str, str]] = set()
+    for raw in config.get("completed_group_matches", []) or []:
+        if not isinstance(raw, dict):
+            continue
+        team_a = str(raw.get("team_a") or raw.get("home") or raw.get("team1") or "").strip()
+        team_b = str(raw.get("team_b") or raw.get("away") or raw.get("team2") or "").strip()
+        if team_a and team_b:
+            pairs.add(tuple(sorted((_normalize_text(team_a), _normalize_text(team_b)))))
+    return pairs
+
+
+def _match_pairs_mentioned(text: str) -> set[tuple[str, str]]:
+    normalized = _normalize_text(text)
+    teams = sorted(_mentioned_national_teams(text), key=len, reverse=True)
+    pairs: set[tuple[str, str]] = set()
+    for team_a in teams:
+        for team_b in teams:
+            if team_a >= team_b:
+                continue
+            direct = rf"\b{re.escape(team_a)}\b\s*(?:x|vs|v|contra)\s*\b{re.escape(team_b)}\b"
+            reverse = rf"\b{re.escape(team_b)}\b\s*(?:x|vs|v|contra)\s*\b{re.escape(team_a)}\b"
+            if re.search(direct, normalized) or re.search(reverse, normalized):
+                pairs.add(tuple(sorted((team_a, team_b))))
+    return pairs
+
+
+def _unverified_completed_match_claim_detail(text: str, config: dict[str, Any]) -> str | None:
+    normalized = _normalize_text(text)
+    if not any(marker in normalized for marker in _COMPLETED_MATCH_CONTEXT_MARKERS):
+        return None
+    mentioned_pairs = _match_pairs_mentioned(text)
+    if not mentioned_pairs:
+        return None
+    completed_pairs = _completed_match_pairs_from_config(config)
+    missing = sorted(mentioned_pairs - completed_pairs)
+    if not missing:
+        return None
+    rendered = ", ".join(f"{left} x {right}" for left, right in missing[:3])
+    return f"jogo(s) tratado(s) como passado sem placar no ledger: {rendered}"
 
 
 
@@ -2912,6 +2974,9 @@ def _invalid_protagonist_question_reason(question: str, config: dict[str, Any]) 
         return "benchmark reservado para a comparação separada"
     if _has_fixed_quanti_quali_allocation(question):
         return "alocação fixa quanti/quali proibida"
+    completed_claim_detail = _unverified_completed_match_claim_detail(question, config)
+    if completed_claim_detail:
+        return completed_claim_detail
     if _impossible_bracket_opponent_detail(question, config):
         return "adversário impossível para o cruzamento oficial do mata-mata"
     if _mentions_unconfigured_opponent(question, config):
@@ -2946,6 +3011,20 @@ def _sanitize_protagonist_question(question: str, *, config: dict[str, Any], pro
             f"Para {phase}, Brasil {brazil_slot} só cruza com slot(s) {slots}; candidatos permitidos: {candidates}. "
             "Modelos da sala: ignorem a fala anterior e debatam apenas esses candidatos oficiais, trazendo "
             "scenario_probabilities e match_probabilities com fonte/query auditável."
+        )
+    if invalid_reason and "sem placar no ledger" in invalid_reason:
+        completed = config.get("completed_group_matches", []) or []
+        completed_scores = [
+            f"{item.get('team_a')} {item.get('score_a')}-{item.get('score_b')} {item.get('team_b')}"
+            for item in completed
+            if isinstance(item, dict) and item.get("team_a") and item.get("team_b")
+        ]
+        rendered = "; ".join(completed_scores) if completed_scores else "nenhum placar realizado configurado"
+        return _ensure_consensus_request(
+            "A fala do protagonista foi invalidada pela sala por tratar jogo sem placar no ledger como fato consumado. "
+            f"Placar(es) realizados disponíveis no ledger: {rendered}. "
+            "Modelos da sala: ignorem a fala anterior e recalibrem somente com jogos realizados configurados, "
+            "fontes auditáveis e cenários futuros explicitamente marcados como futuros."
         )
     if invalid_reason is None:
         return _ensure_consensus_request(question)
@@ -3704,6 +3783,8 @@ def _blind_peer_review_empty_metadata(config: dict[str, Any]) -> dict[str, Any]:
             "self_score_count": 0,
             "reviewer_count": 0,
         },
+        "self_preference_by_reviewer": {},
+        "self_preference_by_author": {},
         "errors": [],
     }
 
@@ -3965,21 +4046,29 @@ def _aggregate_blind_peer_reviews(
     accepts_by_position: dict[str, int] = {position["position_id"]: 0 for position in positions}
     self_scores: list[float] = []
     external_scores_by_reviewer: dict[str, list[float]] = {}
+    self_scores_by_reviewer: dict[str, list[float]] = {}
+    self_scores_by_author: dict[str, list[float]] = {}
+    external_scores_by_author: dict[str, list[float]] = {position["_agent"]: [] for position in positions}
     threshold = _blind_peer_review_acceptance_threshold(config)
 
     for opinion in review_opinions:
         reviewer = str(getattr(opinion, "agent", "") or "")
         external_scores_by_reviewer.setdefault(reviewer, [])
+        self_scores_by_reviewer.setdefault(reviewer, [])
         for item in _blind_peer_review_score_items(opinion):
             position_id = item["position_id"]
             if position_id not in author_by_position:
                 continue
             score = float(item["score"])
-            if author_by_position[position_id] == reviewer:
+            author = author_by_position[position_id]
+            if author == reviewer:
                 self_scores.append(score)
+                self_scores_by_reviewer[reviewer].append(score)
+                self_scores_by_author.setdefault(author, []).append(score)
                 continue
             scores_by_position[position_id].append(score)
             external_scores_by_reviewer[reviewer].append(score)
+            external_scores_by_author.setdefault(author, []).append(score)
             if bool(item.get("accepted", False)) or score >= threshold:
                 accepts_by_position[position_id] += 1
 
@@ -4008,6 +4097,37 @@ def _aggregate_blind_peer_reviews(
     external_mean = sum(external_means) / len(external_means) if external_means else 0.0
     leakage = round(max(0.0, self_mean - external_mean), 3) if self_scores else 0.0
 
+    def _mean(values: list[float]) -> float:
+        return sum(values) / len(values) if values else 0.0
+
+    reviewer_leakage: dict[str, dict[str, Any]] = {}
+    for reviewer in sorted(set(self_scores_by_reviewer) | set(external_scores_by_reviewer)):
+        reviewer_self = self_scores_by_reviewer.get(reviewer, [])
+        reviewer_external = external_scores_by_reviewer.get(reviewer, [])
+        self_avg = _mean(reviewer_self)
+        external_avg = _mean(reviewer_external)
+        reviewer_leakage[reviewer] = {
+            "self_mean": round(self_avg, 3),
+            "external_mean": round(external_avg, 3),
+            "leakage": round(max(0.0, self_avg - external_avg), 3) if reviewer_self else 0.0,
+            "self_score_count": len(reviewer_self),
+            "external_score_count": len(reviewer_external),
+        }
+
+    author_leakage: dict[str, dict[str, Any]] = {}
+    for author in sorted(set(self_scores_by_author) | set(external_scores_by_author)):
+        author_self = self_scores_by_author.get(author, [])
+        author_external = external_scores_by_author.get(author, [])
+        self_avg = _mean(author_self)
+        external_avg = _mean(author_external)
+        author_leakage[author] = {
+            "self_mean": round(self_avg, 3),
+            "external_mean": round(external_avg, 3),
+            "leakage": round(max(0.0, self_avg - external_avg), 3) if author_self else 0.0,
+            "self_score_count": len(author_self),
+            "external_score_count": len(author_external),
+        }
+
     base.update(
         {
             "blind_review_score": average_scores,
@@ -4019,6 +4139,8 @@ def _aggregate_blind_peer_reviews(
                 "self_score_count": len(self_scores),
                 "reviewer_count": len(review_opinions),
             },
+            "self_preference_by_reviewer": reviewer_leakage,
+            "self_preference_by_author": author_leakage,
             "reviewer_count": len(review_opinions),
             "position_count": len(positions),
         }
@@ -4125,6 +4247,43 @@ async def _run_blind_peer_review_shadow(
             extra=metadata,
         )
     return metadata
+
+
+async def _ensure_blind_peer_review_for_turn(
+    turn: dict[str, Any],
+    *,
+    mode: str,
+    config: dict[str, Any],
+    round_index: int,
+    consensus_opinions: list[Any],
+    agent_specs: list[Any],
+    active_slots: list[str],
+    generated_at: datetime,
+    baseline_title_pct: float,
+    allow_agent_fallback: bool,
+    token_cost_ledger: dict[str, Any] | None,
+    watchdog: RunWatchdog | None,
+) -> None:
+    if not _blind_peer_review_enabled(config):
+        return
+    if isinstance(turn.get("blind_peer_review"), dict):
+        return
+    if mode != "shadow" and not bool(config.get("blind_peer_review_on_consensus_exit", True)):
+        return
+    metadata = await _run_blind_peer_review_shadow(
+        config=config,
+        round_index=round_index,
+        consensus_opinions=consensus_opinions,
+        agent_specs=agent_specs,
+        active_slots=active_slots,
+        generated_at=generated_at,
+        baseline_title_pct=baseline_title_pct,
+        allow_agent_fallback=allow_agent_fallback,
+        token_cost_ledger=token_cost_ledger,
+        watchdog=watchdog,
+    )
+    metadata["mode"] = mode
+    turn["blind_peer_review"] = metadata
 
 
 def _blind_peer_review_metadata_from_transcript(
@@ -4738,7 +4897,9 @@ async def _run_model_meeting(
         turn["coverage"] = _meeting_coverage_report([*meeting_transcript, turn], config)
         meeting_transcript.append(turn)
         if _blind_peer_review_enabled(config) and round_index == 1:
-            turn["blind_peer_review"] = await _run_blind_peer_review_shadow(
+            await _ensure_blind_peer_review_for_turn(
+                turn,
+                mode="shadow",
                 config=config,
                 round_index=round_index,
                 consensus_opinions=consensus_opinions,
@@ -4981,9 +5142,37 @@ async def _run_model_meeting(
             stable_rounds = 0
         previous_consensus_title = float(consensus.title_pct)
         if consensus_ready and coverage_ok:
+            await _ensure_blind_peer_review_for_turn(
+                turn,
+                mode="consensus_exit_candidate",
+                config=config,
+                round_index=round_index,
+                consensus_opinions=consensus_opinions,
+                agent_specs=agent_specs,
+                active_slots=active_slots,
+                generated_at=generated_at,
+                baseline_title_pct=baseline_title_pct,
+                allow_agent_fallback=allow_agent_fallback,
+                token_cost_ledger=token_cost_ledger,
+                watchdog=watchdog,
+            )
             exited_with_consensus = True
             break
         if stable_rounds >= stability_rounds_required:
+            await _ensure_blind_peer_review_for_turn(
+                turn,
+                mode="stable_exit_candidate",
+                config=config,
+                round_index=round_index,
+                consensus_opinions=consensus_opinions,
+                agent_specs=agent_specs,
+                active_slots=active_slots,
+                generated_at=generated_at,
+                baseline_title_pct=baseline_title_pct,
+                allow_agent_fallback=allow_agent_fallback,
+                token_cost_ledger=token_cost_ledger,
+                watchdog=watchdog,
+            )
             exited_with_consensus = True
             if watchdog:
                 watchdog.event(
@@ -6245,6 +6434,31 @@ def _model_self_identification(opinions: list[Any]) -> dict[str, dict[str, str]]
     return identities
 
 
+def _group_summary_from_monte_carlo(config: dict[str, Any], monte_carlo_result: dict[str, Any]) -> str:
+    group_state = monte_carlo_result.get("group_state") if isinstance(monte_carlo_result, dict) else {}
+    if not isinstance(group_state, dict) or not group_state:
+        return str(config.get("group_summary", ""))
+    first_pct = group_state.get("brazil_first_pct")
+    top2_pct = group_state.get("brazil_top2_pct")
+    if first_pct is None and top2_pct is None:
+        return str(config.get("group_summary", ""))
+    parts: list[str] = []
+    if first_pct is not None:
+        parts.append(f"Brasil em 1º: ~{float(first_pct):.1f}%")
+    if top2_pct is not None:
+        parts.append(f"Top-2 do grupo: ~{float(top2_pct):.1f}%")
+    completed = group_state.get("completed_results") or []
+    if completed:
+        scores = [
+            str(item.get("score") or "").strip()
+            for item in completed
+            if isinstance(item, dict) and str(item.get("score") or "").strip()
+        ]
+        if scores:
+            parts.append("placares já condicionados: " + "; ".join(scores[:4]))
+    return ". ".join(parts) + "." if parts else str(config.get("group_summary", ""))
+
+
 async def build_report_bundle(
     *,
     config: dict[str, Any],
@@ -6752,7 +6966,7 @@ async def build_report_bundle(
         warnings=warnings,
         custom_hashtag=str(config.get("custom_hashtag", DEFAULT_CUSTOM_HASHTAG)),
         group_name=str(config.get("group_name", "GRUPO A")),
-        group_summary=str(config.get("group_summary", "")),
+        group_summary=_group_summary_from_monte_carlo(config, monte_carlo_result),
         stage_confidence_intervals=stage_confidence_intervals,
         debate_transcript=[],
         meeting_transcript=meeting_transcript,
@@ -6770,6 +6984,7 @@ async def build_report_bundle(
             "uncertainty": _report_uncertainty_metadata(config),
             "stage_interval_metadata": config.get("_stage_interval_metadata", {}),
             "monte_carlo": monte_carlo_compact_summary(monte_carlo_result),
+            "group_state": monte_carlo_result.get("group_state", {}),
             "meeting_rounds": len(meeting_transcript),
             "meeting_exit_status": meeting_exit_status,
             "meeting_exit_warning": meeting_exit_warning,

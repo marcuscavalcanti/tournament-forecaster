@@ -335,6 +335,10 @@ def test_blind_peer_review_self_preference_leakage_handles_asymmetric_bias() -> 
     metadata = _aggregate_blind_peer_reviews(reviews, positions=positions, config={"blind_peer_review_enabled": True})
 
     assert metadata["self_preference_leakage"]["value"] == 0.1
+    assert metadata["self_preference_by_reviewer"]["GPT 5.5"]["leakage"] == 0.5
+    assert metadata["self_preference_by_reviewer"]["Perplexity Pro"]["leakage"] == 0.0
+    assert metadata["self_preference_by_author"]["GPT 5.5"]["self_mean"] == 1.0
+    assert metadata["self_preference_by_author"]["GPT 5.5"]["external_mean"] == 0.75
     assert metadata["blind_review_score"] == {
         "position_1": 0.75,
         "position_2": 0.6,
@@ -647,18 +651,19 @@ def test_llm_council_fast_path_shadow_records_candidate_without_shortening_meeti
     assert fast_path["acted_on_decision"] is False
 
 
-def test_blind_peer_review_runs_once_when_meeting_continues_after_round_one(monkeypatch) -> None:
+def test_blind_peer_review_runs_on_round_one_and_consensus_exit_candidate(monkeypatch) -> None:
     config = {
         **_base_config(),
-        "meeting_min_rounds": 6,
+        "meeting_min_rounds": 3,
         "meeting_max_rounds": 3,
         "meeting_consensus_threshold_pct": 2.5,
         "meeting_require_peer_acceptance": True,
         "meeting_require_full_path_coverage": False,
         "blind_peer_review_enabled": True,
         "blind_peer_review_shadow_only": True,
+        "blind_peer_review_on_consensus_exit": True,
         "blind_peer_review_timeout_seconds": 12,
-        "llm_council_fast_path_enabled": True,
+        "llm_council_fast_path_enabled": False,
         "llm_council_fast_path_shadow_only": True,
         "llm_council_fast_path_min_participants": 3,
     }
@@ -707,10 +712,12 @@ def test_blind_peer_review_runs_once_when_meeting_continues_after_round_one(monk
     )
 
     assert len(transcript) == 3
-    assert len(blind_prompts) == 1
+    assert len(blind_prompts) == 2
     assert "blind_peer_review" in transcript[0]
     assert "blind_peer_review" not in transcript[1]
-    assert "blind_peer_review" not in transcript[2]
+    assert "blind_peer_review" in transcript[2]
+    assert transcript[0]["blind_peer_review"]["mode"] == "shadow"
+    assert transcript[2]["blind_peer_review"]["mode"] == "consensus_exit_candidate"
 
 
 def test_llm_council_fast_path_blocks_when_report_coherence_would_fail(monkeypatch) -> None:

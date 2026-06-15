@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import unicodedata
 
 from worldcup_brazil.models import ReportBundle
 from worldcup_brazil.probabilities import MatchEstimate
@@ -55,6 +56,33 @@ def _date_prefix(match: MatchEstimate) -> str:
     return f"{match.match_date} "
 
 
+def _normalize_text(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", str(value or ""))
+    return "".join(char for char in normalized if not unicodedata.combining(char)).lower()
+
+
+def _completed_result_for_match(bundle: ReportBundle, match: MatchEstimate) -> str | None:
+    metadata = bundle.metadata or {}
+    group_state = metadata.get("group_state")
+    if not isinstance(group_state, dict):
+        monte_carlo = metadata.get("monte_carlo") if isinstance(metadata.get("monte_carlo"), dict) else {}
+        group_state = monte_carlo.get("group_state") if isinstance(monte_carlo, dict) else {}
+    if not isinstance(group_state, dict):
+        return None
+    brazil_key = _normalize_text(match.brazil)
+    opponent_key = _normalize_text(match.opponent)
+    for item in group_state.get("completed_results", []) or []:
+        if not isinstance(item, dict):
+            continue
+        score = str(item.get("score") or "").strip()
+        if not score:
+            continue
+        score_key = _normalize_text(score)
+        if brazil_key in score_key and opponent_key in score_key:
+            return score
+    return None
+
+
 def _render_match(match: MatchEstimate, *, include_venue: bool = False) -> list[str]:
     lines = [
         (
@@ -79,6 +107,13 @@ def _render_match(match: MatchEstimate, *, include_venue: bool = False) -> list[
 def _render_group_block(bundle: ReportBundle) -> list[str]:
     lines = [f"{bundle.group_name} — probabilidade de vitória do Brasil por jogo:"]
     for match in bundle.group_matches:
+        completed_result = _completed_result_for_match(bundle, match)
+        if completed_result:
+            lines.append(
+                f"• {_date_prefix(match)}vs {match.opponent} ({_venue(match)}): "
+                f"resultado {completed_result}"
+            )
+            continue
         if match.draw_pct is None:
             lines.append(
                 f"• {_date_prefix(match)}vs {match.opponent} ({_venue(match)}): "

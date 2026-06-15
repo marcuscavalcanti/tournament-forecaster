@@ -259,6 +259,48 @@ def test_render_linkedin_post_keeps_required_sections_and_custom_hashtag() -> No
     assert len(post.splitlines()) <= 2500
 
 
+def test_render_group_block_uses_completed_result_ledger() -> None:
+    bundle = ReportBundle(
+        generated_at_iso="2026-06-15T12:00:00+00:00",
+        group_matches=[
+            MatchEstimate(
+                brazil="Brasil",
+                opponent="Marrocos",
+                phase="Fase de grupos",
+                brazil_pct=59.0,
+                opponent_pct=17.0,
+                draw_pct=24.0,
+                match_date="13/jun",
+                statistical_weight=0.5,
+                qualitative_weight=0.5,
+                rationale="Pré-jogo obsoleto se o placar já existe.",
+                venue="Nova Jersey",
+            )
+        ],
+        knockout_matches=[],
+        stage_probabilities={"quartas": 40.0, "semifinal": 20.0, "final": 10.0, "titulo": 4.0},
+        final_rationale="Racional.",
+        sources=[],
+        agent_summaries={},
+        warnings=[],
+        custom_hashtag="#CopaComAchismo",
+        group_name="GRUPO C",
+        group_summary="Brasil em 1º: ~77.1%.",
+        metadata={
+            "group_state": {
+                "completed_results": [
+                    {"score": "Brasil 1-1 Marrocos"},
+                ]
+            }
+        },
+    )
+
+    post = render_linkedin_post(bundle)
+
+    assert "resultado Brasil 1-1 Marrocos" in post
+    assert "59.0% V | 24.0% E | 17.0% D" not in post
+
+
 def test_render_linkedin_post_includes_monte_carlo_path_summary() -> None:
     bundle = ReportBundle(
         generated_at_iso="2026-06-14T12:00:00+00:00",
