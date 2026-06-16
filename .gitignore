@@ -3,6 +3,7 @@ __pycache__/
 .venv/
 .venv_check/
 .backups/
+.worktrees/
 data/
 outputs/
 .DS_Store
