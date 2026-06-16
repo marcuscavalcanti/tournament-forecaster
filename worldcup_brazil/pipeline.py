@@ -6,6 +6,7 @@ import math
 import os
 import random
 import re
+import threading
 import unicodedata
 import urllib.parse
 from dataclasses import dataclass, replace
@@ -3722,6 +3723,7 @@ async def _protagonist_question(
     baseline_title_pct: float,
     allow_agent_fallback: bool,
     timeout: int,
+    cancel_event: threading.Event | None = None,
 ) -> tuple[str, Any, str | None]:
     by_slot = _agent_spec_by_slot(agent_specs)
     spec = by_slot.get(protagonist)
@@ -3739,6 +3741,7 @@ async def _protagonist_question(
         baseline_title_pct=baseline_title_pct,
         timeout=timeout,
         allow_local_fallback=allow_agent_fallback,
+        cancel_event=cancel_event,
     )
     question = opinion.question or _fallback_question(protagonist, previous_turn)
     invalid_reason = _invalid_protagonist_question_reason(question, config)
@@ -4591,6 +4594,7 @@ async def _run_model_meeting(
     reentry_removed_reasons: dict[str, str] | None = None,
     fast_path_report_coherence_check: Callable[[Any], str] | None = None,
     progress_sink: dict[str, Any] | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> tuple[Any, list[Any], list[dict[str, Any]], list[Any]]:
     agent_specs = list(agent_specs)
     planning_opinions = list(planning_opinions)
@@ -4849,6 +4853,7 @@ async def _run_model_meeting(
                 baseline_title_pct=baseline_title_pct,
                 allow_agent_fallback=allow_agent_fallback,
                 timeout=protagonist_timeout,
+                cancel_event=cancel_event,
             )
         finally:
             if watchdog:
@@ -4930,6 +4935,7 @@ async def _run_model_meeting(
                 phase="response",
                 round_index=round_index,
             ),
+            cancel_event=cancel_event,
         )
         if token_cost_ledger is not None:
             _record_token_costs(
@@ -6030,6 +6036,7 @@ async def _run_parallel_opponent_debriefing(
     token_cost_ledger: dict[str, Any],
     watchdog: RunWatchdog | None = None,
     progress_sink: dict[str, Any] | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
     opponent_config = _opponent_debriefing_config(config)
     meeting_watchdog = (
@@ -6051,6 +6058,7 @@ async def _run_parallel_opponent_debriefing(
         watchdog=meeting_watchdog,
         token_cost_ledger=token_cost_ledger,
         progress_sink=progress_sink,
+        cancel_event=cancel_event,
     )
     exit_status = str(getattr(consensus, "exit_status", "consensus") or "consensus")
     exit_warning = str(getattr(consensus, "exit_warning", "") or "")
@@ -6898,6 +6906,7 @@ async def build_report_bundle(
     opponent_debriefing_task = None
     opponent_debriefing_result: dict[str, Any] = {"enabled": False}
     opponent_debriefing_progress: dict[str, Any] = {}
+    opponent_cancel_event = threading.Event()
     if _parallel_opponent_debriefing_enabled(config) and active_agent_specs:
         budget_warning = _opponent_debriefing_budget_warning(config)
         if budget_warning:
@@ -6915,6 +6924,7 @@ async def build_report_bundle(
                 token_cost_ledger=token_cost_ledger,
                 watchdog=watchdog,
                 progress_sink=opponent_debriefing_progress,
+                cancel_event=opponent_cancel_event,
             )
         )
         if watchdog:
@@ -7000,6 +7010,7 @@ async def build_report_bundle(
                 )
         except asyncio.TimeoutError:
             opponent_timeout = max(0.001, float(config.get("parallel_opponent_debriefing_timeout_seconds", 900)))
+            opponent_cancel_event.set()
             opponent_debriefing_result = {
                 "enabled": True,
                 "failed": True,

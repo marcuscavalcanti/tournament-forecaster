@@ -4,6 +4,8 @@ import io
 import json
 import subprocess
 import sys
+import threading
+import time
 import urllib.error
 
 import pytest
@@ -13,6 +15,7 @@ from worldcup_brazil.agents import (
     AgentSpec,
     _browser_command_env,
     _browser_command_timeout,
+    _call_text_with_hard_timeout_async,
     _call_browser_command_agent,
     _call_remote_agent,
     _post_json,
@@ -79,6 +82,44 @@ def test_load_agent_specs_accepts_single_deepseek_api_slot_and_gemini() -> None:
     assert by_slot["DeepSeek V4 Pro"].max_output_tokens == 7000
     assert by_slot["Gemini Pro"].provider == "google-gemini"
     assert by_slot["Gemini Pro"].reasoning_effort == "high"
+
+
+def test_hard_timeout_wrapper_exits_when_cancel_event_is_set(monkeypatch) -> None:
+    started = threading.Event()
+    cancel_event = threading.Event()
+
+    def fake_remote_agent(spec, prompt, *, timeout):
+        started.set()
+        while not cancel_event.is_set():
+            time.sleep(0.005)
+        time.sleep(1.0)
+        return "{}"
+
+    monkeypatch.setattr("worldcup_brazil.agents._call_remote_agent", fake_remote_agent)
+    spec = AgentSpec(
+        slot="GPT 5.5",
+        provider="openai",
+        model="gpt-5.5",
+        env_api_key="OPENAI_API_KEY",
+        endpoint="https://api.openai.com/v1/responses",
+    )
+
+    async def run_call() -> None:
+        task = asyncio.create_task(
+            _call_text_with_hard_timeout_async(
+                "remote",
+                spec,
+                "prompt",
+                timeout=30,
+                cancel_event=cancel_event,
+            )
+        )
+        await asyncio.to_thread(started.wait, 1.0)
+        cancel_event.set()
+        with pytest.raises(TimeoutError, match="cancelled"):
+            await asyncio.wait_for(task, timeout=1.0)
+
+    asyncio.run(run_call())
 
 
 def test_load_agent_specs_merges_operational_defaults_for_effort_and_local_cli(monkeypatch) -> None:

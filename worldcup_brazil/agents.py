@@ -368,7 +368,10 @@ def _call_text_with_hard_timeout(
     prompt: str,
     *,
     timeout: int,
+    cancel_event: threading.Event | None = None,
 ) -> str:
+    if cancel_event is not None and cancel_event.is_set():
+        raise TimeoutError(f"{spec.slot} {mode} cancelled before dispatch")
     result_queue: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
 
     def target() -> None:
@@ -389,12 +392,20 @@ def _call_text_with_hard_timeout(
     )
     thread.start()
     hard_deadline = max(1.0, float(timeout) + _hard_timeout_margin_seconds())
-    try:
-        status, payload = result_queue.get(timeout=hard_deadline)
-    except queue.Empty as exc:
-        raise TimeoutError(
-            f"{spec.slot} {mode} hard timeout after {hard_deadline:.0f}s (nominal {timeout}s + margem)"
-        ) from exc
+    deadline_at = time.monotonic() + hard_deadline
+    while True:
+        if cancel_event is not None and cancel_event.is_set():
+            raise TimeoutError(f"{spec.slot} {mode} cancelled by caller")
+        remaining = deadline_at - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(
+                f"{spec.slot} {mode} hard timeout after {hard_deadline:.0f}s (nominal {timeout}s + margem)"
+            )
+        try:
+            status, payload = result_queue.get(timeout=min(0.25, remaining))
+            break
+        except queue.Empty:
+            continue
     if status == "err":
         raise payload
     return str(payload)
@@ -406,6 +417,7 @@ async def _call_text_with_hard_timeout_async(
     prompt: str,
     *,
     timeout: int,
+    cancel_event: threading.Event | None = None,
 ) -> str:
     return await asyncio.to_thread(
         _call_text_with_hard_timeout,
@@ -413,6 +425,7 @@ async def _call_text_with_hard_timeout_async(
         spec,
         prompt,
         timeout=timeout,
+        cancel_event=cancel_event,
     )
 
 
@@ -1959,17 +1972,50 @@ async def call_agent(
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
     allow_local_fallback: bool = True,
     call_role: str | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> AgentOpinion:
     runtime_spec = _spec_for_call_role(spec, call_role or _role_from_prompt(prompt))
     try:
-        text = await _call_text_with_hard_timeout_async("remote", runtime_spec, prompt, timeout=timeout)
+        try:
+            text = await _call_text_with_hard_timeout_async(
+                "remote",
+                runtime_spec,
+                prompt,
+                timeout=timeout,
+                cancel_event=cancel_event,
+            )
+        except TypeError as exc:
+            if "cancel_event" not in str(exc):
+                raise
+            text = await _call_text_with_hard_timeout_async(
+                "remote",
+                runtime_spec,
+                prompt,
+                timeout=timeout,
+            )
         return parse_agent_opinion(runtime_spec.slot, text, fallback_title_pct=baseline_title_pct)
     except (RuntimeError, urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
         if not runtime_spec.prefer_bridge and _has_api_key(runtime_spec) and (
             runtime_spec.web_fetch_url or runtime_spec.browser_command
         ):
             try:
-                text = await _call_text_with_hard_timeout_async("bridge", runtime_spec, prompt, timeout=timeout)
+                try:
+                    text = await _call_text_with_hard_timeout_async(
+                        "bridge",
+                        runtime_spec,
+                        prompt,
+                        timeout=timeout,
+                        cancel_event=cancel_event,
+                    )
+                except TypeError as exc:
+                    if "cancel_event" not in str(exc):
+                        raise
+                    text = await _call_text_with_hard_timeout_async(
+                        "bridge",
+                        runtime_spec,
+                        prompt,
+                        timeout=timeout,
+                    )
                 return parse_agent_opinion(runtime_spec.slot, text, fallback_title_pct=baseline_title_pct)
             except (RuntimeError, urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
                 pass
@@ -2006,6 +2052,7 @@ async def call_all_agents(
     allow_local_fallback: bool = True,
     progress_callback: Any = None,
     call_role: str | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> list[AgentOpinion]:
     specs = specs or default_agent_specs()
     by_slot = {spec.slot: spec for spec in specs}
@@ -2034,9 +2081,10 @@ async def call_all_agents(
                         timeout=timeout,
                         allow_local_fallback=allow_local_fallback,
                         call_role=role,
+                        cancel_event=cancel_event,
                     )
                 except TypeError as exc:
-                    if "call_role" not in str(exc):
+                    if "call_role" not in str(exc) and "cancel_event" not in str(exc):
                         raise
                     opinion = await call_agent(
                         spec,
