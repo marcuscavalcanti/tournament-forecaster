@@ -5944,7 +5944,8 @@ def _opponent_debriefing_config(config: dict[str, Any]) -> dict[str, Any]:
             "Sala paralela de debriefing para adversários prováveis do cruzamento do Brasil. "
             "Simule 16 avos, Oitavas, Quartas, Semifinal e Final dentro do bracket oficial; "
             "use os placares realizados e as tabelas vivas dos grupos de cruzamento expostos em "
-            "monte_carlo.relevant_group_states/_path_relevant_group_states como premissa forte; "
+            "monte_carlo.relevant_group_states/_path_relevant_group_states como baseline auditável e desafiável, "
+            "não como premissa fixa; "
             "placar realizado substitui probabilidade pré-jogo, e tabela viva muda seed, cenário e adversário provável; "
             "para cada candidato permitido, estime scenario_probabilities e match_probabilities com as "
             "mesmas famílias de dados usadas para o Brasil: bets/prediction markets, ratings, Monte Carlo, "
@@ -6168,6 +6169,18 @@ def _agent_debate_prompt(
     )
 
 
+def _room_specific_protagonist_instruction(config: dict[str, Any]) -> str:
+    if str(config.get("_meeting_room", "main_brazil") or "main_brazil") != "opponent_path":
+        return ""
+    return (
+        "Nesta sala lateral de cruzamentos, formule uma pergunta decisória: peça aos modelos que escolham "
+        "um top-2 por fase entre os adversários permitidos pelo bracket oficial, estimem a chance de cada "
+        "cenário acontecer, apontem o dado que moveria essa ordem e digam se o baseline auditável e "
+        "desafiável do Monte Carlo deve ser mantido, corrigido ou substituído por evidência fresca. "
+        "Não trate o Monte Carlo como premissa fixa; ele é o ponto de partida a ser auditado."
+    )
+
+
 def _protagonist_question_prompt(
     *,
     config: dict[str, Any],
@@ -6206,6 +6219,7 @@ def _protagonist_question_prompt(
         f"{_meeting_full_path_instruction(config)} "
         f"{_event_impact_prompt_instruction()} "
         f"{_auditable_sources_instruction(config)} "
+        f"{_room_specific_protagonist_instruction(config)} "
         "Não faça comparação com benchmarks externos nesta sala; esse passo acontece em prompt separado depois. "
         f"{_meeting_scope_instruction(config)}\n\n"
         f"Data: {generated_at.isoformat()}\n"

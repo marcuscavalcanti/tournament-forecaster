@@ -7,6 +7,7 @@ from worldcup_brazil.pipeline import (
     _configured_matches_for_prompt,
     _has_fixed_quanti_quali_allocation,
     _invalid_protagonist_question_reason,
+    _opponent_debriefing_config,
     load_config,
     _meeting_response_prompt,
     _protagonist_question_prompt,
@@ -977,3 +978,27 @@ def test_main_prompts_do_not_cite_fixed_quantitative_qualitative_percentages() -
         assert "dados quantitativos e qualitativos" in lowered
         assert "use 70% estatística e 30% qualitativo" not in lowered
     assert "title_pct" in prompt
+
+
+def test_opponent_room_prompt_asks_for_decisive_top_two_and_challengeable_mc_baseline() -> None:
+    generated_at = datetime(2026, 6, 14, 12, tzinfo=timezone.utc)
+    config = load_config(Path("config/worldcup_brazil.example.json"))
+    opponent_config = _opponent_debriefing_config(config)
+
+    opponent_prompt = _protagonist_question_prompt(
+        config=opponent_config,
+        protagonist="GPT 5.5",
+        previous_turn=None,
+        generated_at=generated_at,
+    )
+    main_prompt = _protagonist_question_prompt(
+        config=config,
+        protagonist="GPT 5.5",
+        previous_turn=None,
+        generated_at=generated_at,
+    )
+
+    assert "top-2 por fase" in opponent_prompt.lower()
+    assert "baseline auditável e desafiável" in opponent_prompt.lower()
+    assert "premissa forte" not in opponent_prompt.lower()
+    assert "top-2 por fase" not in main_prompt.lower()
