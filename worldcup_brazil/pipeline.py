@@ -4855,6 +4855,13 @@ async def _run_model_meeting(
                     "timeout_seconds": protagonist_timeout,
                 },
             )
+        if progress_sink is not None:
+            progress_sink["pending_round"] = {
+                "round": round_index,
+                "protagonist": protagonist,
+                "question": "pergunta do protagonista ainda em geração",
+                "status": "question_in_progress",
+            }
         try:
             question, question_opinion, invalid_question_reason = await _protagonist_question(
                 config=config,
@@ -4925,6 +4932,7 @@ async def _run_model_meeting(
                 "round": round_index,
                 "protagonist": protagonist,
                 "question": question,
+                "status": "question_ready",
             }
 
         responder_specs = [spec for spec in agent_specs if getattr(spec, "slot", None) != protagonist]

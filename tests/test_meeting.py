@@ -703,6 +703,106 @@ def test_model_meeting_does_not_close_consensus_before_full_path_coverage(monkey
     assert transcript[1]["coverage"]["complete"] is True
 
 
+def test_model_meeting_progress_sink_records_pending_round_before_question_finishes(monkeypatch) -> None:
+    config = {
+        "group_matches": [{"opponent": "Marrocos"}],
+        "knockout_matches": [{"phase": "16 avos", "opponent": "Adversário mais provável a definir"}],
+        "meeting_max_rounds": 1,
+        "meeting_min_rounds": 1,
+        "meeting_min_participants": 2,
+        "meeting_consensus_threshold_pct": 10.0,
+        "meeting_require_peer_acceptance": False,
+        "meeting_require_full_path_coverage": False,
+        "require_auditable_source_urls_for_meeting_votes": False,
+    }
+    agent_specs = [
+        AgentSpec(
+            slot="GPT 5.5",
+            provider="openai",
+            model="gpt-5.5",
+            env_api_key="OPENAI_API_KEY",
+            endpoint="https://api.openai.com/v1/responses",
+        ),
+        AgentSpec(
+            slot="Perplexity Pro",
+            provider="openai-compatible",
+            model="sonar-pro",
+            env_api_key="PERPLEXITY_API_KEY",
+            endpoint="https://api.perplexity.ai/chat/completions",
+        ),
+    ]
+    planning_opinions = [
+        AgentOpinion(
+            agent="GPT 5.5",
+            title_pct=8.2,
+            summary="Planejamento completo com fonte.",
+            source_urls=["https://example.com/gpt"],
+        ),
+        AgentOpinion(
+            agent="Perplexity Pro",
+            title_pct=8.1,
+            summary="Planejamento completo com fonte.",
+            source_urls=["https://example.com/perplexity"],
+        ),
+    ]
+
+    async def scenario() -> dict:
+        progress_sink: dict = {}
+        call_started = asyncio.Event()
+        release_call = asyncio.Event()
+
+        async def fake_call_agent(*args, **kwargs):
+            call_started.set()
+            await release_call.wait()
+            return AgentOpinion(
+                agent="GPT 5.5",
+                title_pct=8.0,
+                summary="Pergunta pronta.",
+                question="Com odds e Elo, concordam com Marrocos e 16 avos?",
+                answer="Pergunta pronta.",
+                source_urls=["https://example.com/gpt"],
+                agrees_with_protagonist=True,
+            )
+
+        async def fake_call_all_agents(*args, **kwargs):
+            raise AssertionError("a rodada nao deveria chegar às respostas neste teste")
+
+        monkeypatch.setattr("worldcup_brazil.pipeline.call_agent", fake_call_agent)
+        monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+
+        task = asyncio.create_task(
+            _run_model_meeting(
+                config=config,
+                planning_opinions=planning_opinions,
+                generated_at=datetime(2026, 6, 14, tzinfo=timezone.utc),
+                agent_specs=agent_specs,
+                baseline_title_pct=8.0,
+                allow_agent_fallback=True,
+                watchdog=None,
+                progress_sink=progress_sink,
+            )
+        )
+        await asyncio.wait_for(call_started.wait(), timeout=1.0)
+        snapshot = dict(progress_sink)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        return snapshot
+
+    expected_protagonist = _initial_protagonist(planning_opinions)
+    progress = asyncio.run(scenario())
+
+    assert progress["participants"] == ["GPT 5.5", "Perplexity Pro"]
+    assert progress["pending_round"] == {
+        "round": 1,
+        "protagonist": expected_protagonist,
+        "question": "pergunta do protagonista ainda em geração",
+        "status": "question_in_progress",
+    }
+
+
 def test_model_meeting_reenters_removed_agent_after_async_source_probe(monkeypatch) -> None:
     config = {
         "group_matches": [{"opponent": "Marrocos"}],
