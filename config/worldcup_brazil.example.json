@@ -16,6 +16,13 @@
     "minimum_declared_coverage": 0.95,
     "model_dispersion_method": "logit_student_t"
   },
+  "market_title_challenge": {
+    "enabled": true,
+    "absolute_gap_pct": 3.0,
+    "relative_gap_pct": 0.4,
+    "min_pct": 1.0,
+    "max_pct": 25.0
+  },
   "monte_carlo": {
     "enabled": true,
     "iterations": 40000,

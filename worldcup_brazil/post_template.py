@@ -177,10 +177,25 @@ def _model_intro(bundle: Any) -> str:
 
 def _run_note(bundle: Any) -> str:
     metadata = getattr(bundle, "metadata", {}) or {}
+    notes: list[str] = []
     opponent_room = metadata.get("parallel_opponent_debriefing") or {}
     if opponent_room.get("enabled") and not bool(opponent_room.get("usable_for_main_room", True)):
-        return "⚠️ Nota do run: cruzamentos sem consenso lateral; usei Monte Carlo/bracket oficial.\n\n"
-    return ""
+        notes.append("cruzamentos sem consenso lateral; usei Monte Carlo/bracket oficial")
+    market_challenge = metadata.get("market_title_challenge") or {}
+    if isinstance(market_challenge, dict) and bool(market_challenge.get("triggered")):
+        low = market_challenge.get("market_low_pct")
+        high = market_challenge.get("market_high_pct", low)
+        if low is not None and high is not None and abs(float(high) - float(low)) >= 0.05:
+            market = f"{_pct(low)}-{_pct(high)}"
+        else:
+            market = _pct(low)
+        notes.append(
+            "Mercado desafia o Hexa: "
+            f"MC {_pct(market_challenge.get('model_title_pct'))}; mercado {market}. Mantive MC"
+        )
+    if not notes:
+        return ""
+    return "⚠️ Nota do run: " + "; ".join(notes) + ".\n\n"
 
 
 def _analysis_short_date(bundle: Any) -> str:

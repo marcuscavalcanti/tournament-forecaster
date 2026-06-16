@@ -6,6 +6,7 @@ from worldcup_brazil.pipeline import (
     _apply_agent_team_context_to_monte_carlo_config,
     _apply_meeting_knockout_scenarios,
     _apply_meeting_match_probabilities,
+    _market_title_challenge,
     _apply_monte_carlo_knockout_scenarios,
     _stage_confidence_intervals,
     _validate_report_coherence,
@@ -109,6 +110,61 @@ def test_stage_confidence_intervals_falls_back_to_envelope_when_centers_disagree
     assert config["_stage_interval_metadata"]["titulo"]["method"] == "envelope_fallback"
     assert config["_stage_interval_metadata"]["titulo"]["fallback_reason"] == "location_gap"
     assert intervals["titulo"] == (5.0, 42.0)
+
+
+def test_market_title_challenge_flags_large_gap_without_changing_model_title() -> None:
+    transcript = [
+        {
+            "round": 3,
+            "question": "O MC aponta 4.5% de titulo, mas o mercado de-vigado está perto de 8.5%. Concordam?",
+            "responses": [
+                {
+                    "agent": "Opus 4.8",
+                    "answer": "Mercado/sportsbooks para campeão Brasil ficam entre 9% e 11%, então é divergência real.",
+                    "removed_from_main": False,
+                }
+            ],
+        }
+    ]
+
+    challenge = _market_title_challenge(
+        {"titulo": 4.5},
+        transcript,
+        config={"market_title_challenge": {"enabled": True, "absolute_gap_pct": 3.0, "relative_gap_pct": 0.40}},
+    )
+
+    assert challenge["triggered"] is True
+    assert challenge["model_title_pct"] == 4.5
+    assert challenge["market_low_pct"] == 8.5
+    assert challenge["market_high_pct"] == 11.0
+    assert challenge["market_mid_pct"] == 9.8
+    assert challenge["absolute_gap_pct"] == 5.3
+    assert "mantem_monte_carlo" in challenge["decision"]
+
+
+def test_market_title_challenge_ignores_small_gap_and_preserves_status() -> None:
+    transcript = [
+        {
+            "round": 1,
+            "responses": [
+                {
+                    "agent": "DeepSeek V4 Pro",
+                    "answer": "Mercado de titulo do Brasil esta em 8.9%, muito perto do MC em 8.2%.",
+                    "removed_from_main": False,
+                }
+            ],
+        }
+    ]
+
+    challenge = _market_title_challenge(
+        {"titulo": 8.2},
+        transcript,
+        config={"market_title_challenge": {"enabled": True, "absolute_gap_pct": 3.0, "relative_gap_pct": 0.40}},
+    )
+
+    assert challenge["triggered"] is False
+    assert challenge["status"] == "within_threshold"
+    assert challenge["model_title_pct"] == 8.2
 
 
 def test_apply_meeting_match_probabilities_accepts_valid_group_win_pct() -> None:

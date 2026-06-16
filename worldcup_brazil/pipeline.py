@@ -1933,6 +1933,169 @@ def _stage_probability_source(config: dict[str, Any]) -> str:
     return "agent_scaled_fallback"
 
 
+def _normalized_ascii_text(value: Any) -> str:
+    return unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode("ascii").lower()
+
+
+_MARKET_TITLE_PERCENT_RE = re.compile(r"(?<!\d)(\d{1,2}(?:[,.]\d+)?)\s*%")
+_MARKET_TITLE_TERMS = (
+    "mercado",
+    "market",
+    "odds",
+    "sportsbook",
+    "bookmaker",
+    "betfair",
+    "polymarket",
+    "prediction market",
+    "de-vig",
+    "devig",
+)
+_TITLE_CONTEXT_TERMS = (
+    "titulo",
+    "title",
+    "hexa",
+    "campeao",
+    "campeonato",
+    "winner",
+    "levanta a taca",
+)
+
+
+def _market_title_challenge_config(config: dict[str, Any]) -> dict[str, Any]:
+    raw = config.get("market_title_challenge")
+    configured = raw if isinstance(raw, dict) else {}
+    return {
+        "enabled": bool(configured.get("enabled", True)),
+        "absolute_gap_pct": float(configured.get("absolute_gap_pct", 3.0)),
+        "relative_gap_pct": float(configured.get("relative_gap_pct", 0.40)),
+        "min_pct": float(configured.get("min_pct", 1.0)),
+        "max_pct": float(configured.get("max_pct", 25.0)),
+        "max_evidence_items": int(configured.get("max_evidence_items", 4)),
+    }
+
+
+def _iter_market_title_texts(meeting_transcript: list[dict[str, Any]]) -> list[tuple[str, str]]:
+    texts: list[tuple[str, str]] = []
+    for turn in meeting_transcript or []:
+        if not isinstance(turn, dict):
+            continue
+        round_label = str(turn.get("round") or turn.get("round_index") or "?")
+        for key in ("question", "protagonist_question", "prompt"):
+            value = str(turn.get(key) or "").strip()
+            if value:
+                texts.append((f"rodada {round_label} pergunta", value))
+        for response in turn.get("responses", []) or []:
+            if not isinstance(response, dict):
+                continue
+            if bool(response.get("removed_from_main", False)):
+                continue
+            agent = str(response.get("agent") or "modelo").strip() or "modelo"
+            for key in ("answer", "summary", "rationale"):
+                value = str(response.get(key) or "").strip()
+                if value:
+                    texts.append((f"rodada {round_label} {agent}", value))
+    return texts
+
+
+def _market_title_values_from_text(text: str, *, config: dict[str, Any]) -> list[float]:
+    settings = _market_title_challenge_config(config)
+    values: list[float] = []
+    normalized = _normalized_ascii_text(text)
+    if not any(term in normalized for term in _MARKET_TITLE_TERMS):
+        return values
+    if not any(term in normalized for term in _TITLE_CONTEXT_TERMS):
+        return values
+    for match in _MARKET_TITLE_PERCENT_RE.finditer(str(text or "")):
+        try:
+            value = float(match.group(1).replace(",", "."))
+        except ValueError:
+            continue
+        if not (settings["min_pct"] <= value <= settings["max_pct"]):
+            continue
+        prefix = _normalized_ascii_text(str(text or "")[max(0, match.start() - 160) : match.start()])
+        if not any(term in prefix for term in _MARKET_TITLE_TERMS):
+            continue
+        values.append(round(value, 1))
+    return values
+
+
+def _market_title_challenge(
+    stage_probabilities: dict[str, float],
+    meeting_transcript: list[dict[str, Any]],
+    *,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    settings = _market_title_challenge_config(config)
+    model_title_pct = round(float(stage_probabilities.get("titulo", 0.0) or 0.0), 1)
+    base = {
+        "enabled": settings["enabled"],
+        "triggered": False,
+        "status": "disabled" if not settings["enabled"] else "no_market_signal",
+        "decision": "mantem_monte_carlo",
+        "model_title_pct": model_title_pct,
+        "market_low_pct": None,
+        "market_high_pct": None,
+        "market_mid_pct": None,
+        "absolute_gap_pct": None,
+        "relative_gap_pct": None,
+        "threshold_absolute_gap_pct": settings["absolute_gap_pct"],
+        "threshold_relative_gap_pct": settings["relative_gap_pct"],
+        "evidence": [],
+    }
+    if not settings["enabled"]:
+        return base
+
+    candidates: list[float] = []
+    evidence: list[dict[str, str]] = []
+    for label, text in _iter_market_title_texts(meeting_transcript):
+        values = _market_title_values_from_text(text, config=config)
+        if not values:
+            continue
+        candidates.extend(values)
+        if len(evidence) < settings["max_evidence_items"]:
+            snippet = re.sub(r"\s+", " ", str(text or "").strip())
+            evidence.append({"source": label, "snippet": snippet[:260]})
+
+    if not candidates:
+        base["evidence"] = evidence
+        return base
+
+    market_low = round(min(candidates), 1)
+    market_high = round(max(candidates), 1)
+    market_mid = round((market_low + market_high) / 2.0, 1)
+    absolute_gap = round(abs(market_mid - model_title_pct), 1)
+    relative_gap = round(absolute_gap / max(0.1, model_title_pct), 2)
+    triggered = (
+        absolute_gap >= settings["absolute_gap_pct"]
+        and relative_gap >= settings["relative_gap_pct"]
+    )
+    return {
+        **base,
+        "triggered": triggered,
+        "status": "challenged" if triggered else "within_threshold",
+        "decision": "mantem_monte_carlo_mercado_como_desafio" if triggered else "mantem_monte_carlo",
+        "market_low_pct": market_low,
+        "market_high_pct": market_high,
+        "market_mid_pct": market_mid,
+        "absolute_gap_pct": absolute_gap,
+        "relative_gap_pct": relative_gap,
+        "evidence": evidence,
+    }
+
+
+def _market_title_challenge_warning(challenge: dict[str, Any]) -> str:
+    if not bool(challenge.get("triggered")):
+        return ""
+    model = float(challenge.get("model_title_pct") or 0.0)
+    low = float(challenge.get("market_low_pct") or 0.0)
+    high = float(challenge.get("market_high_pct") or low)
+    market = f"{low:.1f}%-{high:.1f}%" if abs(high - low) >= 0.05 else f"{low:.1f}%"
+    return (
+        "Mercado desafia o título do Monte Carlo: "
+        f"MC={model:.1f}%, mercado={market}; número principal mantido pelo MC e divergência exposta."
+    )
+
+
 def _bounded_confidence_level(value: Any, *, default: float = 0.95) -> float:
     try:
         confidence_level = float(value)
@@ -7357,6 +7520,21 @@ async def build_report_bundle(
     )
 
     stage_probabilities = _stage_probabilities(consensus.title_pct, config)
+    market_title_challenge = _market_title_challenge(
+        stage_probabilities,
+        meeting_transcript,
+        config=config,
+    )
+    market_title_warning = _market_title_challenge_warning(market_title_challenge)
+    if market_title_warning:
+        warnings.append(market_title_warning)
+        if watchdog:
+            watchdog.event(
+                "market_title_challenge",
+                "warn",
+                detail=market_title_warning,
+                extra=market_title_challenge,
+            )
     stage_confidence_intervals = _stage_confidence_intervals(
         stage_probabilities,
         dispersion_pct=consensus.dispersion_pct,
@@ -7434,6 +7612,7 @@ async def build_report_bundle(
                 config=config,
                 stage_probabilities=stage_probabilities,
             ),
+            "market_title_challenge": market_title_challenge,
             "parallel_opponent_debriefing": {
                 "enabled": bool(opponent_debriefing_result.get("enabled", False)),
                 "failed": bool(opponent_debriefing_result.get("failed", False)),
