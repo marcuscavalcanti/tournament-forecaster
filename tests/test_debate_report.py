@@ -128,6 +128,76 @@ def test_render_debate_report_flags_scenario_match_probability_collision() -> No
     assert "ATENCAO: brazil_pct igual ao scenario_pct" in report
 
 
+def test_render_debate_report_explains_opponent_room_timeout_checkpoint() -> None:
+    payload = {
+        "bundle": {
+            "generated_at_iso": "2026-06-15T18:58:59+00:00",
+            "stage_probabilities": {"titulo": 6.8},
+            "meeting_transcript": [],
+            "metadata": {
+                "parallel_opponent_debriefing": {
+                    "enabled": True,
+                    "failed": True,
+                    "timed_out": True,
+                    "timeout_seconds": 900.0,
+                    "rounds": 0,
+                    "participants": ["GPT 5.5", "DeepSeek V4 Pro"],
+                    "pending_round": {
+                        "round": 1,
+                        "protagonist": "GPT 5.5",
+                        "question": "Quais sao os top-2 por fase no cruzamento oficial?",
+                    },
+                    "partial_progress_available": True,
+                    "usable_for_main_room": False,
+                    "error": "sala paralela excedeu timeout total de 900.0s",
+                }
+            },
+        }
+    }
+
+    report = render_debate_report(payload)
+
+    assert "timeout preservado" in report
+    assert "rodada 1" in report
+    assert "Quais sao os top-2 por fase" in report
+    assert "usou Monte Carlo/bracket como fallback" in report
+
+
+def test_render_debate_report_explains_degraded_shadow_near_consensus() -> None:
+    payload = {
+        "bundle": {
+            "generated_at_iso": "2026-06-15T18:58:59+00:00",
+            "stage_probabilities": {"titulo": 6.8},
+            "meeting_transcript": [],
+            "metadata": {
+                "parallel_opponent_debriefing": {
+                    "enabled": True,
+                    "failed": False,
+                    "rounds": 3,
+                    "participants": ["GPT 5.5", "Perplexity Pro", "DeepSeek V4 Pro"],
+                    "meeting_transcript": [],
+                    "usable_for_main_room": False,
+                    "exit_status": "max_rounds_no_consensus",
+                    "degraded": False,
+                    "degraded_shadow_only": True,
+                    "degraded_would_be_usable": True,
+                    "degraded_decision": {
+                        "reason": "shadow_only",
+                        "valid_participants": 3,
+                        "coverage_complete": True,
+                    },
+                }
+            },
+        }
+    }
+
+    report = render_debate_report(payload)
+
+    assert "quase-consenso degradado medido em shadow" in report
+    assert "não reescreveu a sala Brasil" in report
+    assert "valid_participants=3" in report
+
+
 def test_find_latest_run_json_prefers_newest_linkedin_json(tmp_path: Path) -> None:
     older = tmp_path / "linkedin_brazil_2026-06-08.json"
     newer = tmp_path / "linkedin_brazil_2026-06-09.json"
