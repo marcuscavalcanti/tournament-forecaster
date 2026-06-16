@@ -152,10 +152,13 @@ def _group_loss_pct(match: Any) -> float | None:
 def _model_intro(bundle: Any) -> str:
     metadata = getattr(bundle, "metadata", {}) or {}
     removed = list(metadata.get("removed_agent_slots") or [])
-    influence = getattr(bundle, "model_influence_pct", {}) or {}
     participation = getattr(bundle, "model_participation", {}) or {}
+    consensus_participants = participation.get("last_consensus_participants") if isinstance(participation, dict) else []
     protagonists = participation.get("protagonist_counts") if isinstance(participation, dict) else {}
-    active_count = len(influence) or (len(protagonists) if isinstance(protagonists, dict) else 0)
+    if isinstance(consensus_participants, list) and consensus_participants:
+        active_count = len({str(item) for item in consensus_participants if str(item).strip()})
+    else:
+        active_count = len(protagonists) if isinstance(protagonists, dict) else 0
     if active_count and removed:
         return (
             f"Como prometi: neste run, {active_count} modelos ativos pesquisaram odds, rankings e notícias, "
@@ -454,22 +457,32 @@ def _build_round_stats(bundle: Any, *, slots: int = 3) -> str:
     valid_influence = {k: float(v) for k, v in influence.items() if v is not None}
     participation = getattr(bundle, "model_participation", {}) or {}
     messages = participation.get("total_messages")
+    valid_messages = participation.get("valid_messages")
+    invalid_responses = participation.get("invalid_responses")
     rounds = participation.get("total_rounds")
     if messages and rounds and len(valid_influence) >= 3:
         top_agent, top_value = max(valid_influence.items(), key=lambda kv: kv[1])
         low_agent, low_value = min(valid_influence.items(), key=lambda kv: kv[1])
         tied = [k for k, v in valid_influence.items() if k != top_agent and abs(v - top_value) < 0.05]
+        message_text = f"{messages} mensagens"
+        if invalid_responses:
+            message_text += f" ({valid_messages or messages} válidas, {invalid_responses} removidas)"
+        low_fragment = (
+            f"{low_agent.split()[0]} quase não moveu ({_pct(low_value)})"
+            if low_value < 5.0
+            else f"{low_agent.split()[0]} teve menor influência ({_pct(low_value)})"
+        )
         if tied:
             influence_text = (
                 f"{top_agent.split()[0]} e {tied[0].split()[0]} lideraram ({_pct(top_value)}); "
-                f"{low_agent.split()[0]} quase não moveu ({_pct(low_value)})"
+                f"{low_fragment}"
             )
         else:
             influence_text = (
                 f"{top_agent.split()[0]} liderou ({_pct(top_value)}); "
-                f"{low_agent.split()[0]} quase não moveu ({_pct(low_value)})"
+                f"{low_fragment}"
             )
-        candidates.append((110, "perfil_sala", f"💬 {messages} mensagens em {rounds} rodadas; {influence_text}"))
+        candidates.append((110, "perfil_sala", f"💬 {message_text} em {rounds} rodadas; {influence_text}"))
 
     costs = (getattr(bundle, "model_token_costs", {}) or {}).get("total") or {}
     cost_usd = costs.get("cost_usd")
@@ -493,15 +506,20 @@ def _build_round_stats(bundle: Any, *, slots: int = 3) -> str:
         low_agent, low_value = min(valid_influence.items(), key=lambda kv: kv[1])
         gap_weight = 60 + min(30.0, top_value - low_value)
         tied = [k for k, v in valid_influence.items() if k != top_agent and abs(v - top_value) < 0.05]
+        low_fragment = (
+            f"{low_agent.split()[0]} quase não pesou ({_pct(low_value)})"
+            if low_value < 5.0
+            else f"{low_agent.split()[0]} teve menor influência ({_pct(low_value)})"
+        )
         if tied:
             line = (
                 f"🧭 {top_agent.split()[0]} e {tied[0].split()[0]} empataram como voz mais forte "
-                f"({_pct(top_value)}); {low_agent.split()[0]} quase não pesou ({_pct(low_value)})"
+                f"({_pct(top_value)}); {low_fragment}"
             )
         else:
             line = (
                 f"🧭 {top_agent.split()[0]} mandou no número final ({_pct(top_value)}); "
-                f"{low_agent.split()[0]} quase não pesou ({_pct(low_value)})"
+                f"{low_fragment}"
             )
         candidates.append((gap_weight, "influencia", line))
 

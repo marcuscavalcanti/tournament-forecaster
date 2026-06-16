@@ -174,6 +174,18 @@ def test_template_post_derives_group_loss_from_win_and_draw_when_bundle_opponent
 
 def test_template_post_discloses_active_models_and_opponent_room_fallback() -> None:
     bundle = _bundle()
+    bundle.model_influence_pct = {
+        "Opus 4.8": 0.5,
+        "GPT 5.5": 0.5,
+        "Perplexity Pro": 35.0,
+        "DeepSeek V4 Pro": 34.0,
+        "Gemini Pro": 30.0,
+    }
+    bundle.model_participation["last_consensus_participants"] = [
+        "Perplexity Pro",
+        "DeepSeek V4 Pro",
+        "Gemini Pro",
+    ]
     bundle.metadata["removed_agent_slots"] = ["Opus 4.8", "GPT 5.5"]
     bundle.metadata["parallel_opponent_debriefing"] = {
         "enabled": True,
@@ -188,6 +200,30 @@ def test_template_post_discloses_active_models_and_opponent_room_fallback() -> N
     assert "2 removidos no planejamento" in text
     assert "os 5 modelos pesquisam" not in text
     assert "cruzamentos sem consenso lateral; usei Monte Carlo/bracket" in text
+
+
+def test_round_stats_reports_valid_message_count_when_responses_were_removed() -> None:
+    bundle = _bundle()
+    bundle.model_participation = {
+        "total_messages": 45,
+        "total_rounds": 15,
+        "valid_messages": 32,
+        "invalid_responses": 13,
+        "last_consensus_participants": ["DeepSeek V4 Pro", "Perplexity Pro", "Gemini Pro"],
+    }
+    bundle.model_influence_pct = {
+        "DeepSeek V4 Pro": 34.9,
+        "Perplexity Pro": 35.0,
+        "Gemini Pro": 30.1,
+    }
+
+    text = render_template_post(bundle, post_index=1, run_date=date(2026, 6, 11))
+
+    stats = text.split("📊 NÚMEROS DA RODADA:\n", 1)[1].split("\n\n⚠️", 1)[0]
+    assert "32 válidas" in stats
+    assert "13 removidas" in stats
+    assert "Gemini teve menor influência" in stats
+    assert "quase não moveu (30,1%)" not in stats
 
 
 def test_round_stats_prioritize_discussion_profile_over_cost() -> None:

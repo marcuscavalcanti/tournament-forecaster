@@ -6691,13 +6691,32 @@ def calculate_model_participation(
 ) -> dict[str, Any]:
     by_model: dict[str, dict[str, int]] = {}
     total_messages = 0
+    valid_messages = 0
     total_questions = 0
     total_responses = 0
+    valid_responses = 0
+    invalid_responses = 0
     protagonist_counts: dict[str, int] = {}
     rounds: list[dict[str, Any]] = []
 
     def entry(agent: str) -> dict[str, int]:
-        return by_model.setdefault(agent, {"messages": 0, "questions": 0, "responses": 0})
+        return by_model.setdefault(
+            agent,
+            {
+                "messages": 0,
+                "questions": 0,
+                "responses": 0,
+                "valid_responses": 0,
+                "invalid_responses": 0,
+            },
+        )
+
+    def response_is_valid(response: dict[str, Any]) -> bool:
+        if bool(response.get("removed_from_main")):
+            return False
+        if bool(response.get("used_fallback")) and int(response.get("source_count", 0) or 0) <= 0:
+            return False
+        return True
 
     for turn in meeting_transcript:
         protagonist = str(turn.get("protagonist", "")).strip()
@@ -6709,6 +6728,7 @@ def calculate_model_participation(
             stats["questions"] += 1
             protagonist_counts[protagonist] = protagonist_counts.get(protagonist, 0) + 1
             total_messages += 1
+            valid_messages += 1
             total_questions += 1
             participants.append(protagonist)
             seen_participants.add(protagonist)
@@ -6724,6 +6744,13 @@ def calculate_model_participation(
             stats["responses"] += 1
             total_messages += 1
             total_responses += 1
+            if response_is_valid(response):
+                stats["valid_responses"] += 1
+                valid_messages += 1
+                valid_responses += 1
+            else:
+                stats["invalid_responses"] += 1
+                invalid_responses += 1
         if protagonist or participants:
             rounds.append(
                 {
@@ -6739,8 +6766,11 @@ def calculate_model_participation(
 
     return {
         "total_messages": total_messages,
+        "valid_messages": valid_messages,
         "total_questions": total_questions,
         "total_responses": total_responses,
+        "valid_responses": valid_responses,
+        "invalid_responses": invalid_responses,
         "total_rounds": len(meeting_transcript),
         "protagonist_counts": protagonist_counts,
         "rounds": rounds,
