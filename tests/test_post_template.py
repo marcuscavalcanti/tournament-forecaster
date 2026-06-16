@@ -310,7 +310,7 @@ def test_backstage_does_not_truncate_after_numeric_date_fragment() -> None:
                     "agent": "DeepSeek V4 Pro",
                     "answer": (
                         "Após buscar informações atualizadas sobre lesões no Brasil e na Costa do Marfim entre "
-                        "13. e 16. de junho, não encontrei novo desfalque auditável que altere a probabilidade."
+                        "13 e 16 de junho, não encontrei novo desfalque auditável que altere a probabilidade."
                     ),
                     "disagreed": True,
                     "removed_from_main": False,
@@ -325,7 +325,7 @@ def test_backstage_does_not_truncate_after_numeric_date_fragment() -> None:
     backstage = text.split("DOIS BASTIDORES DA REUNIÃO DE HOJE:\n\n", 1)[1].split("📊", 1)[0]
     assert "entre 13.\n" not in backstage
     assert "entre 13." not in backstage.split("2️⃣", 1)[0]
-    assert "entre 13. e 16." in backstage or "entre 13. e 16…" in backstage
+    assert "entre 13 e 16" in backstage
 
 
 def test_template_post_includes_change_bullets_when_previous_bundle_is_available() -> None:

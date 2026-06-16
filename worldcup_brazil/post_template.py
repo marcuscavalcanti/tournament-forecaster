@@ -235,7 +235,7 @@ def _truncate_words(text: str, limit: int) -> str:
     and_end = window.rfind(" e ")
     if and_end >= int(limit * 0.6):
         before_and = window[:and_end].rstrip(",; ")
-        if not re.search(r"\d\.$", before_and):
+        if not re.search(r"\d\.?$", before_and):
             return before_and + "."
     cut = window.rsplit(" ", 1)[0]
     return cut.rstrip(",;:.") + "…"
