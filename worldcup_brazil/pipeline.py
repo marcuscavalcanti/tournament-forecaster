@@ -3730,19 +3730,31 @@ async def _protagonist_question(
     if spec is None:
         question = _fallback_question(protagonist, previous_turn)
         return _sanitize_protagonist_question(question, config=config, protagonist=protagonist), None, None
-    opinion = await call_agent(
-        spec,
-        _protagonist_question_prompt(
-            config=config,
-            protagonist=protagonist,
-            previous_turn=previous_turn,
-            generated_at=generated_at,
-        ),
-        baseline_title_pct=baseline_title_pct,
-        timeout=timeout,
-        allow_local_fallback=allow_agent_fallback,
-        cancel_event=cancel_event,
+    prompt = _protagonist_question_prompt(
+        config=config,
+        protagonist=protagonist,
+        previous_turn=previous_turn,
+        generated_at=generated_at,
     )
+    try:
+        opinion = await call_agent(
+            spec,
+            prompt,
+            baseline_title_pct=baseline_title_pct,
+            timeout=timeout,
+            allow_local_fallback=allow_agent_fallback,
+            cancel_event=cancel_event,
+        )
+    except TypeError as exc:
+        if "cancel_event" not in str(exc):
+            raise
+        opinion = await call_agent(
+            spec,
+            prompt,
+            baseline_title_pct=baseline_title_pct,
+            timeout=timeout,
+            allow_local_fallback=allow_agent_fallback,
+        )
     question = opinion.question or _fallback_question(protagonist, previous_turn)
     invalid_reason = _invalid_protagonist_question_reason(question, config)
     return _sanitize_protagonist_question(question, config=config, protagonist=protagonist), opinion, invalid_reason
@@ -4924,19 +4936,35 @@ async def _run_model_meeting(
             previous_turn=previous_turn,
             generated_at=generated_at,
         )
-        raw_opinions = await call_all_agents(
-            response_prompt,
-            specs=responder_specs,
-            baseline_title_pct=baseline_title_pct,
-            timeout=timeout,
-            allow_local_fallback=allow_agent_fallback,
-            progress_callback=_meeting_agent_progress_callback(
-                watchdog,
-                phase="response",
-                round_index=round_index,
-            ),
-            cancel_event=cancel_event,
-        )
+        try:
+            raw_opinions = await call_all_agents(
+                response_prompt,
+                specs=responder_specs,
+                baseline_title_pct=baseline_title_pct,
+                timeout=timeout,
+                allow_local_fallback=allow_agent_fallback,
+                progress_callback=_meeting_agent_progress_callback(
+                    watchdog,
+                    phase="response",
+                    round_index=round_index,
+                ),
+                cancel_event=cancel_event,
+            )
+        except TypeError as exc:
+            if "cancel_event" not in str(exc):
+                raise
+            raw_opinions = await call_all_agents(
+                response_prompt,
+                specs=responder_specs,
+                baseline_title_pct=baseline_title_pct,
+                timeout=timeout,
+                allow_local_fallback=allow_agent_fallback,
+                progress_callback=_meeting_agent_progress_callback(
+                    watchdog,
+                    phase="response",
+                    round_index=round_index,
+                ),
+            )
         if token_cost_ledger is not None:
             _record_token_costs(
                 token_cost_ledger,
