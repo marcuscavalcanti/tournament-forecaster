@@ -1102,7 +1102,258 @@ def test_parallel_opponent_debriefing_without_explicit_consensus_does_not_rewrit
     side_room = artifacts.bundle.metadata["parallel_opponent_debriefing"]
     assert side_room["usable_for_main_room"] is False
     assert side_room["exit_status"] == "max_rounds_no_consensus"
+    assert artifacts.bundle.metadata["_parallel_opponent_briefing"]["usable_for_main_room"] is False
     assert any("sala paralela" in warning.lower() and "sem consenso" in warning.lower() for warning in artifacts.bundle.warnings)
+
+
+def test_parallel_opponent_degraded_side_room_can_rewrite_when_explicitly_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    async def fake_call_all_agents(*args, **kwargs):
+        return [
+            AgentOpinion(
+                agent="GPT 5.5",
+                title_pct=8.0,
+                summary="Plano com fonte verificável.",
+                source_urls=["https://example.com/gpt"],
+            ),
+            AgentOpinion(
+                agent="Perplexity Pro",
+                title_pct=8.1,
+                summary="Plano com fonte verificável.",
+                source_urls=["https://example.com/perplexity"],
+            ),
+            AgentOpinion(
+                agent="DeepSeek V4 Pro",
+                title_pct=7.9,
+                summary="Plano com fonte verificável.",
+                source_urls=["https://example.com/deepseek"],
+            ),
+        ]
+
+    main_room_first_knockout_opponent: list[str] = []
+
+    async def fake_run_model_meeting(
+        *,
+        config,
+        planning_opinions,
+        generated_at,
+        agent_specs,
+        baseline_title_pct,
+        allow_agent_fallback,
+        watchdog,
+        token_cost_ledger=None,
+        **_kwargs,
+    ):
+        room = str(config.get("_meeting_room", "main_brazil"))
+        slots = [spec.slot for spec in agent_specs]
+        if room == "opponent_path":
+            opinions = [
+                AgentOpinion(
+                    agent=slot,
+                    title_pct=8.0,
+                    summary="Sala paralela trouxe quase-consenso bracket-safe com fontes.",
+                    answer=(
+                        "16 avos Japão e Suécia; Oitavas Equador e Noruega; Quartas Inglaterra e França; "
+                        "Semifinal Argentina e Portugal; Final França e Espanha. Título 8%."
+                    ),
+                    scenario_probabilities={"16 avos: Japão": 41.0, "16 avos: Suécia": 26.0},
+                    match_probabilities={"16 avos: Japão": 58.0, "16 avos: Suécia": 57.0},
+                    source_urls=["https://example.com/slot-2f"],
+                    agrees_with_protagonist=True,
+                )
+                for slot in slots
+            ]
+            consensus = build_consensus(opinions, agent_slots=slots)
+            object.__setattr__(consensus, "exit_status", "degraded_last_valid")
+            object.__setattr__(consensus, "exit_warning", "Publicado último consenso válido em modo degradado.")
+            return (
+                consensus,
+                opinions,
+                [
+                    {
+                        "round": 2,
+                        "coverage": {"complete": True},
+                        "responses": [],
+                    }
+                ],
+                opinions,
+            )
+
+        main_room_first_knockout_opponent.append(
+            str((config.get("knockout_matches") or [{}])[0].get("opponent", ""))
+        )
+        opinions = [
+            AgentOpinion(
+                agent=slot,
+                title_pct=8.0,
+                summary="Sala principal recebeu adversário lateral degradado habilitado.",
+                answer="Brasil usa os cenários laterais quando o modo degradado foi habilitado explicitamente.",
+                source_urls=["https://example.com/main"],
+                agrees_with_protagonist=True,
+            )
+            for slot in slots
+        ]
+        return build_consensus(opinions, agent_slots=slots), opinions, [], opinions
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+    monkeypatch.setattr("worldcup_brazil.pipeline._run_model_meeting", fake_run_model_meeting)
+    config = load_config(Path("config/worldcup_brazil.example.json"))
+    config.update(
+        {
+            "baseline_title_pct": 8.0,
+            "minimum_source_ready_agents": 3,
+            "source_planning_repair_attempts": 0,
+            "meeting_min_participants": 3,
+            "parallel_opponent_debriefing_enabled": True,
+            "opponent_debriefing_degraded_consensus_enabled": True,
+            "opponent_debriefing_degraded_shadow_only": False,
+            "monte_carlo": {"enabled": False},
+            "knockout_matches": [
+                {
+                    "phase": "16 avos",
+                    "opponent": "Adversário base",
+                    "most_likely": True,
+                    "scenario_pct": 46.0,
+                    "brazil_pct": 57.0,
+                },
+                {
+                    "phase": "16 avos",
+                    "opponent": "Alternativa base",
+                    "most_likely": False,
+                    "scenario_pct": 24.0,
+                    "brazil_pct": 56.0,
+                },
+            ],
+            "agents": [
+                {"slot": "GPT 5.5", "provider": "openai", "model": "gpt-5.5", "endpoint": "x"},
+                {"slot": "Perplexity Pro", "provider": "openai-compatible", "model": "sonar", "endpoint": "x"},
+                {"slot": "DeepSeek V4 Pro", "provider": "openai-compatible", "model": "deepseek", "endpoint": "x"},
+            ],
+        }
+    )
+
+    artifacts = asyncio.run(
+        build_report_bundle(
+            config=config,
+            source_memory=SourceMemory(tmp_path / "source_memory.json"),
+            generated_at=datetime(2026, 6, 7, 12, tzinfo=timezone.utc),
+            watchdog=None,
+        )
+    )
+
+    assert main_room_first_knockout_opponent == ["Japão"]
+    assert artifacts.bundle.knockout_matches[0].opponent == "Japão"
+    side_room = artifacts.bundle.metadata["parallel_opponent_debriefing"]
+    assert side_room["usable_for_main_room"] is True
+    assert side_room["degraded"] is True
+    assert side_room["degraded_shadow_only"] is False
+
+
+def test_parallel_opponent_degraded_side_room_shadow_only_does_not_rewrite_main_room(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    async def fake_call_all_agents(*args, **kwargs):
+        return [
+            AgentOpinion(agent="GPT 5.5", title_pct=8.0, summary="Plano.", source_urls=["https://example.com/gpt"]),
+            AgentOpinion(agent="Perplexity Pro", title_pct=8.1, summary="Plano.", source_urls=["https://example.com/p"]),
+            AgentOpinion(agent="DeepSeek V4 Pro", title_pct=7.9, summary="Plano.", source_urls=["https://example.com/d"]),
+        ]
+
+    async def fake_run_model_meeting(
+        *,
+        config,
+        planning_opinions,
+        generated_at,
+        agent_specs,
+        baseline_title_pct,
+        allow_agent_fallback,
+        watchdog,
+        token_cost_ledger=None,
+        **_kwargs,
+    ):
+        room = str(config.get("_meeting_room", "main_brazil"))
+        slots = [spec.slot for spec in agent_specs]
+        if room == "opponent_path":
+            opinions = [
+                AgentOpinion(
+                    agent=slot,
+                    title_pct=8.0,
+                    summary="Quase-consenso bracket-safe com fontes.",
+                    answer=(
+                        "16 avos Japão e Suécia; Oitavas Equador e Noruega; Quartas Inglaterra e França; "
+                        "Semifinal Argentina e Portugal; Final França e Espanha. Título 8%."
+                    ),
+                    scenario_probabilities={"16 avos: Japão": 41.0},
+                    source_urls=["https://example.com/slot-2f"],
+                    agrees_with_protagonist=True,
+                )
+                for slot in slots
+            ]
+            consensus = build_consensus(opinions, agent_slots=slots)
+            object.__setattr__(consensus, "exit_status", "degraded_last_valid")
+            return consensus, opinions, [{"round": 2, "coverage": {"complete": True}, "responses": []}], opinions
+
+        opinions = [
+            AgentOpinion(
+                agent=slot,
+                title_pct=8.0,
+                summary="Sala principal manteve base porque degradado esta em shadow.",
+                answer="Sem habilitação explícita, top-2 lateral degradado não reescreve o main room.",
+                source_urls=["https://example.com/main"],
+                agrees_with_protagonist=True,
+            )
+            for slot in slots
+        ]
+        return build_consensus(opinions, agent_slots=slots), opinions, [], opinions
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+    monkeypatch.setattr("worldcup_brazil.pipeline._run_model_meeting", fake_run_model_meeting)
+    config = load_config(Path("config/worldcup_brazil.example.json"))
+    config.update(
+        {
+            "baseline_title_pct": 8.0,
+            "minimum_source_ready_agents": 3,
+            "source_planning_repair_attempts": 0,
+            "meeting_min_participants": 3,
+            "parallel_opponent_debriefing_enabled": True,
+            "opponent_debriefing_degraded_consensus_enabled": True,
+            "opponent_debriefing_degraded_shadow_only": True,
+            "monte_carlo": {"enabled": False},
+            "knockout_matches": [
+                {
+                    "phase": "16 avos",
+                    "opponent": "Adversário base",
+                    "most_likely": True,
+                    "scenario_pct": 46.0,
+                    "brazil_pct": 57.0,
+                }
+            ],
+            "agents": [
+                {"slot": "GPT 5.5", "provider": "openai", "model": "gpt-5.5", "endpoint": "x"},
+                {"slot": "Perplexity Pro", "provider": "openai-compatible", "model": "sonar", "endpoint": "x"},
+                {"slot": "DeepSeek V4 Pro", "provider": "openai-compatible", "model": "deepseek", "endpoint": "x"},
+            ],
+        }
+    )
+
+    artifacts = asyncio.run(
+        build_report_bundle(
+            config=config,
+            source_memory=SourceMemory(tmp_path / "source_memory.json"),
+            generated_at=datetime(2026, 6, 7, 12, tzinfo=timezone.utc),
+            watchdog=None,
+        )
+    )
+
+    assert artifacts.bundle.knockout_matches[0].opponent == "Adversário base"
+    side_room = artifacts.bundle.metadata["parallel_opponent_debriefing"]
+    assert side_room["usable_for_main_room"] is False
+    assert side_room["degraded"] is False
+    assert side_room["degraded_shadow_only"] is True
+    assert side_room["degraded_would_be_usable"] is True
 
 
 def test_main_meeting_degraded_publish_is_persisted_in_bundle_warnings(

@@ -6002,6 +6002,8 @@ def _parallel_opponent_briefing_for_prompt(result: dict[str, Any], estimates: li
             "enabled": bool(result.get("enabled", False)),
             "failed": bool(result.get("failed", False)),
             "error": str(result.get("error", "")),
+            "usable_for_main_room": bool(result.get("usable_for_main_room", False)),
+            "exit_status": str(result.get("exit_status", "") or ""),
         }
     top_by_phase: dict[str, list[dict[str, Any]]] = {}
     for estimate in estimates:
@@ -6018,10 +6020,64 @@ def _parallel_opponent_briefing_for_prompt(result: dict[str, Any], estimates: li
         )
     return {
         "enabled": True,
+        "failed": False,
         "rounds": int(result.get("rounds", 0) or 0),
         "participants": list(result.get("participants", [])),
+        "usable_for_main_room": bool(result.get("usable_for_main_room", False)),
+        "exit_status": str(result.get("exit_status", "") or ""),
+        "degraded": bool(result.get("degraded", False)),
+        "degraded_shadow_only": bool(result.get("degraded_shadow_only", False)),
+        "degraded_would_be_usable": bool(result.get("degraded_would_be_usable", False)),
         "top_by_phase": top_by_phase,
         "rule": "sala principal deve usar estes adversários prováveis já reconciliados com bracket/Monte Carlo",
+    }
+
+
+def _side_room_latest_coverage_complete(transcript: list[dict[str, Any]]) -> bool:
+    for turn in reversed(transcript):
+        coverage = turn.get("coverage")
+        if isinstance(coverage, dict):
+            return bool(coverage.get("complete", False))
+    return False
+
+
+def _side_room_valid_participant_count(opinions: list[Any]) -> int:
+    return sum(1 for opinion in opinions if _counts_as_consensus_participant(opinion))
+
+
+def _opponent_debriefing_degraded_decision(
+    *,
+    config: dict[str, Any],
+    exit_status: str,
+    transcript: list[dict[str, Any]],
+    final_opinions: list[Any],
+) -> dict[str, Any]:
+    enabled = bool(config.get("opponent_debriefing_degraded_consensus_enabled", False))
+    shadow_only = bool(config.get("opponent_debriefing_degraded_shadow_only", True))
+    minimum_participants = int(config.get("meeting_min_participants", config.get("meeting_min_real_agents", 3)))
+    valid_participants = _side_room_valid_participant_count(final_opinions)
+    coverage_complete = _side_room_latest_coverage_complete(transcript)
+    reasons: list[str] = []
+    if not enabled:
+        reasons.append("degraded_disabled")
+    if exit_status != "degraded_last_valid":
+        reasons.append(f"exit_status_{exit_status or 'missing'}")
+    if not transcript:
+        reasons.append("no_transcript")
+    if not coverage_complete:
+        reasons.append("coverage_incomplete")
+    if valid_participants < minimum_participants:
+        reasons.append("insufficient_valid_participants")
+    would_be_usable = not reasons
+    return {
+        "enabled": enabled,
+        "shadow_only": shadow_only,
+        "would_be_usable": would_be_usable,
+        "usable": bool(would_be_usable and not shadow_only),
+        "reasons": reasons,
+        "valid_participants": valid_participants,
+        "minimum_participants": minimum_participants,
+        "coverage_complete": coverage_complete,
     }
 
 
@@ -6062,6 +6118,14 @@ async def _run_parallel_opponent_debriefing(
     )
     exit_status = str(getattr(consensus, "exit_status", "consensus") or "consensus")
     exit_warning = str(getattr(consensus, "exit_warning", "") or "")
+    degraded_decision = _opponent_debriefing_degraded_decision(
+        config=opponent_config,
+        exit_status=exit_status,
+        transcript=transcript,
+        final_opinions=final_opinions,
+    )
+    degraded_usable = bool(degraded_decision.get("usable", False))
+    usable_for_main_room = exit_status == "consensus" or degraded_usable
     return {
         "enabled": True,
         "consensus": consensus,
@@ -6072,7 +6136,11 @@ async def _run_parallel_opponent_debriefing(
         "participants": _slots_from_specs(agent_specs),
         "exit_status": exit_status,
         "exit_warning": exit_warning,
-        "usable_for_main_room": exit_status == "consensus",
+        "usable_for_main_room": usable_for_main_room,
+        "degraded": degraded_usable,
+        "degraded_shadow_only": bool(degraded_decision.get("shadow_only", True)),
+        "degraded_would_be_usable": bool(degraded_decision.get("would_be_usable", False)),
+        "degraded_decision": degraded_decision,
     }
 
 
@@ -7232,7 +7300,12 @@ async def build_report_bundle(
                 "exit_status": str(opponent_debriefing_result.get("exit_status", "") or ""),
                 "exit_warning": str(opponent_debriefing_result.get("exit_warning", "") or ""),
                 "usable_for_main_room": bool(opponent_debriefing_result.get("usable_for_main_room", False)),
+                "degraded": bool(opponent_debriefing_result.get("degraded", False)),
+                "degraded_shadow_only": bool(opponent_debriefing_result.get("degraded_shadow_only", False)),
+                "degraded_would_be_usable": bool(opponent_debriefing_result.get("degraded_would_be_usable", False)),
+                "degraded_decision": opponent_debriefing_result.get("degraded_decision", {}),
             },
+            "_parallel_opponent_briefing": dict(meeting_config.get("_parallel_opponent_briefing", {})),
             "removed_agent_slots": removed_agent_slots,
             "removed_agent_reasons": removed_reason_by_agent,
             "agent_source_planning": {

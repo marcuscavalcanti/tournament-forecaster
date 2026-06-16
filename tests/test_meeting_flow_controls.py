@@ -1183,7 +1183,13 @@ def test_llm_council_fast_path_rejects_unusable_parallel_opponent_room(monkeypat
         "llm_council_fast_path_enabled": True,
         "llm_council_fast_path_shadow_only": False,
         "llm_council_fast_path_min_participants": 3,
-        "_parallel_opponent_briefing": {"enabled": True, "failed": True, "usable_for_main_room": False},
+        "_parallel_opponent_briefing": {
+            "enabled": True,
+            "failed": False,
+            "rounds": 3,
+            "exit_status": "max_rounds_no_consensus",
+            "usable_for_main_room": False,
+        },
     }
 
     async def fake_call_agent(spec, prompt, **kwargs):
