@@ -139,6 +139,7 @@
   "agent_reentry_probe_max_attempts": 2,
   "parallel_opponent_debriefing_enabled": true,
   "parallel_opponent_debriefing_timeout_seconds": 900,
+  "opponent_debriefing_round_budget_seconds": 240,
   "require_agent_source_plan": true,
   "require_auditable_source_urls_for_meeting_votes": true,
   "minimum_source_ready_agents": 3,

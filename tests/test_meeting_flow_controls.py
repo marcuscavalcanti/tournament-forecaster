@@ -718,6 +718,42 @@ def test_blind_peer_review_runs_on_round_one_and_consensus_exit_candidate(monkey
     assert transcript[2]["blind_peer_review"]["mode"] == "consensus_exit_candidate"
 
 
+def test_meeting_round_budget_exhaustion_preserves_partial_consensus(monkeypatch) -> None:
+    config = {
+        **_base_config(),
+        "meeting_min_rounds": 99,
+        "meeting_max_rounds": 5,
+        "meeting_round_budget_seconds": 0.001,
+        "meeting_stability_rounds": 99,
+    }
+
+    async def fake_call_agent(spec, prompt, **kwargs):
+        await asyncio.sleep(0.003)
+        return _healthy_question_opinion(spec.slot)
+
+    async def fake_call_all_agents(prompt, *, specs, baseline_title_pct, **kwargs):
+        return [_healthy_response(spec.slot, 10.0) for spec in specs]
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_agent", fake_call_agent)
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+
+    consensus, _opinions, transcript, _all = asyncio.run(
+        _run_model_meeting(
+            config=config,
+            planning_opinions=_planning_opinions(),
+            generated_at=datetime(2026, 6, 14, tzinfo=timezone.utc),
+            agent_specs=_specs(),
+            baseline_title_pct=11.0,
+            allow_agent_fallback=True,
+            watchdog=None,
+        )
+    )
+
+    assert len(transcript) == 1
+    assert getattr(consensus, "exit_status") == "round_budget_exhausted"
+    assert "orçamento acumulado" in getattr(consensus, "exit_warning")
+
+
 def test_blind_peer_review_non_shadow_blocks_consensus_exit_when_acceptance_fails(monkeypatch, tmp_path) -> None:
     config = {
         **_base_config(),

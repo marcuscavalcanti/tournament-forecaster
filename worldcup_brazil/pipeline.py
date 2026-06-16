@@ -4612,6 +4612,7 @@ async def _run_model_meeting(
     breaker_threshold = max(1, int(config.get("meeting_slot_breaker_threshold", 3)))
     stability_delta_pp = float(config.get("meeting_stability_delta_pp", 1.0))
     stability_rounds_required = max(1, int(config.get("meeting_stability_rounds", 2)))
+    round_budget_seconds = max(0.0, float(config.get("meeting_round_budget_seconds", 0) or 0))
     sterile_round_limit = max(1, int(config.get("meeting_sterile_round_limit", 2)))
     max_reentries_per_slot = max(0, int(config.get("meeting_max_reentries_per_slot", 1)))
     probe_max_attempts = max(1, int(config.get("agent_reentry_probe_max_attempts", 2)))
@@ -4644,6 +4645,8 @@ async def _run_model_meeting(
     consecutive_sterile = 0
     last_round_consensus_valid = False
     exited_with_consensus = False
+    round_budget_exhausted = False
+    round_budget_warning = ""
     breaker_counts: dict[str, int] = {}
     reentry_counts: dict[str, int] = {}
     probe_attempts: dict[str, int] = {}
@@ -4794,7 +4797,29 @@ async def _run_model_meeting(
                     },
                 )
 
+    meeting_started_at = asyncio.get_running_loop().time()
     for round_index in range(1, max_rounds + 1):
+        if round_budget_seconds > 0 and round_index > 1:
+            elapsed_seconds = asyncio.get_running_loop().time() - meeting_started_at
+            allowed_seconds = round_budget_seconds * round_index
+            if elapsed_seconds > allowed_seconds:
+                round_budget_exhausted = True
+                round_budget_warning = (
+                    f"orçamento acumulado de rodada excedido antes da rodada {round_index}: "
+                    f"{elapsed_seconds:.2f}s usados para limite de {allowed_seconds:.2f}s"
+                )
+                if watchdog:
+                    watchdog.event(
+                        "model_meeting",
+                        "round_budget_exhausted",
+                        detail=round_budget_warning,
+                        extra={
+                            "round": round_index,
+                            "elapsed_seconds": round(elapsed_seconds, 3),
+                            "allowed_seconds": round(allowed_seconds, 3),
+                        },
+                    )
+                break
         collect_finished_reentry_probes(round_index)
         schedule_reentry_probes(round_index)
         protagonist_counts[protagonist] = protagonist_counts.get(protagonist, 0) + 1
@@ -5407,6 +5432,13 @@ async def _run_model_meeting(
                 f"teto de {max_rounds} rodadas atingido sem nenhum voto válido na rodada final; "
                 "consenso não pode ser publicado a partir de fallbacks"
             )
+    elif round_budget_exhausted:
+        object.__setattr__(final_consensus, "exit_status", "round_budget_exhausted")
+        object.__setattr__(
+            final_consensus,
+            "exit_warning",
+            round_budget_warning or "orçamento acumulado de rodada excedido; publicado último consenso parcial",
+        )
     elif not exited_with_consensus:
         object.__setattr__(final_consensus, "exit_status", "max_rounds_no_consensus")
         object.__setattr__(
@@ -5893,6 +5925,7 @@ def _opponent_debriefing_config(config: dict[str, Any]) -> dict[str, Any]:
         "meeting_min_rounds": int(config.get("opponent_debriefing_min_rounds", 1)),
         "meeting_max_rounds": int(config.get("opponent_debriefing_max_rounds", 3)),
         "meeting_stability_rounds": int(config.get("opponent_debriefing_stability_rounds", 1)),
+        "meeting_round_budget_seconds": float(config.get("opponent_debriefing_round_budget_seconds", 0) or 0),
         "agent_timeout_seconds": int(config.get("opponent_debriefing_agent_timeout_seconds", 120)),
         # Sem este override, a 1ª chamada de TODA rodada (pergunta do protagonista)
         # herdava os 210s da sala principal e furava o modelo de orçamento.
