@@ -323,11 +323,34 @@ def _has_fixed_quanti_quali_allocation(text: str) -> bool:
     )
     quant_markers = ("quanti", "quantitativ", "estatistic", "numer", "dados")
     qual_markers = ("quali", "qualitativ", "contexto", "noticias", "lesoes", "arbitragem")
+    odds_context_markers = (
+        "odd",
+        "odds",
+        "cotacao",
+        "cotacoes",
+        "mercado",
+        "sportsbook",
+        "bookmaker",
+        "casa",
+        "casas",
+        "aposta",
+        "apostas",
+        "fracionaria",
+        "fracionarias",
+        "fractional",
+    )
     has_quant = any(marker in normalized for marker in quant_markers)
     has_qual = any(marker in normalized for marker in qual_markers)
     if not has_quant or not has_qual:
         return False
-    fixed_pair = bool(re.search(r"\b\d{1,3}\s*/\s*\d{1,3}\b", normalized))
+    slash_pair_matches = list(re.finditer(r"\b\d{1,3}\s*/\s*\d{1,3}\b", normalized))
+    allocation_slash_pairs = []
+    for match in slash_pair_matches:
+        local = normalized[max(0, match.start() - 90) : min(len(normalized), match.end() + 90)]
+        if any(marker in local for marker in odds_context_markers):
+            continue
+        allocation_slash_pairs.append(match)
+    fixed_pair = bool(allocation_slash_pairs)
     fixed_percent_pair = bool(re.search(r"\b\d{1,3}\s*%\D{0,90}\b\d{1,3}\s*%", normalized))
     if not fixed_pair and not fixed_percent_pair:
         return False
@@ -336,8 +359,9 @@ def _has_fixed_quanti_quali_allocation(text: str) -> bool:
         re.search(r"\b\d{1,3}\s*%\D{0,45}(quanti|quantitativ|estatistic|numer|dados)", normalized)
         and re.search(r"\b\d{1,3}\s*%\D{0,45}(quali|qualitativ|contexto|noticias|lesoes|arbitragem)", normalized)
     )
-    slash_quant_qual = bool(
-        re.search(r"\b\d{1,3}\s*/\s*\d{1,3}\b\D{0,60}(quanti|quantitativ|quali|qualitativ|contexto)", normalized)
+    slash_quant_qual = any(
+        re.search(r"(quanti|quantitativ|quali|qualitativ|contexto)", normalized[match.end() : match.end() + 60])
+        for match in allocation_slash_pairs
     )
     return has_method_marker or direct_quant_qual_percent or slash_quant_qual
 
@@ -2000,19 +2024,33 @@ def _iter_market_title_texts(meeting_transcript: list[dict[str, Any]]) -> list[t
 def _market_title_values_from_text(text: str, *, config: dict[str, Any]) -> list[float]:
     settings = _market_title_challenge_config(config)
     values: list[float] = []
-    normalized = _normalized_ascii_text(text)
+    raw_text = str(text or "")
+    normalized = _normalized_ascii_text(raw_text)
     if not any(term in normalized for term in _MARKET_TITLE_TERMS):
         return values
     if not any(term in normalized for term in _TITLE_CONTEXT_TERMS):
         return values
-    for match in _MARKET_TITLE_PERCENT_RE.finditer(str(text or "")):
+    for match in _MARKET_TITLE_PERCENT_RE.finditer(raw_text):
+        clause_start = max(raw_text.rfind(separator, 0, match.start()) for separator in ".;!?\n") + 1
+        clause_end_candidates = [
+            position
+            for separator in ".;!?\n"
+            if (position := raw_text.find(separator, match.end())) != -1
+        ]
+        clause_end = min(clause_end_candidates) if clause_end_candidates else len(raw_text)
+        clause = raw_text[clause_start:clause_end]
+        clause_normalized = _normalized_ascii_text(clause)
+        if not any(term in clause_normalized for term in _MARKET_TITLE_TERMS):
+            continue
+        if not any(term in clause_normalized for term in _TITLE_CONTEXT_TERMS):
+            continue
         try:
             value = float(match.group(1).replace(",", "."))
         except ValueError:
             continue
         if not (settings["min_pct"] <= value <= settings["max_pct"]):
             continue
-        prefix = _normalized_ascii_text(str(text or "")[max(0, match.start() - 160) : match.start()])
+        prefix = _normalized_ascii_text(raw_text[clause_start : match.start()])
         if not any(term in prefix for term in _MARKET_TITLE_TERMS):
             continue
         values.append(round(value, 1))

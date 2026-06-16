@@ -276,6 +276,30 @@ def test_source_planning_readiness_rejects_fixed_quanti_quali_split_without_repe
     assert "30%" not in report["removed_agents"][0]["reason"]
 
 
+def test_source_planning_readiness_accepts_fractional_odds_near_context_words() -> None:
+    report = _source_planning_readiness_report(
+        [
+            AgentOpinion(
+                agent="Opus 4.8",
+                title_pct=8.4,
+                summary=(
+                    "Plano com odds fracionárias 8/1 e 10/1 para campeão, Elo, contexto de lesões "
+                    "e notícias recentes; sem split fixo entre dados quantitativos e qualitativos."
+                ),
+                source_urls=["https://www.oddsportal.com/football/world/world-cup-2026/"],
+                source_queries=["Brazil World Cup 2026 fractional odds injuries Elo"],
+            )
+        ],
+        {
+            "require_agent_source_plan": True,
+            "minimum_source_ready_agents": 1,
+        },
+    )
+
+    assert report["quorum_met"] is True
+    assert report["removed_agents"] == []
+
+
 def test_source_planning_readiness_rejects_reserved_benchmark_mentions() -> None:
     report = _source_planning_readiness_report(
         [

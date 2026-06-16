@@ -167,6 +167,34 @@ def test_market_title_challenge_ignores_small_gap_and_preserves_status() -> None
     assert challenge["model_title_pct"] == 8.2
 
 
+def test_market_title_challenge_ignores_match_probability_distractors() -> None:
+    transcript = [
+        {
+            "round": 2,
+            "responses": [
+                {
+                    "agent": "Perplexity Pro",
+                    "answer": (
+                        "Mercado de título do Brasil está em 8.5%; no jogo contra Haiti, "
+                        "empate aparece em 17% e vitória brasileira em 76%."
+                    ),
+                    "removed_from_main": False,
+                }
+            ],
+        }
+    ]
+
+    challenge = _market_title_challenge(
+        {"titulo": 4.5},
+        transcript,
+        config={"market_title_challenge": {"enabled": True, "absolute_gap_pct": 3.0, "relative_gap_pct": 0.40}},
+    )
+
+    assert challenge["market_low_pct"] == 8.5
+    assert challenge["market_high_pct"] == 8.5
+    assert "17" not in str(challenge["market_high_pct"])
+
+
 def test_apply_meeting_match_probabilities_accepts_valid_group_win_pct() -> None:
     estimate = MatchEstimate(
         brazil="Brasil",

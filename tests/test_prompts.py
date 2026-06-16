@@ -558,6 +558,15 @@ def test_fixed_quanti_quali_detector_accepts_match_probabilities() -> None:
     assert _has_fixed_quanti_quali_allocation(text) is False
 
 
+def test_fixed_quanti_quali_detector_accepts_fractional_market_odds() -> None:
+    text = (
+        "Mercado de campeão mostra Brasil 8/1 e 10/1 em casas independentes; uso esse dado "
+        "quantitativo junto com contexto de lesões e notícias recentes, sem propor proporção fixa."
+    )
+
+    assert _has_fixed_quanti_quali_allocation(text) is False
+
+
 def test_fixed_quanti_quali_detector_rejects_method_percentages() -> None:
     assert _has_fixed_quanti_quali_allocation("Uso 70% quantitativo e 30% qualitativo.") is True
     assert _has_fixed_quanti_quali_allocation("Mix 60/40 entre dados estatísticos e contexto.") is True
