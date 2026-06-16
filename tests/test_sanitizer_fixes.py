@@ -231,6 +231,8 @@ def test_compliance_statement_about_opta_is_not_flagged() -> None:
 
     assert _has_opta_marker("Opta fica explicitamente excluída do Modelo Principal.") is False
     assert _has_opta_marker("A Opta está totalmente vedada nesta sala.") is False
+    assert _has_opta_marker("Dados da Opta ficam fora do Modelo Principal; uso odds e Elo.") is False
+    assert _has_opta_marker("Dados da Opta estão fora do Modelo Principal; uso odds e Elo.") is False
     assert _has_opta_marker("usei o ranking da Opta como âncora do título") is True
 
 
