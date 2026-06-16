@@ -78,4 +78,5 @@ validate:
 	$(PYTEST) -q
 	$(PYTHON) -m compileall -q worldcup_brazil scripts
 	$(PYTHON) scripts/validate_blind_peer_review_contract.py >/tmp/worldcup_blind_peer_review_contract.json
+	$(PYTHON) scripts/validate_opponent_room_contract.py >/tmp/worldcup_opponent_room_contract.json
 	python3 -m json.tool config/worldcup_brazil.example.json >/tmp/worldcup_brazil_config_check.json

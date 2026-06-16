@@ -41,6 +41,21 @@ def test_agent_source_harness_entrypoint_can_be_invoked_directly() -> None:
     assert "Diagnose agent source-planning quorum" in result.stdout
 
 
+def test_opponent_room_contract_validator_passes() -> None:
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, "scripts/validate_opponent_room_contract.py"],
+        cwd=root,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+
+
 def test_cli_reports_source_quorum_failure_without_python_stacktrace(
     tmp_path: Path,
     monkeypatch,
