@@ -294,6 +294,40 @@ def test_backstage_prefers_source_correction_and_protagonist_behavior() -> None:
     assert "convergência auditável" not in backstage
 
 
+def test_backstage_does_not_truncate_after_numeric_date_fragment() -> None:
+    bundle = _bundle()
+    bundle.model_participation = {
+        "total_messages": 18,
+        "total_rounds": 6,
+        "protagonist_counts": {"DeepSeek V4 Pro": 3},
+        "last_consensus_protagonist": "DeepSeek V4 Pro",
+    }
+    bundle.meeting_transcript = [
+        {
+            "round": 13,
+            "responses": [
+                {
+                    "agent": "DeepSeek V4 Pro",
+                    "answer": (
+                        "Após buscar informações atualizadas sobre lesões no Brasil e na Costa do Marfim entre "
+                        "13. e 16. de junho, não encontrei novo desfalque auditável que altere a probabilidade."
+                    ),
+                    "disagreed": True,
+                    "removed_from_main": False,
+                    "used_fallback": False,
+                }
+            ],
+        }
+    ]
+
+    text = render_template_post(bundle, post_index=1, run_date=date(2026, 6, 11))
+
+    backstage = text.split("DOIS BASTIDORES DA REUNIÃO DE HOJE:\n\n", 1)[1].split("📊", 1)[0]
+    assert "entre 13.\n" not in backstage
+    assert "entre 13." not in backstage.split("2️⃣", 1)[0]
+    assert "entre 13. e 16." in backstage or "entre 13. e 16…" in backstage
+
+
 def test_template_post_includes_change_bullets_when_previous_bundle_is_available() -> None:
     previous = _bundle()
     current = _bundle()

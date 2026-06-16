@@ -214,12 +214,19 @@ def _normalize_beat(text: str) -> str:
     return unicodedata.normalize("NFKD", str(text or "")).encode("ascii", "ignore").decode("ascii").strip().lower()
 
 
+def _last_sentence_boundary(text: str) -> int:
+    matches = list(re.finditer(r"(?<!\d)[.!?]\s+", text))
+    if not matches:
+        return -1
+    return matches[-1].start()
+
+
 def _truncate_words(text: str, limit: int) -> str:
     clean = " ".join(str(text or "").split())
     if len(clean) <= limit:
         return clean
     window = clean[:limit]
-    sentence_end = max(window.rfind(". "), window.rfind("! "), window.rfind("? "))
+    sentence_end = _last_sentence_boundary(window)
     if sentence_end >= int(limit * 0.45):
         return window[: sentence_end + 1]
     clause_end = max(window.rfind("; "), window.rfind(" — "), window.rfind(", mas "))
@@ -227,7 +234,9 @@ def _truncate_words(text: str, limit: int) -> str:
         return window[:clause_end].rstrip(",;") + "."
     and_end = window.rfind(" e ")
     if and_end >= int(limit * 0.6):
-        return window[:and_end].rstrip(",;") + "."
+        before_and = window[:and_end].rstrip(",; ")
+        if not re.search(r"\d\.$", before_and):
+            return before_and + "."
     cut = window.rsplit(" ", 1)[0]
     return cut.rstrip(",;:.") + "…"
 
@@ -299,7 +308,7 @@ def _sentence_score(sentence: str) -> int:
 def _best_sentence(answer: str) -> tuple[int, str]:
     """Sentença com mais substância: evento concreto vale 2, número vale 1."""
     best_score, best = 0, ""
-    for sentence in re.split(r"(?<=[.!?])\s+|;\s+", " ".join(str(answer or "").split())):
+    for sentence in re.split(r"(?<=[!?])\s+|(?<!\d\.)(?<=[.])\s+|;\s+", " ".join(str(answer or "").split())):
         if len(sentence) < 25:
             continue
         score = _sentence_score(sentence)

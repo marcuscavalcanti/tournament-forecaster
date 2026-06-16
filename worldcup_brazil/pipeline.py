@@ -2397,6 +2397,32 @@ def _reported_source_labels_from_agent_opinions(opinions: list[Any]) -> list[str
     return labels
 
 
+LOW_AUTHORITY_SOURCE_DOMAINS = (
+    "youtube.com",
+    "youtu.be",
+    "facebook.com",
+    "instagram.com",
+    "capcut.com",
+    "tiktok.com",
+)
+
+
+def _is_low_authority_public_source(label_or_url: str) -> bool:
+    text = str(label_or_url or "").strip()
+    candidate = text.rsplit(" ", 1)[-1]
+    if "://" not in candidate and ": " in text:
+        candidate = text.rsplit(": ", 1)[-1]
+    parsed = urllib.parse.urlparse(candidate)
+    host = parsed.netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return any(host == domain or host.endswith("." + domain) for domain in LOW_AUTHORITY_SOURCE_DOMAINS)
+
+
+def _low_authority_public_source_labels(labels: list[str]) -> list[str]:
+    return [label for label in labels if _is_low_authority_public_source(label)]
+
+
 def _reported_event_source_labels(config: dict[str, Any]) -> list[str]:
     labels: list[str] = []
     seen: set[str] = set()
@@ -7311,6 +7337,14 @@ async def build_report_bundle(
     if not used_sources:
         warnings.append(
             "Nenhum modelo reportou source_urls/source_queries auditáveis; revise APIs/bridges antes de publicar."
+        )
+    low_authority_sources = _low_authority_public_source_labels(used_sources)
+    if low_authority_sources:
+        warnings.append(
+            "Fontes sociais/vídeo de baixa autoridade foram mantidas apenas como evidência relatada pelo modelo, "
+            "não como base estatística: "
+            + ", ".join(low_authority_sources[:5])
+            + ("." if len(low_authority_sources) <= 5 else f" (+{len(low_authority_sources) - 5} outras).")
         )
 
     model_influence_pct = calculate_model_influence([*active_planning_opinions, *meeting_opinions], opinions, consensus)
