@@ -4590,6 +4590,7 @@ async def _run_model_meeting(
     reentry_candidate_specs: list[Any] | None = None,
     reentry_removed_reasons: dict[str, str] | None = None,
     fast_path_report_coherence_check: Callable[[Any], str] | None = None,
+    progress_sink: dict[str, Any] | None = None,
 ) -> tuple[Any, list[Any], list[dict[str, Any]], list[Any]]:
     agent_specs = list(agent_specs)
     planning_opinions = list(planning_opinions)
@@ -4615,6 +4616,14 @@ async def _run_model_meeting(
     max_reentries_per_slot = max(0, int(config.get("meeting_max_reentries_per_slot", 1)))
     probe_max_attempts = max(1, int(config.get("agent_reentry_probe_max_attempts", 2)))
     active_slots = _slots_from_specs(agent_specs)
+    if progress_sink is not None:
+        progress_sink.update(
+            {
+                "participants": list(active_slots),
+                "meeting_transcript": meeting_transcript,
+                "all_opinions": all_opinions,
+            }
+        )
     reentry_enabled = bool(config.get("agent_reentry_probe_enabled", False))
     reentry_timeout = int(config.get("agent_reentry_probe_timeout_seconds", 180))
     reentry_removed_reasons = dict(reentry_removed_reasons or {})
@@ -4869,6 +4878,12 @@ async def _run_model_meeting(
 
         if watchdog:
             watchdog.meeting_question(round_index=round_index, protagonist=protagonist, question=question)
+        if progress_sink is not None:
+            progress_sink["pending_round"] = {
+                "round": round_index,
+                "protagonist": protagonist,
+                "question": question,
+            }
 
         responder_specs = [spec for spec in agent_specs if getattr(spec, "slot", None) != protagonist]
         response_prompt = _meeting_response_prompt(
@@ -4997,6 +5012,9 @@ async def _run_model_meeting(
                 )
         turn["coverage"] = _meeting_coverage_report([*meeting_transcript, turn], config)
         meeting_transcript.append(turn)
+        if progress_sink is not None:
+            progress_sink["pending_round"] = None
+            progress_sink["last_completed_round"] = round_index
         if _blind_peer_review_enabled(config) and round_index == 1:
             await _ensure_blind_peer_review_for_turn(
                 turn,
@@ -5978,6 +5996,7 @@ async def _run_parallel_opponent_debriefing(
     allow_agent_fallback: bool,
     token_cost_ledger: dict[str, Any],
     watchdog: RunWatchdog | None = None,
+    progress_sink: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     opponent_config = _opponent_debriefing_config(config)
     meeting_watchdog = (
@@ -5998,6 +6017,7 @@ async def _run_parallel_opponent_debriefing(
         allow_agent_fallback=allow_agent_fallback,
         watchdog=meeting_watchdog,
         token_cost_ledger=token_cost_ledger,
+        progress_sink=progress_sink,
     )
     exit_status = str(getattr(consensus, "exit_status", "consensus") or "consensus")
     exit_warning = str(getattr(consensus, "exit_warning", "") or "")
@@ -6844,6 +6864,7 @@ async def build_report_bundle(
     }
     opponent_debriefing_task = None
     opponent_debriefing_result: dict[str, Any] = {"enabled": False}
+    opponent_debriefing_progress: dict[str, Any] = {}
     if _parallel_opponent_debriefing_enabled(config) and active_agent_specs:
         budget_warning = _opponent_debriefing_budget_warning(config)
         if budget_warning:
@@ -6860,6 +6881,7 @@ async def build_report_bundle(
                 allow_agent_fallback=allow_agent_fallback,
                 token_cost_ledger=token_cost_ledger,
                 watchdog=watchdog,
+                progress_sink=opponent_debriefing_progress,
             )
         )
         if watchdog:
@@ -6950,6 +6972,13 @@ async def build_report_bundle(
                 "failed": True,
                 "timed_out": True,
                 "timeout_seconds": opponent_timeout,
+                "rounds": len(opponent_debriefing_progress.get("meeting_transcript", []) or []),
+                "participants": list(opponent_debriefing_progress.get("participants", []) or []),
+                "meeting_transcript": list(opponent_debriefing_progress.get("meeting_transcript", []) or []),
+                "all_opinions": list(opponent_debriefing_progress.get("all_opinions", []) or []),
+                "pending_round": opponent_debriefing_progress.get("pending_round"),
+                "partial_progress_available": bool(opponent_debriefing_progress),
+                "usable_for_main_room": False,
                 "error": f"sala paralela excedeu timeout total de {opponent_timeout}s",
             }
             meeting_config["_parallel_opponent_briefing"] = _parallel_opponent_briefing_for_prompt(
@@ -7153,6 +7182,8 @@ async def build_report_bundle(
                 "rounds": int(opponent_debriefing_result.get("rounds", 0) or 0),
                 "participants": list(opponent_debriefing_result.get("participants", [])),
                 "meeting_transcript": list(opponent_debriefing_result.get("meeting_transcript", [])),
+                "pending_round": opponent_debriefing_result.get("pending_round"),
+                "partial_progress_available": bool(opponent_debriefing_result.get("partial_progress_available", False)),
                 "error": str(opponent_debriefing_result.get("error", "")),
                 "exit_status": str(opponent_debriefing_result.get("exit_status", "") or ""),
                 "exit_warning": str(opponent_debriefing_result.get("exit_warning", "") or ""),

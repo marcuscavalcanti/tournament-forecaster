@@ -1352,7 +1352,7 @@ def test_parallel_opponent_debriefing_timeout_does_not_block_main_room(
                 title_pct=7.9,
                 summary="Plano com fonte verificável.",
                 source_urls=["https://example.com/deepseek"],
-            ),
+            )
         ]
 
     rooms: list[str] = []
@@ -1372,6 +1372,14 @@ def test_parallel_opponent_debriefing_timeout_does_not_block_main_room(
         room = str(config.get("_meeting_room", "main_brazil"))
         rooms.append(room)
         if room == "opponent_path":
+            progress_sink = _kwargs.get("progress_sink")
+            if progress_sink is not None:
+                progress_sink["participants"] = [spec.slot for spec in agent_specs]
+                progress_sink["pending_round"] = {
+                    "round": 1,
+                    "protagonist": "GPT 5.5",
+                    "question": "Quais sao os top-2 por fase no cruzamento oficial?",
+                }
             await asyncio.sleep(0.05)
         slots = [spec.slot for spec in agent_specs]
         opinions = [
@@ -1421,6 +1429,16 @@ def test_parallel_opponent_debriefing_timeout_does_not_block_main_room(
     assert "main_brazil" in rooms
     assert artifacts.bundle.metadata["parallel_opponent_debriefing"]["failed"] is True
     assert artifacts.bundle.metadata["parallel_opponent_debriefing"]["timed_out"] is True
+    assert artifacts.bundle.metadata["parallel_opponent_debriefing"]["participants"] == [
+        "GPT 5.5",
+        "Perplexity Pro",
+        "DeepSeek V4 Pro",
+    ]
+    assert artifacts.bundle.metadata["parallel_opponent_debriefing"]["pending_round"] == {
+        "round": 1,
+        "protagonist": "GPT 5.5",
+        "question": "Quais sao os top-2 por fase no cruzamento oficial?",
+    }
     events = [json.loads(line) for line in watchdog_path.read_text(encoding="utf-8").splitlines()]
     assert any(
         event["step"] == "opponent_model_meeting" and event["status"] == "fail"
