@@ -162,7 +162,10 @@ def blend_match_estimate(
         brazil_pct = _confidence_weighted_average(qualitative, "brazil_pct")
 
     brazil_pct = _one_decimal_down(_clamp(brazil_pct, 1.0, 99.0))
-    opponent_pct = round(100 - brazil_pct, 1)
+    if draw_pct is None:
+        opponent_pct = round(100 - brazil_pct, 1)
+    else:
+        opponent_pct = round(max(0.0, 100 - brazil_pct - float(draw_pct)), 1)
     if rationale is None:
         stat_sources = _source_names(statistical)
         qual_sources = _source_names(qualitative)

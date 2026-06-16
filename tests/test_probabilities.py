@@ -61,6 +61,22 @@ def test_blend_match_estimate_preserves_exact_consensus_percentage() -> None:
     assert estimate.brazil_pct == 59.0
 
 
+def test_blend_match_estimate_with_draw_sets_opponent_pct_to_loss_probability() -> None:
+    estimate = blend_match_estimate(
+        brazil="Brasil",
+        opponent="Haiti",
+        phase="Fase de grupos",
+        statistical=[SourceSignal(source="market", brazil_pct=92, opponent_pct=8, confidence=0.8)],
+        qualitative=[SourceSignal(source="news", brazil_pct=92, opponent_pct=8, confidence=0.7)],
+        draw_pct=8.0,
+    )
+
+    assert estimate.brazil_pct == 92.0
+    assert estimate.draw_pct == 8.0
+    assert estimate.opponent_pct == 0.0
+    assert round(estimate.brazil_pct + estimate.draw_pct + estimate.opponent_pct, 1) == 100.0
+
+
 def test_blend_match_estimate_confidence_level_widens_operational_interval() -> None:
     common_kwargs = {
         "brazil": "Brasil",

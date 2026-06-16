@@ -158,6 +158,38 @@ def test_template_post_uses_next_unplayed_game_and_ordinal() -> None:
     assert "derrota" not in text.split("O CAMINHO")[0]
 
 
+def test_template_post_derives_group_loss_from_win_and_draw_when_bundle_opponent_pct_is_stale() -> None:
+    bundle = _bundle()
+    haiti = bundle.group_matches[1]
+    haiti.opponent_pct = 8.0
+
+    text = render_template_post(bundle, post_index=2, run_date=date(2026, 6, 18))
+
+    validate_template_post(text, bundle)
+    assert text.startswith("⚽ 19/jun · Brasil x Haiti · 92/8/0 · Hexa: 8,6%")
+    assert "BRASIL x HAITI — 92% vitória | 8% empate" in text
+    assert "8% derrota" not in text.split("O CAMINHO")[0]
+    assert "Galera do bolão: 92 / 8 / 0." in text
+
+
+def test_template_post_discloses_active_models_and_opponent_room_fallback() -> None:
+    bundle = _bundle()
+    bundle.metadata["removed_agent_slots"] = ["Opus 4.8", "GPT 5.5"]
+    bundle.metadata["parallel_opponent_debriefing"] = {
+        "enabled": True,
+        "usable_for_main_room": False,
+        "exit_status": "max_rounds_no_consensus",
+    }
+
+    text = render_template_post(bundle, post_index=1, run_date=date(2026, 6, 11))
+
+    validate_template_post(text, bundle)
+    assert "3 modelos ativos" in text
+    assert "2 removidos no planejamento" in text
+    assert "os 5 modelos pesquisam" not in text
+    assert "cruzamentos sem consenso lateral; usei Monte Carlo/bracket" in text
+
+
 def test_round_stats_prioritize_discussion_profile_over_cost() -> None:
     bundle = _bundle()
     bundle.model_participation = {

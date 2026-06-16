@@ -33,7 +33,7 @@ TEMPLATE = """{round_header}
 
 {title}
 
-Como prometi: na véspera de cada jogo, os 5 modelos pesquisam odds, rankings e notícias, debatem e fecham uma decisão em grupo.
+{model_intro}
 
 👉 {next_game_header}
 
@@ -49,6 +49,7 @@ O CAMINHO ATÉ O HEXA, adversário por adversário (no mata-mata não tem empate
 {backstage_section}📊 NÚMEROS DA RODADA:
 {round_stats}
 
+{run_note}
 ⚠️ Propositalmente, o modelo da OPTA, que fez 350K simulações para chegar nos resultados e favoritos da Copa, é a única fonte não permitida dos modelos consultarem.
 
 Chegou agora? O post #1 explica tudo:
@@ -134,6 +135,49 @@ def _completed_group_context(bundle: Any) -> str:
     if len(scores) == 1:
         return f"Com {scores[0]}, "
     return f"Com {' e '.join(scores[:2])}, "
+
+
+def _group_loss_pct(match: Any) -> float | None:
+    try:
+        brazil_pct = float(getattr(match, "brazil_pct", 0.0) or 0.0)
+        draw_pct = getattr(match, "draw_pct", None)
+        if draw_pct is None:
+            opponent_pct = getattr(match, "opponent_pct", None)
+            return None if opponent_pct is None else max(0.0, float(opponent_pct))
+        return round(max(0.0, 100.0 - brazil_pct - float(draw_pct)), 1)
+    except (TypeError, ValueError):
+        return getattr(match, "opponent_pct", None)
+
+
+def _model_intro(bundle: Any) -> str:
+    metadata = getattr(bundle, "metadata", {}) or {}
+    removed = list(metadata.get("removed_agent_slots") or [])
+    influence = getattr(bundle, "model_influence_pct", {}) or {}
+    participation = getattr(bundle, "model_participation", {}) or {}
+    protagonists = participation.get("protagonist_counts") if isinstance(participation, dict) else {}
+    active_count = len(influence) or (len(protagonists) if isinstance(protagonists, dict) else 0)
+    if active_count and removed:
+        return (
+            f"Como prometi: neste run, {active_count} modelos ativos pesquisaram odds, rankings e notícias, "
+            f"debateram e fecharam uma decisão em grupo; {len(removed)} removidos no planejamento."
+        )
+    if active_count:
+        return (
+            f"Como prometi: neste run, {active_count} modelos ativos pesquisaram odds, rankings e notícias, "
+            "debateram e fecharam uma decisão em grupo."
+        )
+    return (
+        "Como prometi: na véspera de cada jogo, os modelos pesquisam odds, rankings e notícias, "
+        "debatem e fecham uma decisão em grupo."
+    )
+
+
+def _run_note(bundle: Any) -> str:
+    metadata = getattr(bundle, "metadata", {}) or {}
+    opponent_room = metadata.get("parallel_opponent_debriefing") or {}
+    if opponent_room.get("enabled") and not bool(opponent_room.get("usable_for_main_room", True)):
+        return "⚠️ Nota do run: cruzamentos sem consenso lateral; usei Monte Carlo/bracket oficial.\n\n"
+    return ""
 
 
 def _analysis_short_date(bundle: Any) -> str:
@@ -626,7 +670,7 @@ def render_template_post(
 
     win = _pct_int(getattr(featured, "brazil_pct", None))
     draw_value = getattr(featured, "draw_pct", None)
-    loss_value = getattr(featured, "opponent_pct", None)
+    loss_value = _group_loss_pct(featured)
     parts = [f"{win} vitória"]
     if draw_value:
         parts.append(f"{_pct_int(draw_value)} empate")
@@ -686,7 +730,7 @@ def render_template_post(
     bolao = [win]
     if draw_value:
         bolao.append(_pct_int(draw_value))
-    if loss_value:
+    if loss_value is not None:
         bolao.append(_pct_int(loss_value))
     palpite = " / ".join(value.rstrip("%") for value in bolao)
 
@@ -700,6 +744,8 @@ def render_template_post(
     text = TEMPLATE.format(
         round_header=round_header,
         round_stats=round_stats,
+        run_note=_run_note(bundle),
+        model_intro=_model_intro(bundle),
         title=title,
         next_game_header=next_game_header,
         next_game_line=next_game_line,

@@ -136,6 +136,68 @@ def test_apply_meeting_match_probabilities_accepts_valid_group_win_pct() -> None
     assert estimate.opponent_pct == 18.0
 
 
+def test_validate_report_coherence_rejects_group_match_probabilities_over_one_hundred() -> None:
+    group_estimates = [
+        MatchEstimate(
+            brazil="Brasil",
+            opponent="Haiti",
+            phase="Fase de grupos",
+            brazil_pct=92.0,
+            draw_pct=8.0,
+            opponent_pct=8.0,
+            statistical_weight=0.5,
+            qualitative_weight=0.5,
+            rationale="bundle incoerente do run de 16/jun",
+        )
+    ]
+
+    try:
+        _validate_report_coherence(
+            stage_probabilities={"quartas": 37.4, "semifinal": 20.1, "final": 9.8, "titulo": 4.5},
+            group_estimates=group_estimates,
+            knockout_estimates=[],
+            monte_carlo_result=None,
+        )
+    except ReportCoherenceError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("expected ReportCoherenceError")
+
+    assert "Fase de grupos vs Haiti" in message
+    assert "V+E+D=108.0%" in message
+
+
+def test_validate_report_coherence_rejects_knockout_match_probabilities_not_summing_to_one_hundred() -> None:
+    knockout_estimates = [
+        MatchEstimate(
+            brazil="Brasil",
+            opponent="Inglaterra",
+            phase="Quartas",
+            brazil_pct=40.7,
+            opponent_pct=50.0,
+            statistical_weight=0.5,
+            qualitative_weight=0.5,
+            rationale="dois caminhos não somam 100",
+            scenario_pct=33.9,
+        )
+    ]
+
+    try:
+        _validate_report_coherence(
+            stage_probabilities={"quartas": 37.4, "semifinal": 20.1, "final": 9.8, "titulo": 4.5},
+            group_estimates=[],
+            knockout_estimates=knockout_estimates,
+            monte_carlo_result=None,
+        )
+    except ReportCoherenceError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("expected ReportCoherenceError")
+
+    assert "Quartas vs Inglaterra" in message
+    assert "Brasil+adversário=90.7%" in message
+
+
 def test_widen_ci_for_bracket_uncertainty_expands_placeholder_knockout_interval() -> None:
     estimate = MatchEstimate(
         brazil="Brasil",

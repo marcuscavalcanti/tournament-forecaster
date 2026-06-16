@@ -5755,8 +5755,43 @@ def _validate_report_coherence(
     stage_probabilities: dict[str, float],
     knockout_estimates: list[Any],
     monte_carlo_result: dict[str, Any] | None,
+    group_estimates: list[Any] | None = None,
 ) -> None:
     errors: list[str] = []
+    probability_tolerance = 0.2
+
+    for estimate in group_estimates or []:
+        phase = str(getattr(estimate, "phase", "Fase de grupos") or "Fase de grupos")
+        opponent = str(getattr(estimate, "opponent", "") or "")
+        brazil_pct = _float_probability(getattr(estimate, "brazil_pct", None))
+        opponent_pct = _float_probability(getattr(estimate, "opponent_pct", None))
+        draw_pct = _float_probability(getattr(estimate, "draw_pct", None))
+        if brazil_pct is None or opponent_pct is None:
+            continue
+        if draw_pct is None:
+            total = brazil_pct + opponent_pct
+            if abs(total - 100.0) > probability_tolerance:
+                errors.append(
+                    f"{phase} vs {opponent}: Brasil+adversário={total:.1f}% deveria somar 100.0%"
+                )
+            continue
+        total = brazil_pct + draw_pct + opponent_pct
+        if abs(total - 100.0) > probability_tolerance:
+            errors.append(f"{phase} vs {opponent}: V+E+D={total:.1f}% deveria somar 100.0%")
+
+    for estimate in knockout_estimates:
+        phase = str(getattr(estimate, "phase", ""))
+        if not _is_knockout_estimate(phase):
+            continue
+        opponent = str(getattr(estimate, "opponent", "") or "")
+        brazil_pct = _float_probability(getattr(estimate, "brazil_pct", None))
+        opponent_pct = _float_probability(getattr(estimate, "opponent_pct", None))
+        if brazil_pct is None or opponent_pct is None:
+            continue
+        total = brazil_pct + opponent_pct
+        if abs(total - 100.0) > probability_tolerance:
+            errors.append(f"{phase} vs {opponent}: Brasil+adversário={total:.1f}% deveria somar 100.0%")
+
     stage_order = ("quartas", "semifinal", "final", "titulo")
     for previous_key, next_key in zip(stage_order, stage_order[1:]):
         if previous_key not in stage_probabilities or next_key not in stage_probabilities:
@@ -7180,6 +7215,7 @@ async def build_report_bundle(
                     float(getattr(candidate_consensus, "title_pct", 0.0) or 0.0),
                     meeting_config,
                 ),
+                group_estimates=group_estimates,
                 knockout_estimates=knockout_estimates,
                 monte_carlo_result=monte_carlo_result,
             )
@@ -7269,6 +7305,7 @@ async def build_report_bundle(
     try:
         _validate_report_coherence(
             stage_probabilities=stage_probabilities,
+            group_estimates=group_estimates,
             knockout_estimates=knockout_estimates,
             monte_carlo_result=monte_carlo_result,
         )
