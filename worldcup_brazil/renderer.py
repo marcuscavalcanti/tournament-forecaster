@@ -330,13 +330,22 @@ def _render_monte_carlo_summary(bundle: ReportBundle) -> list[str]:
             f"{int(team_context.get('teams_with_context_count') or 0)} seleções"
             + (f"; famílias: {families}." if families else ".")
         )
-    lines.append(
-        "- Como pesa: simula grupos, melhores terceiros e chave oficial. "
-        "Os modelos recebem isso como insumo quantitativo e podem aceitar ou contestar com fonte melhor."
-    )
+    blend = ((bundle.metadata or {}).get("numeric_chairman") or {}).get("stage_probability_blend") or {}
+    if isinstance(blend, dict) and blend.get("enabled"):
+        lines.append(
+            "- Como pesa: funil final combina "
+            f"{float(blend.get('monte_carlo_weight', 0.6)) * 100:.0f}% Monte Carlo e "
+            f"{float(blend.get('model_weight', 0.4)) * 100:.0f}% consenso dos modelos; "
+            "mercado pode desafiar, mas não reprecifica sozinho."
+        )
+    else:
+        lines.append(
+            "- Como pesa: simula grupos, melhores terceiros e chave oficial. "
+            "Os modelos recebem isso como insumo quantitativo e podem aceitar ou contestar com fonte melhor."
+        )
     if stages:
         lines.append(
-            "- Funil MC: "
+            "- Funil MC de base: "
             f"quartas {_fmt_pct(float(stages.get('quartas', 0.0)))} | "
             f"semi {_fmt_pct(float(stages.get('semifinal', 0.0)))} | "
             f"final {_fmt_pct(float(stages.get('final', 0.0)))} | "

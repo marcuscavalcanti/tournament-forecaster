@@ -23,6 +23,11 @@
     "min_pct": 1.0,
     "max_pct": 25.0
   },
+  "stage_probability_blend": {
+    "enabled": true,
+    "monte_carlo_weight": 0.6,
+    "model_weight": 0.4
+  },
   "monte_carlo": {
     "enabled": true,
     "iterations": 40000,

@@ -347,7 +347,13 @@ def _has_fixed_quanti_quali_allocation(text: str) -> bool:
     allocation_slash_pairs = []
     for match in slash_pair_matches:
         local = normalized[max(0, match.start() - 90) : min(len(normalized), match.end() + 90)]
-        if any(marker in local for marker in odds_context_markers):
+        immediate = normalized[max(0, match.start() - 55) : min(len(normalized), match.end() + 55)]
+        looks_like_allocation = (
+            any(marker in immediate for marker in quant_markers)
+            and any(marker in immediate for marker in qual_markers)
+            and any(marker in immediate for marker in method_markers)
+        )
+        if any(marker in local for marker in odds_context_markers) and not looks_like_allocation:
             continue
         allocation_slash_pairs.append(match)
     fixed_pair = bool(allocation_slash_pairs)
@@ -1914,10 +1920,56 @@ def _rationale(
     )
 
 
+def _model_scaled_stage_probabilities(title_pct: float) -> dict[str, float]:
+    return {
+        "quartas": round(min(95.0, max(0.0, title_pct * 5.9)), 1),
+        "semifinal": round(min(90.0, max(0.0, title_pct * 3.7)), 1),
+        "final": round(min(70.0, max(0.0, title_pct * 2.05)), 1),
+        "titulo": round(title_pct, 1),
+    }
+
+
+def _stage_probability_blend_config(config: dict[str, Any]) -> dict[str, Any]:
+    raw = config.get("stage_probability_blend")
+    configured = raw if isinstance(raw, dict) else {}
+    enabled = bool(configured.get("enabled", True))
+    mc_weight = float(configured.get("monte_carlo_weight", 0.60))
+    model_weight = float(configured.get("model_weight", 0.40))
+    mc_weight = max(0.0, mc_weight)
+    model_weight = max(0.0, model_weight)
+    total = mc_weight + model_weight
+    if total <= 0:
+        mc_weight, model_weight = 0.60, 0.40
+        total = 1.0
+    return {
+        "enabled": enabled,
+        "monte_carlo_weight": mc_weight / total,
+        "model_weight": model_weight / total,
+    }
+
+
+def _stage_probability_blend_label(config: dict[str, Any]) -> str:
+    blend = _stage_probability_blend_config(config)
+    mc = round(float(blend["monte_carlo_weight"]) * 100)
+    model = round(float(blend["model_weight"]) * 100)
+    return f"monte_carlo_model_blend_{mc}_{model}"
+
+
+def _stage_probability_blend_metadata(config: dict[str, Any]) -> dict[str, Any]:
+    blend = _stage_probability_blend_config(config)
+    return {
+        "enabled": bool(blend["enabled"]),
+        "monte_carlo_weight": round(float(blend["monte_carlo_weight"]), 2),
+        "model_weight": round(float(blend["model_weight"]), 2),
+        "label": _stage_probability_blend_label(config),
+    }
+
+
 def _stage_probabilities(title_pct: float, config: dict[str, Any]) -> dict[str, float]:
     configured = config.get("stage_probabilities")
     if configured:
         return {key: round(float(value), 1) for key, value in configured.items()}
+    model_scaled = _model_scaled_stage_probabilities(title_pct)
     monte_carlo_result = config.get("_monte_carlo_result")
     if (
         isinstance(monte_carlo_result, dict)
@@ -1925,18 +1977,24 @@ def _stage_probabilities(title_pct: float, config: dict[str, Any]) -> dict[str, 
         and bool((config.get("monte_carlo") or {}).get("use_stage_probabilities", True))
     ):
         stages = monte_carlo_result.get("stage_probabilities") or {}
-        return {
-            "quartas": round(float(stages.get("quartas", title_pct * 5.9)), 1),
-            "semifinal": round(float(stages.get("semifinal", title_pct * 3.7)), 1),
-            "final": round(float(stages.get("final", title_pct * 2.05)), 1),
-            "titulo": round(float(stages.get("titulo", title_pct)), 1),
+        mc_scaled = {
+            "quartas": round(float(stages.get("quartas", model_scaled["quartas"])), 1),
+            "semifinal": round(float(stages.get("semifinal", model_scaled["semifinal"])), 1),
+            "final": round(float(stages.get("final", model_scaled["final"])), 1),
+            "titulo": round(float(stages.get("titulo", model_scaled["titulo"])), 1),
         }
-    return {
-        "quartas": round(min(95.0, max(0.0, title_pct * 5.9)), 1),
-        "semifinal": round(min(90.0, max(0.0, title_pct * 3.7)), 1),
-        "final": round(min(70.0, max(0.0, title_pct * 2.05)), 1),
-        "titulo": round(title_pct, 1),
-    }
+        blend = _stage_probability_blend_config(config)
+        if bool(blend["enabled"]) and float(blend["model_weight"]) > 0:
+            return {
+                key: round(
+                    float(blend["monte_carlo_weight"]) * mc_scaled[key]
+                    + float(blend["model_weight"]) * model_scaled[key],
+                    1,
+                )
+                for key in ("quartas", "semifinal", "final", "titulo")
+            }
+        return mc_scaled
+    return model_scaled
 
 
 def _stage_probability_source(config: dict[str, Any]) -> str:
@@ -1951,8 +2009,14 @@ def _stage_probability_source(config: dict[str, Any]) -> str:
         stages = monte_carlo_result.get("stage_probabilities") or {}
         required = ("quartas", "semifinal", "final", "titulo")
         if all(key in stages for key in required):
+            blend = _stage_probability_blend_config(config)
+            if bool(blend["enabled"]) and float(blend["model_weight"]) > 0:
+                return _stage_probability_blend_label(config)
             return "monte_carlo_reconciled_funnel"
         if stages:
+            blend = _stage_probability_blend_config(config)
+            if bool(blend["enabled"]) and float(blend["model_weight"]) > 0:
+                return _stage_probability_blend_label(config) + "_partial"
             return "monte_carlo_partial_agent_scaled_fallback"
     return "agent_scaled_fallback"
 
@@ -2069,7 +2133,7 @@ def _market_title_challenge(
         "enabled": settings["enabled"],
         "triggered": False,
         "status": "disabled" if not settings["enabled"] else "no_market_signal",
-        "decision": "mantem_monte_carlo",
+        "decision": "mantem_funil_60_40",
         "model_title_pct": model_title_pct,
         "market_low_pct": None,
         "market_high_pct": None,
@@ -2111,7 +2175,7 @@ def _market_title_challenge(
         **base,
         "triggered": triggered,
         "status": "challenged" if triggered else "within_threshold",
-        "decision": "mantem_monte_carlo_mercado_como_desafio" if triggered else "mantem_monte_carlo",
+        "decision": "mantem_funil_60_40_mercado_como_desafio" if triggered else "mantem_funil_60_40",
         "market_low_pct": market_low,
         "market_high_pct": market_high,
         "market_mid_pct": market_mid,
@@ -2129,8 +2193,8 @@ def _market_title_challenge_warning(challenge: dict[str, Any]) -> str:
     high = float(challenge.get("market_high_pct") or low)
     market = f"{low:.1f}%-{high:.1f}%" if abs(high - low) >= 0.05 else f"{low:.1f}%"
     return (
-        "Mercado desafia o título do Monte Carlo: "
-        f"MC={model:.1f}%, mercado={market}; número principal mantido pelo MC e divergência exposta."
+        "Mercado desafia o funil final 60/40: "
+        f"modelo={model:.1f}%, mercado={market}; número principal mantido pelo funil e divergência exposta."
     )
 
 
@@ -4808,9 +4872,10 @@ def _numeric_chairman_metadata(
     return {
         "enabled": bool(config.get("numeric_chairman_enabled", True)),
         "number_owner": stage_source,
-        "primary_number_owner": "monte_carlo_reconciled_funnel",
+        "primary_number_owner": _stage_probability_blend_label(config),
         "stage_probability_source": stage_source,
-        "llm_role": "narrative_and_bounded_adjustment",
+        "stage_probability_blend": _stage_probability_blend_metadata(config),
+        "llm_role": "40_percent_weighted_input_after_consensus",
         "llm_decides_number": False,
         "bounded_adjustment_only": True,
         "hard_gate": "ReportCoherenceError",

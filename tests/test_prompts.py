@@ -567,6 +567,15 @@ def test_fixed_quanti_quali_detector_accepts_fractional_market_odds() -> None:
     assert _has_fixed_quanti_quali_allocation(text) is False
 
 
+def test_fixed_quanti_quali_detector_rejects_slash_allocation_even_with_nearby_odds() -> None:
+    text = (
+        "Uso quota fixa 70/30 entre quantitativo e qualitativo, ancorada nas odds 8/1 "
+        "do mercado de título e em notícias recentes."
+    )
+
+    assert _has_fixed_quanti_quali_allocation(text) is True
+
+
 def test_fixed_quanti_quali_detector_rejects_method_percentages() -> None:
     assert _has_fixed_quanti_quali_allocation("Uso 70% quantitativo e 30% qualitativo.") is True
     assert _has_fixed_quanti_quali_allocation("Mix 60/40 entre dados estatísticos e contexto.") is True

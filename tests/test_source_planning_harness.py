@@ -300,6 +300,30 @@ def test_source_planning_readiness_accepts_fractional_odds_near_context_words() 
     assert report["removed_agents"] == []
 
 
+def test_source_planning_readiness_rejects_slash_split_even_with_nearby_fractional_odds() -> None:
+    report = _source_planning_readiness_report(
+        [
+            AgentOpinion(
+                agent="Opus 4.8",
+                title_pct=8.4,
+                summary=(
+                    "Plano com quota fixa 70/30 entre quantitativo e qualitativo, "
+                    "ancorada nas odds 8/1 do mercado de campeão."
+                ),
+                source_urls=["https://www.oddsportal.com/football/world/world-cup-2026/"],
+                source_queries=["Brazil World Cup 2026 fractional odds injuries Elo"],
+            )
+        ],
+        {
+            "require_agent_source_plan": True,
+            "minimum_source_ready_agents": 1,
+        },
+    )
+
+    assert report["quorum_met"] is False
+    assert "alocação fixa quanti/quali" in report["removed_agents"][0]["reason"]
+
+
 def test_source_planning_readiness_rejects_reserved_benchmark_mentions() -> None:
     report = _source_planning_readiness_report(
         [
@@ -1578,8 +1602,14 @@ def test_blind_peer_review_shadow_metadata_is_persisted_without_decision_effect(
     chairman = artifacts.bundle.metadata["numeric_chairman"]
     assert chairman["enabled"] is True
     assert chairman["number_owner"] == "agent_scaled_fallback"
-    assert chairman["primary_number_owner"] == "monte_carlo_reconciled_funnel"
-    assert chairman["llm_role"] == "narrative_and_bounded_adjustment"
+    assert chairman["primary_number_owner"] == "monte_carlo_model_blend_60_40"
+    assert chairman["stage_probability_blend"] == {
+        "enabled": True,
+        "monte_carlo_weight": 0.6,
+        "model_weight": 0.4,
+        "label": "monte_carlo_model_blend_60_40",
+    }
+    assert chairman["llm_role"] == "40_percent_weighted_input_after_consensus"
     assert chairman["llm_decides_number"] is False
     assert chairman["hard_gate"] == "ReportCoherenceError"
     assert chairman["stage_probability_source"] == "agent_scaled_fallback"

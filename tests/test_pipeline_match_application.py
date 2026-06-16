@@ -139,7 +139,7 @@ def test_market_title_challenge_flags_large_gap_without_changing_model_title() -
     assert challenge["market_high_pct"] == 11.0
     assert challenge["market_mid_pct"] == 9.8
     assert challenge["absolute_gap_pct"] == 5.3
-    assert "mantem_monte_carlo" in challenge["decision"]
+    assert "mantem_funil_60_40" in challenge["decision"]
 
 
 def test_market_title_challenge_ignores_small_gap_and_preserves_status() -> None:

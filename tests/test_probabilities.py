@@ -114,15 +114,15 @@ def test_blend_match_estimate_preserves_exact_percentage_with_multiple_sources()
     assert estimate.brazil_pct == 59.0
 
 
-def test_stage_probabilities_use_single_monte_carlo_funnel_including_title() -> None:
+def test_stage_probabilities_blend_monte_carlo_sixty_and_models_forty() -> None:
     """Regressão do run de 10/jun/2026: o funil misturava fases do Monte Carlo com título
-    do consenso da sala e tentou publicar titulo=11.0% > final=2.7%. Funil agora é único:
-    com Monte Carlo ativo, o título também vem da simulação; a leitura da sala fica em
-    metadata/palpites e só influencia o funil via sinais de contexto reconciliados."""
+    do consenso da sala e tentou publicar titulo=11.0% > final=2.7%. Funil agora é único
+    e ponderado: 60% Monte Carlo reconciliado + 40% consenso dos modelos."""
     probabilities = _stage_probabilities(
         11.2,
         {
             "monte_carlo": {"use_stage_probabilities": True},
+            "stage_probability_blend": {"monte_carlo_weight": 0.6, "model_weight": 0.4},
             "_monte_carlo_result": {
                 "enabled": True,
                 "stage_probabilities": {
@@ -136,15 +136,33 @@ def test_stage_probabilities_use_single_monte_carlo_funnel_including_title() -> 
     )
 
     assert probabilities == {
-        "quartas": 62.0,
-        "semifinal": 38.0,
-        "final": 21.0,
-        "titulo": 8.0,
+        "quartas": 63.6,
+        "semifinal": 39.4,
+        "final": 21.8,
+        "titulo": 9.3,
     }
     assert probabilities["titulo"] <= probabilities["final"]
 
 
-def test_stage_probability_source_marks_partial_monte_carlo_as_partial_fallback() -> None:
+def test_stage_probability_source_reports_monte_carlo_model_blend() -> None:
+    config = {
+        "monte_carlo": {"use_stage_probabilities": True},
+        "stage_probability_blend": {"monte_carlo_weight": 0.6, "model_weight": 0.4},
+        "_monte_carlo_result": {
+            "enabled": True,
+            "stage_probabilities": {
+                "quartas": 62.0,
+                "semifinal": 38.0,
+                "final": 21.0,
+                "titulo": 8.0,
+            },
+        },
+    }
+
+    assert _stage_probability_source(config) == "monte_carlo_model_blend_60_40"
+
+
+def test_stage_probability_source_marks_partial_monte_carlo_as_partial_blend() -> None:
     config = {
         "monte_carlo": {"use_stage_probabilities": True},
         "_monte_carlo_result": {
@@ -156,4 +174,4 @@ def test_stage_probability_source_marks_partial_monte_carlo_as_partial_fallback(
         },
     }
 
-    assert _stage_probability_source(config) == "monte_carlo_partial_agent_scaled_fallback"
+    assert _stage_probability_source(config) == "monte_carlo_model_blend_60_40_partial"

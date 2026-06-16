@@ -191,7 +191,7 @@ def _run_note(bundle: Any) -> str:
             market = _pct(low)
         notes.append(
             "Mercado desafia o Hexa: "
-            f"MC {_pct(market_challenge.get('model_title_pct'))}; mercado {market}. Mantive MC"
+            f"funil 60/40 {_pct(market_challenge.get('model_title_pct'))}; mercado {market}. Mantive funil"
         )
     if not notes:
         return ""

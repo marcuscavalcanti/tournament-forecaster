@@ -371,9 +371,17 @@ def test_render_linkedin_post_includes_monte_carlo_path_summary() -> None:
                         ]
                     }
                 },
-            }
+            },
+            "numeric_chairman": {
+                "stage_probability_blend": {
+                    "enabled": True,
+                    "monte_carlo_weight": 0.6,
+                    "model_weight": 0.4,
+                    "label": "monte_carlo_model_blend_60_40",
+                }
+            },
         },
-    )
+        )
 
     post = render_linkedin_post(bundle)
 
@@ -389,8 +397,9 @@ def test_render_linkedin_post_includes_monte_carlo_path_summary() -> None:
     assert "Contexto por seleção: 4 sinais em 3 seleções" in post
     assert "bets_prediction_markets" in post
     assert "injuries_cuts_news" in post
-    assert "simula grupos, melhores terceiros e chave oficial" in post
-    assert "- Funil MC: quartas 71.2% | semi 42.8% | final 22.1% | título simulado 10.9%." in post
+    assert "funil final combina 60% Monte Carlo e 40% consenso dos modelos" in post
+    assert "mercado pode desafiar, mas não reprecifica sozinho" in post
+    assert "- Funil MC de base: quartas 71.2% | semi 42.8% | final 22.1% | título simulado 10.9%." in post
     assert "- 16 avos, adversários por simulação: Japão 38.4%, Suécia 31.7%." in post
 
 

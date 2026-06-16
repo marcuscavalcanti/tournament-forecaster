@@ -134,13 +134,13 @@ def test_template_post_discloses_market_title_challenge_without_repricing_title(
         "model_title_pct": 4.5,
         "market_low_pct": 8.5,
         "market_high_pct": 11.0,
-        "decision": "mantem_monte_carlo_mercado_como_desafio",
+        "decision": "mantem_funil_60_40_mercado_como_desafio",
     }
 
     text = render_template_post(bundle, post_index=3, run_date=date(2026, 6, 16))
 
     assert "levanta a taça em 4,5%" in text
-    assert "Mercado desafia o Hexa: MC 4,5%; mercado 8,5%-11%. Mantive MC." in text
+    assert "Mercado desafia o Hexa: funil 60/40 4,5%; mercado 8,5%-11%. Mantive funil." in text
     assert "levanta a taça em 8,5%" not in text
 
 
