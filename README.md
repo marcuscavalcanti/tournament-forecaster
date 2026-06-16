@@ -114,7 +114,7 @@ Resiliência de rede:
 - `model_preflight_timeout_seconds` controla o timeout de cada smoke test, padrão `180`.
 - `agent_timeout_seconds` controla o timeout das chamadas reais de planejamento, perguntas e respostas dos modelos; o config de exemplo usa `240` porque essa etapa inclui busca fresca, JSON auditável e cobertura completa de grupo/mata-mata.
 - Bridges locais/CLI, como `claude`, `openai`, `codex` e `gemini`, herdam `agent_timeout_seconds` nas chamadas reais. Se você precisar sobrescrever só o orçamento de CLI, use `BROWSER_COMMAND_TIMEOUT_SECONDS`; sem essa variável, não há teto oculto de 120s.
-- `agent_reentry_probe_enabled` permite que um modelo removido por timeout/fallback seja testado de novo em paralelo e volte à sala quando trouxer fontes próprias verificáveis; `agent_reentry_probe_timeout_seconds` usa `180` por padrão.
+- `agent_reentry_probe_enabled` permite que um modelo removido por falha recuperável seja testado de novo em paralelo e volte à sala quando trouxer fontes próprias verificáveis. O gate agora classifica cada remoção com `validation_issues[]` (`gate_name`, `matched_rule`, `offending_excerpt`, `recoverability`, `repair_hint`): erro de formato usa retry curto (`agent_reentry_format_timeout_seconds`, padrão `60`); falta de fonte só volta se trouxer fonte auditável; `429`/quota/billing, benchmark reservado real e adversário impossível não entram em reentry no mesmo run. `agent_reentry_probe_timeout_seconds` segue como teto geral (`180` no exemplo).
 - `HTTP_MAX_ATTEMPTS` controla tentativas para HTTP retentável, padrão `3`.
 - `HTTP_BACKOFF_BASE_SECONDS` controla o primeiro backoff exponencial, padrão `1.0`.
 - `HTTP_BACKOFF_MAX_SECONDS` limita o teto do backoff, padrão `12.0`.

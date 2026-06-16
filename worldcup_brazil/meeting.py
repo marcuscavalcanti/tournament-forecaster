@@ -22,6 +22,7 @@ class MeetingResponse:
     consensus_check_question: str = ""
     match_probabilities: dict[str, float] = None
     scenario_probabilities: dict[str, float] = None
+    validation_issues: list[dict[str, Any]] = None
 
 
 def _support_score(
@@ -278,6 +279,7 @@ def build_meeting_turn(
                 consensus_check_question=consensus_check_question,
                 match_probabilities=dict(getattr(opinion, "match_probabilities", {}) or {}),
                 scenario_probabilities=dict(getattr(opinion, "scenario_probabilities", {}) or {}),
+                validation_issues=list(getattr(opinion, "validation_issues", []) or []),
             )
         )
 
@@ -304,6 +306,7 @@ def build_meeting_turn(
                 "used_fallback": response.used_fallback,
                 "removed_from_main": response.removed_from_main,
                 "removal_reason": response.removal_reason,
+                "validation_issues": response.validation_issues or [],
                 "leadership_bid": response.leadership_bid,
                 "proposed_next_question": response.proposed_next_question,
                 "leadership_rationale": response.leadership_rationale,

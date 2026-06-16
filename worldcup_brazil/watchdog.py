@@ -53,12 +53,22 @@ class RunWatchdog:
     def fail(self, step: str, *, detail: str = "", extra: dict[str, Any] | None = None) -> None:
         self.event(step, "fail", detail=detail, extra=extra)
 
-    def chat(self, agent: str, message: str, *, round_name: str) -> None:
+    def chat(
+        self,
+        agent: str,
+        message: str,
+        *,
+        round_name: str,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        event_extra = {"agent": agent, "round": round_name}
+        if extra:
+            event_extra.update(extra)
         self.event(
             "model_room",
             "chat",
             detail=message,
-            extra={"agent": agent, "round": round_name},
+            extra=event_extra,
         )
 
     def meeting_question(self, *, round_index: int, protagonist: str, question: str) -> None:

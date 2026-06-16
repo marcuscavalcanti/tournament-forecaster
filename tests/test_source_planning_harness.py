@@ -64,6 +64,45 @@ def test_source_planning_readiness_report_explains_each_removed_agent() -> None:
     assert report["quorum_met"] is False
 
 
+def test_source_planning_readiness_report_structures_validation_issues() -> None:
+    opinions = [
+        AgentOpinion(
+            agent="Perplexity Pro",
+            title_pct=8.4,
+            summary="Plano com fontes de mercado e rating.",
+            source_urls=["https://example.com/odds"],
+        ),
+        AgentOpinion(
+            agent="GPT 5.5",
+            title_pct=8.0,
+            summary="Sem source_urls ou source_queries nesta resposta.",
+        ),
+        AgentOpinion(
+            agent="Opus 4.8",
+            title_pct=8.0,
+            summary="Usei Opta Power Rankings como benchmark reservado no planejamento.",
+            source_urls=["https://example.com/non-opta-market"],
+        ),
+    ]
+
+    report = _source_planning_readiness_report(opinions, {"require_agent_source_plan": True})
+
+    removed = {entry["agent"]: entry for entry in report["removed_agents"]}
+    missing_source = removed["GPT 5.5"]["validation_issues"][0]
+    assert missing_source["gate_name"] == "source_planning_readiness"
+    assert missing_source["matched_rule"] == "missing_auditable_sources"
+    assert missing_source["field"] == "source_urls/source_queries"
+    assert missing_source["recoverability"] == "source"
+    assert missing_source["reentry_eligible"] is True
+    assert "source_urls" in missing_source["repair_hint"]
+
+    opta = removed["Opus 4.8"]["validation_issues"][0]
+    assert opta["matched_rule"] == "reserved_benchmark_opta"
+    assert opta["recoverability"] == "policy"
+    assert opta["reentry_eligible"] is False
+    assert "Opta Power Rankings" in opta["offending_excerpt"]
+
+
 def test_source_planning_sanitizer_keeps_repair_language_with_query_backed_plan() -> None:
     opinion = AgentOpinion(
         agent="Perplexity Pro",
@@ -752,7 +791,113 @@ def test_agent_removal_watchdog_keeps_source_planning_reason(
     ][0]
     assert removal["extra"]["agent"] == "Opus 4.8"
     assert "timed out after 120s" in removal["detail"]
-    assert "sem resposta auditável, não entra no pool ativo da sala" in removal["detail"]
+    assert "trecho que disparou:" in removal["detail"]
+    assert "reentry elegível:" in removal["detail"]
+    assert removal["extra"]["validation_issues"][0]["offending_excerpt"]
+
+
+def test_real_source_planning_violation_is_not_reentry_eligible_and_logs_excerpt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_call_all_agents(*args, **kwargs):
+        return [
+            AgentOpinion(
+                agent="Opus 4.8",
+                title_pct=8.0,
+                summary="Usei Opta Power Rankings como benchmark reservado no planejamento.",
+                source_urls=["https://example.com/non-opta-market"],
+            ),
+            AgentOpinion(
+                agent="GPT 5.5",
+                title_pct=8.0,
+                summary="Plano com fonte verificável.",
+                source_urls=["https://example.com/gpt"],
+            ),
+            AgentOpinion(
+                agent="Perplexity Pro",
+                title_pct=8.1,
+                summary="Plano com fonte verificável.",
+                source_urls=["https://example.com/perplexity"],
+            ),
+            AgentOpinion(
+                agent="DeepSeek V4 Pro",
+                title_pct=8.2,
+                summary="Plano com fonte verificável.",
+                source_urls=["https://example.com/deepseek"],
+            ),
+        ]
+
+    async def fake_run_model_meeting(
+        *,
+        config,
+        planning_opinions,
+        generated_at,
+        agent_specs,
+        baseline_title_pct,
+        allow_agent_fallback,
+        watchdog,
+        token_cost_ledger=None,
+        reentry_candidate_specs=None,
+        reentry_removed_issues=None,
+        **_kwargs,
+    ):
+        captured["active_slots"] = [spec.slot for spec in agent_specs]
+        captured["reentry_slots"] = [spec.slot for spec in (reentry_candidate_specs or [])]
+        captured["reentry_removed_issues"] = reentry_removed_issues or {}
+        consensus = build_consensus(planning_opinions, agent_slots=[spec.slot for spec in agent_specs])
+        return consensus, planning_opinions, [], planning_opinions
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+    monkeypatch.setattr("worldcup_brazil.pipeline._run_model_meeting", fake_run_model_meeting)
+    watchdog_path = tmp_path / "watchdog.jsonl"
+
+    artifacts = asyncio.run(
+        build_report_bundle(
+            config={
+                "baseline_title_pct": 8.0,
+                "minimum_source_ready_agents": 3,
+                "source_planning_repair_attempts": 0,
+                "meeting_min_participants": 3,
+                "agent_reentry_probe_enabled": True,
+                "parallel_opponent_debriefing_enabled": False,
+                "monte_carlo": {"enabled": False},
+                "agents": [
+                    {"slot": "Opus 4.8", "provider": "anthropic", "model": "opus", "endpoint": "x"},
+                    {"slot": "GPT 5.5", "provider": "openai", "model": "gpt-5.5", "endpoint": "x"},
+                    {"slot": "Perplexity Pro", "provider": "openai-compatible", "model": "sonar", "endpoint": "x"},
+                    {"slot": "DeepSeek V4 Pro", "provider": "openai-compatible", "model": "deepseek", "endpoint": "x"},
+                ],
+                "group_matches": [{"opponent": "Marrocos", "brazil_pct": 59.0}],
+                "knockout_matches": [],
+            },
+            source_memory=SourceMemory(tmp_path / "source_memory.json"),
+            generated_at=datetime(2026, 6, 7, 12, tzinfo=timezone.utc),
+            watchdog=RunWatchdog(path=watchdog_path, verbose=False),
+        )
+    )
+
+    assert "Opus 4.8" not in captured["active_slots"]
+    assert captured["reentry_slots"] == []
+    opus_issues = artifacts.bundle.metadata["removed_agent_validation_issues"]["Opus 4.8"]
+    assert opus_issues[0]["matched_rule"] == "reserved_benchmark_opta"
+    assert opus_issues[0]["reentry_eligible"] is False
+
+    events = [json.loads(line) for line in watchdog_path.read_text(encoding="utf-8").splitlines()]
+    removal = [
+        event
+        for event in events
+        if event["step"] == "model_room"
+        and event["status"] == "chat"
+        and event["extra"].get("round") == "agent-removal"
+        and event["extra"].get("agent") == "Opus 4.8"
+    ][0]
+    assert removal["extra"]["reentry_eligible"] is False
+    assert removal["extra"]["validation_issues"][0]["matched_rule"] == "reserved_benchmark_opta"
+    assert "Opta Power Rankings" in removal["extra"]["offending_excerpt"]
+    assert "reentry elegível: não" in removal["detail"]
 
 
 def test_gemini_billing_depleted_reason_reaches_watchdog_and_bundle_metadata(
@@ -843,6 +988,10 @@ def test_gemini_billing_depleted_reason_reaches_watchdog_and_bundle_metadata(
     assert "Google Gemini billing action required" in removed_reasons["Gemini Pro"]
     assert "buy/prepay credits" in removed_reasons["Gemini Pro"]
     assert "https://ai.studio/projects" in removed_reasons["Gemini Pro"]
+    gemini_issues = artifacts.bundle.metadata["removed_agent_validation_issues"]["Gemini Pro"]
+    assert gemini_issues[0]["matched_rule"] == "provider_billing_or_prepay_depleted"
+    assert gemini_issues[0]["reentry_eligible"] is False
+    assert "comprar créditos" in gemini_issues[0]["repair_hint"]
     assert any(
         "Gemini Pro" in warning and "comprar créditos" in warning and "https://ai.studio/projects" in warning
         for warning in artifacts.bundle.warnings

@@ -1556,7 +1556,7 @@ def test_slot_broken_twice_stays_out_for_rest_of_run(monkeypatch) -> None:
     assert rounds_with_perplexity[-1] < len(transcript) - 2, "após a segunda quebra o slot não pode voltar"
 
 
-def test_reentry_probe_attempts_are_capped(monkeypatch) -> None:
+def test_reentry_probe_stops_after_429_quota_failure(monkeypatch, tmp_path) -> None:
     config = {
         **_base_config(),
         "meeting_min_rounds": 1,
@@ -1589,6 +1589,8 @@ def test_reentry_probe_attempts_are_capped(monkeypatch) -> None:
     monkeypatch.setattr("worldcup_brazil.pipeline.call_agent", fake_call_agent)
     monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
 
+    watchdog_path = tmp_path / "watchdog.jsonl"
+
     asyncio.run(
         _run_model_meeting(
             config=config,
@@ -1597,11 +1599,15 @@ def test_reentry_probe_attempts_are_capped(monkeypatch) -> None:
             agent_specs=_specs(),
             baseline_title_pct=11.0,
             allow_agent_fallback=True,
-            watchdog=None,
+            watchdog=RunWatchdog(path=watchdog_path, verbose=False),
         )
     )
 
-    assert probe_calls.count("Perplexity Pro") == 2
+    assert probe_calls.count("Perplexity Pro") == 1
+    events = [json.loads(line) for line in watchdog_path.read_text(encoding="utf-8").splitlines()]
+    failure = [event for event in events if event["step"] == "agent_reentry_probe" and event["status"] == "fail"][0]
+    assert failure["extra"]["validation_issue"]["matched_rule"] == "provider_rate_limit_or_quota"
+    assert failure["extra"]["reentry_eligible"] is False
 
 
 def test_reentry_probe_quorum_risk_policy_skips_when_active_room_is_healthy(monkeypatch) -> None:
@@ -1658,6 +1664,163 @@ def test_reentry_probe_quorum_risk_policy_skips_when_active_room_is_healthy(monk
     )
 
     assert probe_calls == []
+
+
+def test_format_reentry_uses_short_timeout_rejoins_and_recalculates_quorum(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    config = {
+        **_base_config(),
+        "meeting_min_rounds": 3,
+        "meeting_max_rounds": 3,
+        "meeting_consensus_threshold_pct": 10.0,
+        "meeting_stability_rounds": 99,
+        "agent_reentry_probe_enabled": True,
+        "agent_reentry_probe_policy": "always",
+        "agent_reentry_probe_timeout_seconds": 180,
+        "agent_reentry_format_timeout_seconds": 17,
+    }
+    opus_spec = AgentSpec(
+        slot="Opus 4.8",
+        provider="anthropic",
+        model="claude-opus-4-8",
+        env_api_key="ANTHROPIC_API_KEY",
+        endpoint="https://api.anthropic.com/v1/messages",
+    )
+    format_issue = {
+        "gate_name": "source_planning_readiness",
+        "matched_rule": "partial_or_unparseable_payload",
+        "offending_excerpt": "Resposta em JSON parcial; faltam campos auditáveis.",
+        "field": "summary",
+        "severity": "blocking",
+        "recoverability": "format",
+        "repair_hint": "Retry curto: reenviar JSON completo.",
+        "reentry_eligible": True,
+        "reentry_decision_reason": "erro de formato é recuperável por retry curto",
+    }
+    probe_timeouts: list[int] = []
+
+    async def fake_probe(*, spec, config, generated_at, baseline_title_pct, removed_reason, timeout):
+        probe_timeouts.append(timeout)
+        return (
+            AgentOpinion(
+                agent=spec.slot,
+                title_pct=10.0,
+                summary="Plano recuperado com fontes próprias.",
+                source_urls=["https://example.com/opus-reentry"],
+            ),
+            "",
+            "prompt de reentrada",
+        )
+
+    async def fake_call_agent(spec, prompt, **kwargs):
+        return _healthy_question_opinion(spec.slot)
+
+    async def fake_call_all_agents(prompt, *, specs, **kwargs):
+        return [_healthy_response(spec.slot, 10.0) for spec in specs]
+
+    monkeypatch.setattr("worldcup_brazil.pipeline._run_agent_reentry_probe", fake_probe)
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_agent", fake_call_agent)
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+    watchdog_path = tmp_path / "watchdog.jsonl"
+
+    _consensus, _opinions, transcript, _all = asyncio.run(
+        _run_model_meeting(
+            config=config,
+            planning_opinions=_planning_opinions(),
+            generated_at=datetime(2026, 6, 14, tzinfo=timezone.utc),
+            agent_specs=_specs(),
+            baseline_title_pct=11.0,
+            allow_agent_fallback=True,
+            watchdog=RunWatchdog(path=watchdog_path, verbose=False),
+            reentry_candidate_specs=[opus_spec],
+            reentry_removed_reasons={"Opus 4.8": "devolver resposta parcial ou sem campos auditáveis"},
+            reentry_removed_issues={"Opus 4.8": [format_issue]},
+        )
+    )
+
+    assert probe_timeouts == [17]
+    assert any(
+        "Opus 4.8" in {response["agent"] for response in turn["responses"]}
+        for turn in transcript[1:]
+    )
+    assert any(
+        turn["llm_council_fast_path"]["minimum_blind_acceptances"] == 3
+        for turn in transcript[1:]
+    )
+    events = [json.loads(line) for line in watchdog_path.read_text(encoding="utf-8").splitlines()]
+    started = [event for event in events if event["step"] == "agent_reentry_probe" and event["status"] == "start"][0]
+    assert started["extra"]["timeout_seconds"] == 17
+    assert started["extra"]["reentry_eligible"] is True
+    assert started["extra"]["offending_excerpt"] == format_issue["offending_excerpt"]
+    finished = [event for event in events if event["step"] == "agent_reentry_probe" and event["status"] == "finish"][0]
+    assert len(finished["extra"]["active_slots"]) == 4
+
+
+def test_policy_reentry_violation_is_skipped_without_probe(monkeypatch, tmp_path) -> None:
+    config = {
+        **_base_config(),
+        "meeting_min_rounds": 1,
+        "meeting_max_rounds": 1,
+        "meeting_consensus_threshold_pct": 10.0,
+        "agent_reentry_probe_enabled": True,
+        "agent_reentry_probe_policy": "always",
+    }
+    opus_spec = AgentSpec(
+        slot="Opus 4.8",
+        provider="anthropic",
+        model="claude-opus-4-8",
+        env_api_key="ANTHROPIC_API_KEY",
+        endpoint="https://api.anthropic.com/v1/messages",
+    )
+    opta_issue = {
+        "gate_name": "source_planning_readiness",
+        "matched_rule": "reserved_benchmark_opta",
+        "offending_excerpt": "Usei Opta Power Rankings como benchmark reservado.",
+        "field": "summary",
+        "severity": "blocking",
+        "recoverability": "policy",
+        "repair_hint": "Remover Opta e trazer fontes não reservadas.",
+        "reentry_eligible": False,
+        "reentry_decision_reason": "violação real de contrato não ganha reentry automática",
+    }
+
+    async def fake_probe(*args, **kwargs):
+        raise AssertionError("violação real de Opta não deveria agendar reentry")
+
+    async def fake_call_agent(spec, prompt, **kwargs):
+        return _healthy_question_opinion(spec.slot)
+
+    async def fake_call_all_agents(prompt, *, specs, **kwargs):
+        return [_healthy_response(spec.slot, 10.0) for spec in specs]
+
+    monkeypatch.setattr("worldcup_brazil.pipeline._run_agent_reentry_probe", fake_probe)
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_agent", fake_call_agent)
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+    watchdog_path = tmp_path / "watchdog.jsonl"
+
+    asyncio.run(
+        _run_model_meeting(
+            config=config,
+            planning_opinions=_planning_opinions(),
+            generated_at=datetime(2026, 6, 14, tzinfo=timezone.utc),
+            agent_specs=_specs(),
+            baseline_title_pct=11.0,
+            allow_agent_fallback=True,
+            watchdog=RunWatchdog(path=watchdog_path, verbose=False),
+            reentry_candidate_specs=[opus_spec],
+            reentry_removed_reasons={"Opus 4.8": "referência a benchmark reservado no planejamento sem Opta"},
+            reentry_removed_issues={"Opus 4.8": [opta_issue]},
+        )
+    )
+
+    events = [json.loads(line) for line in watchdog_path.read_text(encoding="utf-8").splitlines()]
+    skipped = [event for event in events if event["step"] == "agent_reentry_probe" and event["status"] == "skipped"][0]
+    assert skipped["extra"]["agent"] == "Opus 4.8"
+    assert skipped["extra"]["reentry_eligible"] is False
+    assert skipped["extra"]["validation_issue"]["matched_rule"] == "reserved_benchmark_opta"
+    assert skipped["extra"]["offending_excerpt"] == opta_issue["offending_excerpt"]
 
 
 def test_format_impossible_opponent_reason_includes_phase_country_and_candidates() -> None:

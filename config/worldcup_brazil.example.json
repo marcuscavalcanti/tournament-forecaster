@@ -120,6 +120,7 @@
   "protagonist_timeout_seconds": 210,
   "agent_reentry_probe_enabled": true,
   "agent_reentry_probe_timeout_seconds": 180,
+  "agent_reentry_format_timeout_seconds": 60,
   "http_max_attempts": 3,
   "http_backoff_base_seconds": 1.0,
   "http_backoff_max_seconds": 12.0,

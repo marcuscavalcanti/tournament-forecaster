@@ -109,6 +109,7 @@ class AgentOpinion:
     used_fallback: bool = False
     removed_from_main: bool = False
     removal_reason: str = ""
+    validation_issues: list[dict] = None
 
     def __post_init__(self) -> None:
         if self.source_urls is None:
@@ -121,6 +122,8 @@ class AgentOpinion:
             object.__setattr__(self, "scenario_probabilities", {})
         if self.team_context_signals is None:
             object.__setattr__(self, "team_context_signals", [])
+        if self.validation_issues is None:
+            object.__setattr__(self, "validation_issues", [])
 
 
 @dataclass(frozen=True)

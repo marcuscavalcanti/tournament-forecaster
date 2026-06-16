@@ -470,6 +470,230 @@ def _external_search_failure_issue(opinion: Any) -> str | None:
     return None
 
 
+def _validation_excerpt(text: str, markers: tuple[str, ...] = (), *, limit: int = 220) -> str:
+    raw = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not raw:
+        return ""
+    normalized = _normalize_text(raw)
+    for marker in markers:
+        marker_norm = _normalize_text(marker)
+        if not marker_norm:
+            continue
+        index = normalized.find(marker_norm)
+        if index >= 0:
+            start = max(0, index - 70)
+            end = min(len(raw), index + len(marker) + 110)
+            return _truncate_for_watchdog(raw[start:end].strip(), limit=limit)
+    return _truncate_for_watchdog(raw, limit=limit)
+
+
+def _opinion_diagnostic_text(opinion: Any, source_items: list[str] | None = None) -> str:
+    return " ".join(
+        str(item or "")
+        for item in (
+            getattr(opinion, "summary", ""),
+            getattr(opinion, "opening_argument", ""),
+            getattr(opinion, "question", ""),
+            getattr(opinion, "answer", ""),
+            getattr(opinion, "critique", ""),
+            getattr(opinion, "adjustment", ""),
+            getattr(opinion, "proposed_next_question", ""),
+            getattr(opinion, "leadership_rationale", ""),
+            " ".join(source_items or []),
+            " ".join(getattr(opinion, "source_urls", []) or []),
+            " ".join(getattr(opinion, "source_queries", []) or []),
+        )
+    )
+
+
+def _validation_issue(
+    *,
+    gate_name: str,
+    matched_rule: str,
+    offending_excerpt: str,
+    field: str,
+    severity: str,
+    recoverability: str,
+    repair_hint: str,
+) -> dict[str, Any]:
+    issue = {
+        "gate_name": gate_name,
+        "matched_rule": matched_rule,
+        "offending_excerpt": _truncate_for_watchdog(offending_excerpt, limit=220),
+        "field": field,
+        "severity": severity,
+        "recoverability": recoverability,
+        "repair_hint": repair_hint,
+    }
+    policy = _reentry_policy_for_validation_issue(issue)
+    issue["reentry_eligible"] = bool(policy["eligible"])
+    issue["reentry_decision_reason"] = str(policy["decision_reason"])
+    return issue
+
+
+def _issue_text_from_reason(reason: str) -> str:
+    normalized = _normalize_text(reason)
+    if "source_urls/source_queries" in normalized:
+        return "source_urls/source_queries não-Opta ausentes"
+    if "benchmark reservado" in normalized or "opta" in normalized:
+        return "benchmark reservado/Opta não pode entrar no Modelo Principal"
+    if "alocacao fixa" in normalized or "quanti/quali" in normalized:
+        return "alocação fixa quanti/quali proibida"
+    if "busca/fetch externo indisponivel" in normalized or "sem permissao" in normalized:
+        return "busca/fetch externo indisponível ou sem permissão"
+    if "429" in normalized or "too many requests" in normalized or "quota" in normalized:
+        return "quota/rate-limit impede reentrada automática"
+    if "prepayment credits" in normalized or "comprar creditos" in normalized or "billing action required" in normalized:
+        return "créditos Gemini/prepayment esgotados"
+    if "adversario impossivel" in normalized or "cruzamento oficial" in normalized:
+        return "adversário impossível pelo bracket oficial"
+    if "resposta parcial" in normalized or "json parcial" in normalized or "sem campos auditaveis" in normalized:
+        return "resposta parcial ou sem campos auditáveis"
+    return reason or "violação de contrato operacional"
+
+
+def _validation_issue_from_reason(
+    *,
+    gate_name: str,
+    reason: str,
+    opinion: Any | None = None,
+    source_items: list[str] | None = None,
+    field: str = "summary",
+) -> dict[str, Any]:
+    normalized = _normalize_text(reason)
+    diagnostic_text = _opinion_diagnostic_text(opinion, source_items) if opinion is not None else reason
+    markers: tuple[str, ...] = ()
+    matched_rule = "operational_contract"
+    severity = "blocking"
+    recoverability = "fatal"
+    repair_hint = "Não reentrar automaticamente; requer correção manual ou nova rodada operacional."
+
+    if _is_format_repairable_planning_reason(reason):
+        matched_rule = "partial_or_unparseable_payload"
+        recoverability = "format"
+        markers = ("resposta parcial", "json parcial", "sem campos auditáveis", "sem campos auditaveis")
+        repair_hint = "Retry curto: reenviar somente JSON completo e auditável, sem prosa fora do objeto."
+    elif "prepayment credits" in normalized or "billing action required" in normalized or "comprar creditos" in normalized:
+        matched_rule = "provider_billing_or_prepay_depleted"
+        recoverability = "fatal"
+        markers = ("prepayment credits", "billing action required", "comprar créditos", "comprar creditos")
+        repair_hint = "Não reentrar neste run; comprar créditos/regularizar billing antes de tentar Gemini novamente."
+    elif "429" in normalized or "too many requests" in normalized or "rate limit" in normalized or "quota" in normalized:
+        matched_rule = "provider_rate_limit_or_quota"
+        recoverability = "source"
+        markers = ("429", "too many requests", "quota", "rate limit")
+        repair_hint = "Não reentrar até cooldown/quota renovar; evitar probes repetidos na mesma janela."
+    elif "timeout no planejamento" in normalized or "timed out" in normalized or "timeout" in normalized:
+        matched_rule = "planning_timeout"
+        recoverability = "source"
+        markers = ("timeout", "timed out")
+        repair_hint = "Pode reentrar se o probe trouxer fontes auditáveis; não confundir com 429/quota."
+    elif "source_urls/source_queries" in normalized:
+        matched_rule = "missing_auditable_sources"
+        recoverability = "source"
+        markers = ("source_urls", "source_queries")
+        repair_hint = "Pode reentrar apenas se trouxer source_urls HTTP ou source_queries específicas executadas agora."
+    elif "nao trouxe plano de fontes" in normalized or "não trouxe plano de fontes" in reason or "sem fonte auditavel" in normalized:
+        matched_rule = "missing_auditable_sources"
+        recoverability = "source"
+        markers = ("plano de fontes", "fonte auditável", "fonte auditavel")
+        repair_hint = "Pode reentrar apenas se trouxer source_urls HTTP ou source_queries específicas executadas agora."
+    elif "benchmark reservado" in normalized or "opta" in normalized:
+        matched_rule = "reserved_benchmark_opta"
+        recoverability = "policy"
+        markers = ("Opta", "opta", "benchmark reservado")
+        repair_hint = "Não reentrar; remover Opta/benchmark reservado e trazer fontes não reservadas em novo planejamento."
+    elif "adversario impossivel" in normalized or "cruzamento oficial" in normalized:
+        matched_rule = "impossible_bracket_opponent"
+        recoverability = "bracket"
+        markers = ("adversário impossível", "adversario impossivel", "cruzamento oficial")
+        repair_hint = "Não reentrar; respeitar adversários possíveis pelo bracket oficial configurado."
+    elif "alocacao fixa" in normalized or "quanti/quali" in normalized:
+        matched_rule = "fixed_quantitative_qualitative_allocation"
+        recoverability = "policy"
+        markers = ("70/30", "60/40", "quanti", "qualit")
+        repair_hint = "Não reentrar; modelos devem decidir livremente o peso entre dados quantitativos e qualitativos."
+    elif "busca/fetch externo indisponivel" in normalized or "sem permissao" in normalized or "permission" in normalized:
+        matched_rule = "external_fetch_unavailable"
+        recoverability = "source"
+        markers = ("busca/fetch", "sem permissão", "sem permissao", "permission")
+        repair_hint = "Não reentrar enquanto a ferramenta/permissão de busca estiver indisponível."
+
+    excerpt = _validation_excerpt(diagnostic_text or _issue_text_from_reason(reason), markers)
+    if not excerpt:
+        excerpt = _issue_text_from_reason(reason)
+    return _validation_issue(
+        gate_name=gate_name,
+        matched_rule=matched_rule,
+        offending_excerpt=excerpt,
+        field=field,
+        severity=severity,
+        recoverability=recoverability,
+        repair_hint=repair_hint,
+    )
+
+
+def _reentry_policy_for_validation_issue(issue: dict[str, Any] | None) -> dict[str, Any]:
+    if not issue:
+        return {
+            "eligible": True,
+            "decision_reason": "sem issue estruturada; mantendo compatibilidade com política antiga",
+        }
+    recoverability = str(issue.get("recoverability", "")).strip().lower()
+    matched_rule = str(issue.get("matched_rule", "")).strip().lower()
+    if recoverability == "format":
+        return {
+            "eligible": True,
+            "decision_reason": "erro de formato é recuperável por retry curto",
+        }
+    if matched_rule in {"missing_auditable_sources", "planning_timeout", "legacy_reentry_candidate", "consecutive_invalid_votes"}:
+        return {
+            "eligible": True,
+            "decision_reason": "falha recuperável pode reentrar somente se o probe trouxer fonte auditável",
+        }
+    if matched_rule in {"provider_rate_limit_or_quota", "provider_billing_or_prepay_depleted"}:
+        return {
+            "eligible": False,
+            "decision_reason": "429/quota/billing exige cooldown ou ação externa; probe não resolve",
+        }
+    if matched_rule == "external_fetch_unavailable":
+        return {
+            "eligible": False,
+            "decision_reason": "ferramenta/permissão de busca indisponível; probe repetiria a mesma falha",
+        }
+    if recoverability in {"policy", "bracket", "fatal"}:
+        return {
+            "eligible": False,
+            "decision_reason": "violação real de contrato não ganha reentry automática",
+        }
+    return {
+        "eligible": False,
+        "decision_reason": f"recoverability={recoverability or 'desconhecida'} sem política de reentry segura",
+    }
+
+
+def _primary_validation_issue(issues: list[dict[str, Any]] | None, reason: str = "") -> dict[str, Any]:
+    if issues:
+        return dict(issues[0])
+    if _normalize_text(reason) in {"", "removido no planejamento"}:
+        return _validation_issue(
+            gate_name="legacy_reason",
+            matched_rule="legacy_reentry_candidate",
+            offending_excerpt=reason or "motivo legado sem issue estruturada",
+            field="summary",
+            severity="blocking",
+            recoverability="source",
+            repair_hint="Pode reentrar apenas se o probe trouxer fonte auditável.",
+        )
+    return _validation_issue_from_reason(gate_name="legacy_reason", reason=reason)
+
+
+def _reentry_timeout_for_issue(config: dict[str, Any], issue: dict[str, Any] | None, default_timeout: int) -> int:
+    if str((issue or {}).get("recoverability", "")).lower() == "format":
+        return int(config.get("agent_reentry_format_timeout_seconds", min(60, int(default_timeout))))
+    return int(default_timeout)
+
+
 def _source_planning_relevance_issue(opinion: Any, source_items: list[str]) -> str | None:
     external_search_issue = _external_search_failure_issue(opinion)
     if external_search_issue:
@@ -571,11 +795,37 @@ def _source_planning_readiness_report(planning_opinions: list[Any], config: dict
             reason = relevance_issue
         else:
             reason = "plano de fontes próprio e verificável"
+        validation_issues = []
+        if removed:
+            validation_issues = [
+                _validation_issue_from_reason(
+                    gate_name="source_planning_readiness",
+                    reason=reason,
+                    opinion=opinion,
+                    source_items=source_items,
+                    field=(
+                        "source_urls/source_queries"
+                        if "source_urls/source_queries" in _normalize_text(reason)
+                        else "summary"
+                    ),
+                )
+            ]
+        primary_issue = validation_issues[0] if validation_issues else {}
 
         entry = {
             "agent": agent,
             "ready": not removed,
             "reason": reason,
+            "validation_issues": validation_issues,
+            "gate_name": primary_issue.get("gate_name", ""),
+            "matched_rule": primary_issue.get("matched_rule", ""),
+            "offending_excerpt": primary_issue.get("offending_excerpt", ""),
+            "field": primary_issue.get("field", ""),
+            "severity": primary_issue.get("severity", ""),
+            "recoverability": primary_issue.get("recoverability", ""),
+            "repair_hint": primary_issue.get("repair_hint", ""),
+            "reentry_eligible": primary_issue.get("reentry_eligible", False) if removed else False,
+            "reentry_decision_reason": primary_issue.get("reentry_decision_reason", ""),
             "used_fallback": used_fallback,
             "source_url_count": len([url for url in getattr(opinion, "source_urls", []) if not _has_opta_marker(url)]),
             "source_query_count": len(
@@ -802,6 +1052,16 @@ def _emit_source_planning_readiness(
     for entry in report.get("agents", []):
         source_hint = ", ".join(entry.get("source_items", [])[:3]) or "sem fonte dinâmica válida"
         status = "ativo" if entry.get("ready") else "removido"
+        chat_extra: dict[str, Any] = {}
+        if not entry.get("ready"):
+            chat_extra = {
+                "validation_issues": list(entry.get("validation_issues", []) or []),
+                "offending_excerpt": entry.get("offending_excerpt", ""),
+                "reentry_eligible": bool(entry.get("reentry_eligible", False)),
+                "reentry_decision_reason": entry.get("reentry_decision_reason", ""),
+                "recoverability": entry.get("recoverability", ""),
+                "matched_rule": entry.get("matched_rule", ""),
+            }
         watchdog.chat(
             str(entry.get("agent", "Modelo")),
             (
@@ -809,6 +1069,7 @@ def _emit_source_planning_readiness(
                 f"{entry.get('summary', '')} | fontes: {source_hint}"
             ),
             round_name=round_name,
+            extra=chat_extra,
         )
     status = "finish" if report.get("quorum_met") else ("fail" if final else "check")
     watchdog.event(
@@ -3657,6 +3918,14 @@ def _sanitize_main_meeting_opinions(
             removal_reason = "responder concordância/discordância sem hipótese auditável"
         else:
             removal_reason = "inconsistência quantitativa no title_pct"
+        validation_issues = [
+            _validation_issue_from_reason(
+                gate_name="main_meeting_sanitizer",
+                reason=removal_reason,
+                opinion=opinion,
+                field="answer",
+            )
+        ]
         sanitized.append(
             replace(
                 opinion,
@@ -3689,6 +3958,7 @@ def _sanitize_main_meeting_opinions(
                 used_fallback=True,
                 removed_from_main=True,
                 removal_reason=removal_reason,
+                validation_issues=validation_issues,
             )
         )
     return sanitized
@@ -3757,6 +4027,15 @@ def _sanitize_source_planning_opinions(
             )
             if original_summary:
                 rendered_summary = f"{rendered_summary} Motivo original: {original_summary}"
+            validation_issues = [
+                _validation_issue_from_reason(
+                    gate_name="source_planning_sanitizer",
+                    reason=reason,
+                    opinion=opinion,
+                    source_items=source_urls + source_queries,
+                    field="summary",
+                )
+            ]
             sanitized.append(
                 replace(
                     opinion,
@@ -3778,6 +4057,7 @@ def _sanitize_source_planning_opinions(
                     used_fallback=True,
                     removed_from_main=True,
                     removal_reason=reason,
+                    validation_issues=validation_issues,
                 )
             )
             continue
@@ -3795,6 +4075,7 @@ def _sanitize_source_planning_opinions(
                     used_fallback=False,
                     removed_from_main=False,
                     removal_reason="",
+                    validation_issues=[],
                 )
             )
             continue
@@ -3813,6 +4094,7 @@ def _sanitize_source_planning_opinions(
                     used_fallback=False,
                     removed_from_main=False,
                     removal_reason="",
+                    validation_issues=[],
                 )
             )
             continue
@@ -3824,6 +4106,7 @@ def _sanitize_source_planning_opinions(
                 used_fallback=False,
                 removed_from_main=False,
                 removal_reason="",
+                validation_issues=[],
             )
         )
     return sanitized
@@ -4896,6 +5179,7 @@ async def _run_model_meeting(
     token_cost_ledger: dict[str, Any] | None = None,
     reentry_candidate_specs: list[Any] | None = None,
     reentry_removed_reasons: dict[str, str] | None = None,
+    reentry_removed_issues: dict[str, list[dict[str, Any]]] | None = None,
     fast_path_report_coherence_check: Callable[[Any], str] | None = None,
     progress_sink: dict[str, Any] | None = None,
     cancel_event: threading.Event | None = None,
@@ -4936,6 +5220,10 @@ async def _run_model_meeting(
     reentry_enabled = bool(config.get("agent_reentry_probe_enabled", False))
     reentry_timeout = int(config.get("agent_reentry_probe_timeout_seconds", 180))
     reentry_removed_reasons = dict(reentry_removed_reasons or {})
+    reentry_removed_issues = {
+        str(slot): list(issues or [])
+        for slot, issues in (reentry_removed_issues or {}).items()
+    }
     reentry_candidates = {
         str(getattr(spec, "slot", "")): spec
         for spec in (reentry_candidate_specs or [])
@@ -4960,6 +5248,7 @@ async def _run_model_meeting(
     probe_attempts: dict[str, int] = {}
     fallback_question_streak: dict[str, int] = {}
     reentry_skip_announced: dict[str, str] = {}
+    last_invalid_issues: dict[str, list[dict[str, Any]]] = {}
 
     if watchdog:
         watchdog.start("model_meeting", detail=f"starting dynamic meeting with protagonist {protagonist}")
@@ -4970,6 +5259,9 @@ async def _run_model_meeting(
         for slot, spec in list(reentry_candidates.items()):
             if slot in active_slots or slot in pending_reentry_tasks:
                 continue
+            reason = reentry_removed_reasons.get(slot, "sem resposta externa verificável")
+            primary_issue = _primary_validation_issue(reentry_removed_issues.get(slot, []), reason)
+            issue_policy = _reentry_policy_for_validation_issue(primary_issue)
             if reentry_counts.get(slot, 0) >= max_reentries_per_slot:
                 reentry_candidates.pop(slot, None)
                 if watchdog:
@@ -4980,7 +5272,14 @@ async def _run_model_meeting(
                             f"{slot} já usou {reentry_counts.get(slot, 0)} reentrada(s) "
                             f"(limite {max_reentries_per_slot}); fora até o fim do run"
                         ),
-                        extra={"round": round_index, "agent": slot},
+                        extra={
+                            "round": round_index,
+                            "agent": slot,
+                            "validation_issue": primary_issue,
+                            "offending_excerpt": primary_issue.get("offending_excerpt", ""),
+                            "reentry_eligible": False,
+                            "reentry_decision_reason": "cooldown de reentry atingido",
+                        },
                     )
                 continue
             if probe_attempts.get(slot, 0) >= probe_max_attempts:
@@ -4993,7 +5292,14 @@ async def _run_model_meeting(
                             f"{slot} esgotou {probe_attempts.get(slot, 0)} tentativa(s) de probe "
                             f"(limite {probe_max_attempts}); sem novas sondagens neste run"
                         ),
-                        extra={"round": round_index, "agent": slot},
+                        extra={
+                            "round": round_index,
+                            "agent": slot,
+                            "validation_issue": primary_issue,
+                            "offending_excerpt": primary_issue.get("offending_excerpt", ""),
+                            "reentry_eligible": False,
+                            "reentry_decision_reason": "orçamento de probes atingido",
+                        },
                     )
                 continue
             allowed, schedule_reason = _should_schedule_reentry_probe(
@@ -5003,6 +5309,29 @@ async def _run_model_meeting(
                 configured_min_participants=configured_min_participants,
                 consecutive_sterile=consecutive_sterile,
             )
+            if not bool(issue_policy["eligible"]):
+                reentry_candidates.pop(slot, None)
+                if watchdog:
+                    watchdog.event(
+                        "agent_reentry_probe",
+                        "skipped",
+                        detail=(
+                            f"round={round_index}; agent={slot}; reentry inelegível; "
+                            f"motivo={issue_policy['decision_reason']}; "
+                            f"trecho={primary_issue.get('offending_excerpt', '') or 'não disponível'}"
+                        ),
+                        extra={
+                            "round": round_index,
+                            "agent": slot,
+                            "reason": issue_policy["decision_reason"],
+                            "validation_issue": primary_issue,
+                            "offending_excerpt": primary_issue.get("offending_excerpt", ""),
+                            "reentry_eligible": False,
+                            "reentry_decision_reason": issue_policy["decision_reason"],
+                            "active_slots": active_slots,
+                        },
+                    )
+                continue
             if not allowed:
                 if watchdog and reentry_skip_announced.get(slot) != schedule_reason:
                     watchdog.event(
@@ -5013,13 +5342,17 @@ async def _run_model_meeting(
                             "round": round_index,
                             "agent": slot,
                             "reason": schedule_reason,
+                            "validation_issue": primary_issue,
+                            "offending_excerpt": primary_issue.get("offending_excerpt", ""),
+                            "reentry_eligible": True,
+                            "reentry_decision_reason": issue_policy["decision_reason"],
                             "active_slots": active_slots,
                         },
                     )
                 reentry_skip_announced[slot] = schedule_reason
                 continue
             probe_attempts[slot] = probe_attempts.get(slot, 0) + 1
-            reason = reentry_removed_reasons.get(slot, "sem resposta externa verificável")
+            probe_timeout = _reentry_timeout_for_issue(config, primary_issue, reentry_timeout)
             pending_reentry_tasks[slot] = asyncio.create_task(
                 _run_agent_reentry_probe(
                     spec=spec,
@@ -5027,19 +5360,28 @@ async def _run_model_meeting(
                     generated_at=generated_at,
                     baseline_title_pct=baseline_title_pct,
                     removed_reason=reason,
-                    timeout=reentry_timeout,
+                    timeout=probe_timeout,
                 )
             )
             if watchdog:
                 watchdog.event(
                     "agent_reentry_probe",
                     "start",
-                    detail=f"round={round_index}; agent={slot}; timeout_s={reentry_timeout}; reason={reason}",
+                    detail=(
+                        f"round={round_index}; agent={slot}; timeout_s={probe_timeout}; "
+                        f"removido por {primary_issue.get('matched_rule') or 'contrato'}; "
+                        f"trecho que disparou: {primary_issue.get('offending_excerpt', '') or 'não disponível'}; "
+                        f"reentry elegível: sim; motivo da decisão: {issue_policy['decision_reason']}"
+                    ),
                     extra={
                         "round": round_index,
                         "agent": slot,
-                        "timeout_seconds": reentry_timeout,
+                        "timeout_seconds": probe_timeout,
                         "removed_reason": reason,
+                        "validation_issue": primary_issue,
+                        "offending_excerpt": primary_issue.get("offending_excerpt", ""),
+                        "reentry_eligible": True,
+                        "reentry_decision_reason": issue_policy["decision_reason"],
                     },
                 )
 
@@ -5052,12 +5394,36 @@ async def _run_model_meeting(
             except Exception as exc:
                 opinion, reason, prompt = None, str(exc), ""
             if opinion is None:
+                failure_issue = _validation_issue_from_reason(
+                    gate_name="agent_reentry_probe",
+                    reason=reason,
+                    field="summary",
+                )
+                failure_policy = _reentry_policy_for_validation_issue(failure_issue)
+                original_issue = _primary_validation_issue(
+                    reentry_removed_issues.get(slot, []),
+                    reentry_removed_reasons.get(slot, reason),
+                )
+                primary_issue = failure_issue if not bool(failure_policy["eligible"]) else original_issue
+                if not bool(failure_policy["eligible"]):
+                    reentry_candidates.pop(slot, None)
+                    reentry_removed_reasons[slot] = reason
+                    reentry_removed_issues[slot] = [failure_issue]
                 if watchdog:
                     watchdog.event(
                         "agent_reentry_probe",
                         "fail",
                         detail=f"round={round_index}; agent={slot}; {reason}",
-                        extra={"round": round_index, "agent": slot, "reason": reason},
+                        extra={
+                            "round": round_index,
+                            "agent": slot,
+                            "reason": reason,
+                            "validation_issue": primary_issue,
+                            "offending_excerpt": primary_issue.get("offending_excerpt", ""),
+                            "reentry_eligible": bool(primary_issue.get("reentry_eligible", False))
+                            and bool(failure_policy["eligible"]),
+                            "reentry_decision_reason": primary_issue.get("reentry_decision_reason", ""),
+                        },
                     )
                 continue
             if reentry_counts.get(slot, 0) >= max_reentries_per_slot:
@@ -5086,6 +5452,10 @@ async def _run_model_meeting(
                     stage=f"agent_reentry_probe_round_{round_index}",
                 )
             if watchdog:
+                primary_issue = _primary_validation_issue(
+                    reentry_removed_issues.get(slot, []),
+                    reentry_removed_reasons.get(slot, ""),
+                )
                 watchdog.chat(
                     slot,
                     (
@@ -5093,6 +5463,12 @@ async def _run_model_meeting(
                         f"fontes={', '.join(_non_opta_source_items(opinion)[:3]) or 'fonte auditável'}"
                     ),
                     round_name="agent-reentry",
+                    extra={
+                        "validation_issue": primary_issue,
+                        "offending_excerpt": primary_issue.get("offending_excerpt", ""),
+                        "reentry_eligible": True,
+                        "reentry_decision_reason": primary_issue.get("reentry_decision_reason", ""),
+                    },
                 )
                 watchdog.event(
                     "agent_reentry_probe",
@@ -5102,6 +5478,10 @@ async def _run_model_meeting(
                         "round": round_index,
                         "agent": slot,
                         "active_slots": active_slots,
+                        "validation_issue": primary_issue,
+                        "offending_excerpt": primary_issue.get("offending_excerpt", ""),
+                        "reentry_eligible": True,
+                        "reentry_decision_reason": primary_issue.get("reentry_decision_reason", ""),
                     },
                 )
 
@@ -5448,8 +5828,12 @@ async def _run_model_meeting(
                 consecutive_invalid[vote_slot] = 0
                 if vote_slot != protagonist:
                     fallback_question_streak[vote_slot] = 0
+                last_invalid_issues.pop(vote_slot, None)
             else:
                 consecutive_invalid[vote_slot] = consecutive_invalid.get(vote_slot, 0) + 1
+                issues = list(getattr(vote_opinion, "validation_issues", []) or [])
+                if issues:
+                    last_invalid_issues[vote_slot] = issues
         for broken_slot in [
             slot for slot in list(active_slots) if consecutive_invalid.get(slot, 0) >= breaker_threshold
         ]:
@@ -5473,6 +5857,19 @@ async def _run_model_meeting(
                 f"circuit breaker: {consecutive_invalid.get(broken_slot, 0)} respostas consecutivas sem voto válido "
                 "(removida da sala principal ou fallback sem fonte auditável)"
             )
+            breaker_issues = list(last_invalid_issues.get(broken_slot, []))
+            if not breaker_issues:
+                breaker_issues = [
+                    _validation_issue(
+                        gate_name="meeting_circuit_breaker",
+                        matched_rule="consecutive_invalid_votes",
+                        offending_excerpt=breaker_reason,
+                        field="answer",
+                        severity="blocking",
+                        recoverability="source",
+                        repair_hint="Pode reentrar apenas se o probe trouxer resposta auditável com fontes próprias.",
+                    )
+                ]
             agent_specs = [spec for spec in agent_specs if str(getattr(spec, "slot", "")) != broken_slot]
             active_slots = _slots_from_specs(agent_specs)
             room_quorum = _room_majority_quorum(
@@ -5489,8 +5886,10 @@ async def _run_model_meeting(
             ):
                 reentry_candidates[broken_slot] = removed_spec
                 reentry_removed_reasons[broken_slot] = breaker_reason
+                reentry_removed_issues[broken_slot] = breaker_issues
             else:
                 reentry_candidates.pop(broken_slot, None)
+                reentry_removed_issues.pop(broken_slot, None)
                 if watchdog and reentry_counts.get(broken_slot, 0) >= max_reentries_per_slot:
                     watchdog.event(
                         "model_room",
@@ -5717,12 +6116,22 @@ async def _run_model_meeting(
         if task.done():
             continue
         task.cancel()
+        primary_issue = _primary_validation_issue(
+            reentry_removed_issues.get(slot, []),
+            reentry_removed_reasons.get(slot, ""),
+        )
         if watchdog:
             watchdog.event(
                 "agent_reentry_probe",
                 "cancel",
                 detail=f"agent={slot}; meeting ended before async probe completed",
-                extra={"agent": slot},
+                extra={
+                    "agent": slot,
+                    "validation_issue": primary_issue,
+                    "offending_excerpt": primary_issue.get("offending_excerpt", ""),
+                    "reentry_eligible": bool(primary_issue.get("reentry_eligible", False)),
+                    "reentry_decision_reason": primary_issue.get("reentry_decision_reason", ""),
+                },
             )
 
     if final_consensus is None:
@@ -7231,9 +7640,18 @@ async def build_report_bundle(
             token_cost_ledger=token_cost_ledger,
         )
     removed_agent_slots = [str(entry["agent"]) for entry in source_readiness_report["removed_agents"]]
+    removed_issues_by_agent = {
+        str(entry.get("agent", "")): list(entry.get("validation_issues", []) or [])
+        for entry in source_readiness_report.get("removed_agents", [])
+    }
+    reentry_eligible_removed_slots = {
+        str(entry.get("agent", ""))
+        for entry in source_readiness_report.get("removed_agents", [])
+        if bool(entry.get("reentry_eligible", False))
+    }
     active_agent_specs = [spec for spec in agent_specs if spec.slot not in removed_agent_slots]
     reentry_candidate_specs = (
-        [spec for spec in agent_specs if spec.slot in removed_agent_slots]
+        [spec for spec in agent_specs if spec.slot in reentry_eligible_removed_slots]
         if bool(config.get("agent_reentry_probe_enabled", False))
         else []
     )
@@ -7254,10 +7672,28 @@ async def build_report_bundle(
         _token_cost_entry(token_cost_ledger, agent)["removed_from_decision"] = True
         if watchdog:
             reason = removed_reason_by_agent.get(agent, "não trouxe plano de fontes próprio e verificável")
+            issues = removed_issues_by_agent.get(agent, [])
+            primary_issue = _primary_validation_issue(issues, reason)
+            reentry_eligible = bool(primary_issue.get("reentry_eligible", False))
+            decision_reason = str(primary_issue.get("reentry_decision_reason", ""))
+            excerpt = str(primary_issue.get("offending_excerpt", ""))
+            detail = (
+                f"removido por {primary_issue.get('gate_name') or 'source_planning'}"
+                f"/{primary_issue.get('matched_rule') or 'contrato'}: {reason}; "
+                f"trecho que disparou: {excerpt or 'não disponível'}; "
+                f"reentry elegível: {'sim' if reentry_eligible else 'não'}; "
+                f"motivo da decisão: {decision_reason or 'sem política explícita'}"
+            )
             watchdog.chat(
                 agent,
-                f"removido da jogada: {reason}; sem resposta auditável, não entra no pool ativo da sala",
+                detail,
                 round_name="agent-removal",
+                extra={
+                    "validation_issues": issues,
+                    "offending_excerpt": excerpt,
+                    "reentry_eligible": reentry_eligible,
+                    "reentry_decision_reason": decision_reason,
+                },
             )
 
     team_context_report = _apply_agent_team_context_to_monte_carlo_config(config, active_planning_opinions)
@@ -7556,6 +7992,7 @@ async def build_report_bundle(
         token_cost_ledger=token_cost_ledger,
         reentry_candidate_specs=reentry_candidate_specs,
         reentry_removed_reasons=removed_reason_by_agent,
+        reentry_removed_issues=removed_issues_by_agent,
         fast_path_report_coherence_check=_main_room_fast_path_report_coherence_check,
     )
     meeting_exit_status = str(getattr(consensus, "exit_status", "consensus") or "consensus")
@@ -7741,6 +8178,7 @@ async def build_report_bundle(
             "_parallel_opponent_briefing": dict(meeting_config.get("_parallel_opponent_briefing", {})),
             "removed_agent_slots": removed_agent_slots,
             "removed_agent_reasons": removed_reason_by_agent,
+            "removed_agent_validation_issues": removed_issues_by_agent,
             "agent_source_planning": {
                 opinion.agent: {
                     "source_urls": opinion.source_urls,
