@@ -44,12 +44,12 @@ O caminho recomendado é via `make`, porque ele usa `uv run python` e os paths e
 Estado das features sensíveis:
 
 - `numeric_chairman_enabled=true`: o funil publicado vem do Monte Carlo/bracket reconciliado; LLM não escolhe o número final livremente.
-- `blind_peer_review_enabled=false`: revisão cega existe, mas fica desligada por padrão. Ela ainda não deve ser usada como gate decisório ativo.
-- `blind_peer_review_shadow_only=true`: quando ligada para telemetria, ela registra métricas sem alterar o consenso.
+- `blind_peer_review_enabled=false`: revisão cega existe, mas fica desligada por padrão.
+- `blind_peer_review_shadow_only=true`: quando ligada para telemetria, ela registra métricas sem alterar o consenso. Se você mudar para `false`, a revisão cega passa a gatear saídas por consenso.
 - `llm_council_fast_path_enabled=false`: fast path está atrás de flag e desligado por padrão.
 - `llm_council_fast_path_shadow_only=true`: quando testado, deve começar como shadow até haver evidência em `make profile`/watchdog.
 
-Nota importante: a revisão cega atual é segura como telemetria, mas não substitui o debate deliberativo. Ela roda na primeira passada independente e serve para medir viés/autopreferência; não trate isso como consenso automático de produção.
+Nota importante: a revisão cega atual é segura como telemetria e, quando explicitamente tirada do shadow, funciona como freio de qualidade: a sala só encerra se bater aceitação cega mínima e não exceder o limite de autopreferência configurado. Ela não substitui o debate deliberativo nem o Monte Carlo.
 
 ## Configuração
 
@@ -347,7 +347,11 @@ Funil de probabilidades: com Monte Carlo ativo, o funil publicado (quartas/semif
 - `CLAUDE_CLI_ALLOWED_TOOLS` (default `WebSearch,WebFetch`): o bridge CLI do slot Opus concede ferramentas de busca via `--allowedTools`; string vazia desliga a flag.
 - `repair_format_removals_with_quorum` (default true): respostas de planejamento em JSON parcial podem receber reparo curto de formato mesmo quando o quorum já foi atingido. O objetivo é recuperar uma quarta/quinta voz antes da sala abrir sem pagar probe longo no meio da reunião.
 - `parallel_opponent_debriefing_enabled` (default true): abre sala separada para adversários prováveis do mata-mata. Ela tem contrato de rounds próprio e precisa sair com consenso para ser usada pelo fast path da sala principal.
-- `blind_peer_review_enabled` (default false): revisão cega está implementada, mas desativada por padrão. Use apenas para shadow/telemetria até corrigir e validar a cadência decisória.
+- `blind_peer_review_enabled` (default false): revisão cega está implementada, mas desativada por padrão.
+- `blind_peer_review_shadow_only` (default true): mantém a revisão como telemetria. Com `false`, ela bloqueia saída por consenso quando falta aceitação cega ou quando `self_preference_leakage` passa do limite.
+- `blind_peer_review_acceptance_threshold` (default 0.72): score mínimo para uma posição anônima contar como aceita.
+- `blind_peer_review_max_self_preference_leakage` (default 0.20): teto de autopreferência; acima disso, a saída por consenso é bloqueada e o watchdog registra `blind_peer_review blocked`.
+- O contrato local da revisão cega roda em `make validate` via `scripts/validate_blind_peer_review_contract.py`: máscara de identidade, threshold de leakage e motivos de bloqueio são verificados sem chamar APIs.
 - `llm_council_fast_path_enabled` (default false): fast path está implementado atrás de flag, mas desligado por padrão. Quando ligado, ainda precisa passar gates de quorum, cobertura, aceitação, baixa dispersão, sala paralela utilizável e coerência do relatório. Com `llm_council_fast_path_shadow_only=true`, ele só registra candidato e não encurta a sala.
 
 Para ver o breakdown de tempo do último run (etapas, latência por rodada, fase de pergunta vs respostas, eventos de controle):

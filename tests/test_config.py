@@ -43,6 +43,8 @@ def test_example_config_uses_three_agent_source_quorum_and_repair_attempts() -> 
     assert config["blind_peer_review_shadow_only"] is True
     assert config["blind_peer_review_on_consensus_exit"] is True
     assert config["blind_peer_review_timeout_seconds"] == 90
+    assert config["blind_peer_review_acceptance_threshold"] == 0.72
+    assert config["blind_peer_review_max_self_preference_leakage"] == 0.2
     assert config["numeric_chairman_enabled"] is True
     assert config["llm_council_fast_path_enabled"] is False
     assert config["llm_council_fast_path_shadow_only"] is True
@@ -98,6 +100,8 @@ def test_load_config_watchdog_payload_exposes_safe_operational_config() -> None:
         "blind_peer_review_shadow_only": True,
         "blind_peer_review_on_consensus_exit": True,
         "blind_peer_review_timeout_seconds": 90,
+        "blind_peer_review_acceptance_threshold": 0.72,
+        "blind_peer_review_max_self_preference_leakage": 0.2,
         "numeric_chairman_enabled": True,
         "llm_council_fast_path_enabled": False,
         "llm_council_fast_path_shadow_only": True,
@@ -162,6 +166,8 @@ def test_load_config_watchdog_payload_exposes_safe_operational_config() -> None:
     assert extra["watchdog_config"]["blind_peer_review_shadow_only"] is True
     assert extra["watchdog_config"]["blind_peer_review_on_consensus_exit"] is True
     assert extra["watchdog_config"]["blind_peer_review_timeout_seconds"] == 90
+    assert extra["watchdog_config"]["blind_peer_review_acceptance_threshold"] == 0.72
+    assert extra["watchdog_config"]["blind_peer_review_max_self_preference_leakage"] == 0.2
     assert extra["watchdog_config"]["numeric_chairman_enabled"] is True
     assert extra["watchdog_config"]["llm_council_fast_path_enabled"] is False
     assert extra["watchdog_config"]["llm_council_fast_path_shadow_only"] is True

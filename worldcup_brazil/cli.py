@@ -230,6 +230,11 @@ def _config_watchdog_extra(
             "blind_peer_review_shadow_only": config.get("blind_peer_review_shadow_only", True),
             "blind_peer_review_on_consensus_exit": config.get("blind_peer_review_on_consensus_exit", True),
             "blind_peer_review_timeout_seconds": config.get("blind_peer_review_timeout_seconds", 90),
+            "blind_peer_review_acceptance_threshold": config.get("blind_peer_review_acceptance_threshold", 0.72),
+            "blind_peer_review_max_self_preference_leakage": config.get(
+                "blind_peer_review_max_self_preference_leakage",
+                0.20,
+            ),
             "numeric_chairman_enabled": config.get("numeric_chairman_enabled", True),
             "llm_council_fast_path_enabled": config.get("llm_council_fast_path_enabled", False),
             "llm_council_fast_path_shadow_only": config.get("llm_council_fast_path_shadow_only", True),

@@ -662,6 +662,10 @@ def _agent_source_planning_watchdog_extra(config: dict[str, Any]) -> dict[str, A
             "blind_peer_review_shadow_only": bool(config.get("blind_peer_review_shadow_only", True)),
             "blind_peer_review_on_consensus_exit": bool(config.get("blind_peer_review_on_consensus_exit", True)),
             "blind_peer_review_timeout_seconds": int(config.get("blind_peer_review_timeout_seconds", 90)),
+            "blind_peer_review_acceptance_threshold": float(config.get("blind_peer_review_acceptance_threshold", 0.72)),
+            "blind_peer_review_max_self_preference_leakage": float(
+                config.get("blind_peer_review_max_self_preference_leakage", 0.20)
+            ),
             "numeric_chairman_enabled": bool(config.get("numeric_chairman_enabled", True)),
             "llm_council_fast_path_enabled": bool(config.get("llm_council_fast_path_enabled", False)),
             "llm_council_fast_path_shadow_only": bool(config.get("llm_council_fast_path_shadow_only", True)),
@@ -3776,12 +3780,18 @@ def _blind_peer_review_acceptance_threshold(config: dict[str, Any]) -> float:
     return float(config.get("blind_peer_review_acceptance_threshold", 0.72))
 
 
+def _blind_peer_review_max_self_preference_leakage(config: dict[str, Any]) -> float:
+    return float(config.get("blind_peer_review_max_self_preference_leakage", 0.20))
+
+
 def _blind_peer_review_empty_metadata(config: dict[str, Any]) -> dict[str, Any]:
     return {
         "enabled": _blind_peer_review_enabled(config),
         "mode": "shadow",
         "shadow_only": _blind_peer_review_shadow_only(config),
         "acted_on_decision": False,
+        "gate_blocked": False,
+        "gate_blocked_reasons": [],
         "rounds_reviewed": [],
         "blind_review_score": {},
         "blind_acceptance_count": 0,
@@ -3790,6 +3800,8 @@ def _blind_peer_review_empty_metadata(config: dict[str, Any]) -> dict[str, Any]:
             "value": 0.0,
             "self_score_count": 0,
             "reviewer_count": 0,
+            "threshold": _blind_peer_review_max_self_preference_leakage(config),
+            "exceeds_threshold": False,
         },
         "self_preference_by_reviewer": {},
         "self_preference_by_author": {},
@@ -3819,6 +3831,9 @@ _BLIND_REVIEW_MASK_STOPWORDS = {
 
 
 def _blind_peer_review_mask_pattern(term: str) -> str:
+    stripped = str(term or "").strip()
+    if re.fullmatch(r"\d+(?:\.\d+)+", stripped):
+        return rf"(?<![\d.]){re.escape(stripped)}(?![\d.])"
     tokens = [token for token in re.split(r"[\s_\-/.]+", str(term or "").strip()) if token]
     if not tokens:
         return ""
@@ -3829,7 +3844,10 @@ def _blind_peer_review_mask_pattern(term: str) -> str:
 
 def _blind_peer_review_identity_fragments(term: str) -> set[str]:
     fragments: set[str] = set()
-    raw_tokens = [token for token in re.split(r"[\s_\-/.]+", str(term or "").strip()) if token]
+    text = str(term or "").strip()
+    for version in re.findall(r"(?<![\d.])\d+(?:\.\d+)+(?![\d.])", text):
+        fragments.add(version)
+    raw_tokens = [token for token in re.split(r"[\s_\-/]+", text) if token]
     for token in raw_tokens:
         normalized = token.strip().lower()
         if re.fullmatch(r"\d+(?:\.\d+)+", normalized):
@@ -3878,6 +3896,21 @@ def _blind_peer_review_mask_terms(*, agent_specs: list[Any] | None, agent_slots:
                 normalized = token.strip().lower()
                 if len(normalized) >= 4 and normalized not in _BLIND_REVIEW_MASK_STOPWORDS:
                     terms.add(token)
+    return sorted(terms, key=lambda value: (-len(value), value.lower()))
+
+
+def _blind_peer_review_opinion_mask_terms(opinions: list[Any]) -> list[str]:
+    terms: set[str] = set()
+    for opinion in opinions:
+        for value in (
+            getattr(opinion, "self_declared_name", ""),
+            getattr(opinion, "self_declared_version", ""),
+        ):
+            term = str(value or "").strip()
+            if not term:
+                continue
+            terms.add(term)
+            terms.update(_blind_peer_review_identity_fragments(term))
     return sorted(terms, key=lambda value: (-len(value), value.lower()))
 
 
@@ -4104,6 +4137,7 @@ def _aggregate_blind_peer_reviews(
     self_mean = sum(self_scores) / len(self_scores) if self_scores else 0.0
     external_mean = sum(external_means) / len(external_means) if external_means else 0.0
     leakage = round(max(0.0, self_mean - external_mean), 3) if self_scores else 0.0
+    leakage_threshold = _blind_peer_review_max_self_preference_leakage(config)
 
     def _mean(values: list[float]) -> float:
         return sum(values) / len(values) if values else 0.0
@@ -4146,6 +4180,8 @@ def _aggregate_blind_peer_reviews(
                 "value": leakage,
                 "self_score_count": len(self_scores),
                 "reviewer_count": len(review_opinions),
+                "threshold": leakage_threshold,
+                "exceeds_threshold": bool(self_scores) and leakage > leakage_threshold,
             },
             "self_preference_by_reviewer": reviewer_leakage,
             "self_preference_by_author": author_leakage,
@@ -4178,6 +4214,7 @@ async def _run_blind_peer_review_shadow(
         metadata["errors"] = ["skipped_non_main_room"]
         return metadata
     mask_terms = _blind_peer_review_mask_terms(agent_specs=agent_specs, agent_slots=active_slots)
+    mask_terms.extend(_blind_peer_review_opinion_mask_terms(consensus_opinions))
     positions = _blind_peer_review_positions(
         consensus_opinions,
         agent_slots=active_slots,
@@ -4292,6 +4329,59 @@ async def _ensure_blind_peer_review_for_turn(
     )
     metadata["mode"] = mode
     turn["blind_peer_review"] = metadata
+
+
+def _blind_peer_review_exit_blocked_reasons(
+    turn: dict[str, Any],
+    *,
+    config: dict[str, Any],
+    room_quorum: int,
+) -> list[str]:
+    if not _blind_peer_review_enabled(config) or _blind_peer_review_shadow_only(config):
+        return []
+    review = turn.get("blind_peer_review") if isinstance(turn.get("blind_peer_review"), dict) else {}
+    if not review:
+        return ["blind_review_missing"]
+    blocked: list[str] = []
+    if review.get("errors"):
+        blocked.append("blind_review_errors")
+    if int(review.get("blind_acceptance_count", 0) or 0) < int(room_quorum):
+        blocked.append("blind_acceptance_missing")
+    leakage = review.get("self_preference_leakage") if isinstance(review, dict) else {}
+    if isinstance(leakage, dict) and bool(leakage.get("exceeds_threshold", False)):
+        blocked.append("self_preference_leakage_high")
+    return blocked
+
+
+def _mark_blind_peer_review_exit_blocked(
+    turn: dict[str, Any],
+    *,
+    blocked_reasons: list[str],
+    room_quorum: int,
+    watchdog: RunWatchdog | None,
+) -> None:
+    review = turn.get("blind_peer_review") if isinstance(turn.get("blind_peer_review"), dict) else None
+    if review is not None:
+        review["gate_blocked"] = True
+        review["gate_blocked_reasons"] = list(blocked_reasons)
+        review["minimum_blind_acceptances"] = int(room_quorum)
+    if watchdog:
+        watchdog.event(
+            "blind_peer_review",
+            "blocked",
+            detail=(
+                "saída por consenso bloqueada pela revisão cega: "
+                + ", ".join(blocked_reasons)
+            ),
+            extra={
+                "round": int(turn.get("round", 0) or 0),
+                "mode": (review or {}).get("mode", ""),
+                "blocked_reasons": list(blocked_reasons),
+                "minimum_blind_acceptances": int(room_quorum),
+                "blind_acceptance_count": int((review or {}).get("blind_acceptance_count", 0) or 0),
+                "self_preference_leakage": (review or {}).get("self_preference_leakage", {}),
+            },
+        )
 
 
 def _blind_peer_review_metadata_from_transcript(
@@ -4420,6 +4510,9 @@ def _llm_council_fast_path_evaluation(
         blocked.append("blind_review_errors")
     elif int(metadata["blind_acceptance_count"]) < int(metadata["minimum_blind_acceptances"]):
         blocked.append("blind_acceptance_missing")
+    leakage = (blind_review or {}).get("self_preference_leakage") if isinstance(blind_review, dict) else {}
+    if isinstance(leakage, dict) and bool(leakage.get("exceeds_threshold", False)):
+        blocked.append("self_preference_leakage_high")
     if not _parallel_opponent_briefing_allows_fast_path(config):
         blocked.append("parallel_opponent_room_unusable")
     if metadata["enabled"] and not report_coherence_error:
@@ -5164,6 +5257,23 @@ async def _run_model_meeting(
                 token_cost_ledger=token_cost_ledger,
                 watchdog=watchdog,
             )
+            blind_exit_blocked = _blind_peer_review_exit_blocked_reasons(
+                turn,
+                config=config,
+                room_quorum=room_quorum,
+            )
+            if blind_exit_blocked:
+                _mark_blind_peer_review_exit_blocked(
+                    turn,
+                    blocked_reasons=blind_exit_blocked,
+                    room_quorum=room_quorum,
+                    watchdog=watchdog,
+                )
+                protagonist = turn["next_protagonist"]
+                previous_turn = turn
+                if pending_reentry_tasks:
+                    await asyncio.sleep(0)
+                continue
             exited_with_consensus = True
             break
         if stable_rounds >= stability_rounds_required:
@@ -5181,6 +5291,23 @@ async def _run_model_meeting(
                 token_cost_ledger=token_cost_ledger,
                 watchdog=watchdog,
             )
+            blind_exit_blocked = _blind_peer_review_exit_blocked_reasons(
+                turn,
+                config=config,
+                room_quorum=room_quorum,
+            )
+            if blind_exit_blocked:
+                _mark_blind_peer_review_exit_blocked(
+                    turn,
+                    blocked_reasons=blind_exit_blocked,
+                    room_quorum=room_quorum,
+                    watchdog=watchdog,
+                )
+                protagonist = turn["next_protagonist"]
+                previous_turn = turn
+                if pending_reentry_tasks:
+                    await asyncio.sleep(0)
+                continue
             exited_with_consensus = True
             if watchdog:
                 watchdog.event(
