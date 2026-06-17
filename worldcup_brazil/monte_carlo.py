@@ -6,7 +6,7 @@ import random
 import re
 import unicodedata
 from itertools import combinations
-from statistics import NormalDist
+from statistics import NormalDist, median
 from typing import Any
 
 from worldcup_brazil.bracket import PHASE_LABELS, PHASE_SEQUENCE, brazil_bracket_path
@@ -20,6 +20,7 @@ DEFAULT_POSITION_RATINGS = (1600.0, 1500.0, 1450.0, 1400.0)
 DEFAULT_PROBABILITY_PCT_TO_RATING_POINTS = 8.0
 DEFAULT_MAX_SIGNAL_RATING_DELTA = 120.0
 DEFAULT_MAX_TEAM_CONTEXT_RATING_DELTA = 180.0
+DEFAULT_TEAM_CONTEXT_WARNING_DELTA = 40.0
 DEFAULT_PATH_GATE_MIN_ITERATIONS = 10000
 DEFAULT_PATH_GATE_MIN_RATING_COVERAGE_PCT = 65.0
 DEFAULT_PATH_GATE_NARROW_UNCERTAINTY_THRESHOLD_PCT = 35.0
@@ -149,6 +150,30 @@ def _signal_category(signal: dict[str, Any]) -> str:
     ).strip() or "contexto"
 
 
+def _canonical_signal_family(category: str) -> str:
+    raw = str(category or "").strip()
+    normalized = _normalize(raw).replace("-", "_").replace("/", "_").replace(" ", "_")
+    normalized = re.sub(r"_+", "_", normalized).strip("_")
+
+    if any(marker in normalized for marker in ("injur", "lesao", "lesoes", "corte", "cuts_news", "recent_news")):
+        return "injuries_cuts_news"
+    if "performance" in normalized or "sofascore" in normalized:
+        return "performance"
+    if "transfermarkt" in normalized or "market_value" in normalized or "valor_de_mercado" in normalized:
+        return "market_value"
+    if "bet" in normalized or "prediction_market" in normalized or "mercado_de_apostas" in normalized:
+        return "bets_prediction_markets"
+    if "rating" in normalized or "ranking" in normalized:
+        return "ratings"
+    if "press" in normalized or "imprensa" in normalized or "especializada" in normalized:
+        return "specialized_press"
+    if "arbitragem" in normalized or "arbitration" in normalized or "var" in normalized or "cart" in normalized:
+        return "arbitration_var_cards"
+    if "amistoso" in normalized or "friendly" in normalized:
+        return "recent_friendlies"
+    return normalized or "context"
+
+
 def _signal_confidence(signal: dict[str, Any]) -> float:
     try:
         value = float(signal.get("confidence", 1.0))
@@ -196,6 +221,7 @@ def _apply_team_context_adjustments(config: dict[str, Any], ratings: dict[str, f
     )
     max_signal_delta = float(mc_config.get("max_signal_rating_delta", DEFAULT_MAX_SIGNAL_RATING_DELTA))
     max_team_delta = float(mc_config.get("max_team_context_rating_delta", DEFAULT_MAX_TEAM_CONTEXT_RATING_DELTA))
+    warning_delta = float(mc_config.get("team_context_warning_delta", DEFAULT_TEAM_CONTEXT_WARNING_DELTA))
     team_name_by_key = {_normalize(name): name for name in ratings}
 
     applied_signal_count = 0
@@ -207,6 +233,7 @@ def _apply_team_context_adjustments(config: dict[str, Any], ratings: dict[str, f
         team_key = _normalize(signal.get("team") or signal.get("selection") or signal.get("country"))
         team = team_name_by_key.get(team_key)
         category = _signal_category(signal)
+        source_family = _canonical_signal_family(category)
         raw_delta = _signal_raw_rating_delta(
             signal,
             probability_pct_to_rating_points=probability_pct_to_rating_points,
@@ -229,35 +256,58 @@ def _apply_team_context_adjustments(config: dict[str, Any], ratings: dict[str, f
                 "rating_delta": 0.0,
                 "signals": [],
                 "source_families": set(),
+                "family_deltas": {},
             },
         )
-        bucket["rating_delta"] += weighted_delta
-        bucket["source_families"].add(category)
-        bucket["signals"].append(
-            {
-                "category": category,
-                "rating_delta": round(weighted_delta, 1),
-                "confidence": round(confidence, 2),
-                "source": signal.get("source_url")
-                or signal.get("source_query")
-                or signal.get("source")
-                or signal.get("source_urls")
-                or signal.get("source_queries"),
-                "agent": signal.get("agent"),
-            }
-        )
-        source_families.add(category)
+        bucket["source_families"].add(source_family)
+        bucket["family_deltas"].setdefault(source_family, []).append(weighted_delta)
+        rendered_signal = {
+            "category": source_family,
+            "rating_delta": round(weighted_delta, 1),
+            "confidence": round(confidence, 2),
+            "source": signal.get("source_url")
+            or signal.get("source_query")
+            or signal.get("source")
+            or signal.get("source_urls")
+            or signal.get("source_queries"),
+            "agent": signal.get("agent"),
+        }
+        if category != source_family:
+            rendered_signal["original_category"] = category
+        bucket["signals"].append(rendered_signal)
+        source_families.add(source_family)
         applied_signal_count += 1
 
     rendered_adjustments: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
     for team, bucket in team_adjustments.items():
+        family_adjustments = [
+            {
+                "source_family": family,
+                "rating_delta": round(float(median(values)), 1),
+                "signal_count": len(values),
+            }
+            for family, values in sorted(bucket["family_deltas"].items())
+            if values
+        ]
+        bucket["rating_delta"] = sum(float(item["rating_delta"]) for item in family_adjustments)
         bounded_team_delta = max(-max_team_delta, min(max_team_delta, float(bucket["rating_delta"])))
+        if abs(bounded_team_delta) > warning_delta:
+            warnings.append(
+                {
+                    "team": team,
+                    "rating_delta": round(bounded_team_delta, 1),
+                    "threshold": warning_delta,
+                    "reason": "team_context_delta_above_warning_threshold",
+                }
+            )
         ratings[team] = ratings[team] + bounded_team_delta
         rendered_adjustments.append(
             {
                 "team": team,
                 "rating_delta": round(bounded_team_delta, 1),
                 "source_families": sorted(bucket["source_families"]),
+                "family_adjustments": family_adjustments,
                 "signals": bucket["signals"],
             }
         )
@@ -270,6 +320,8 @@ def _apply_team_context_adjustments(config: dict[str, Any], ratings: dict[str, f
         "teams_with_context_count": len(rendered_adjustments),
         "source_families": sorted(source_families),
         "team_adjustments": rendered_adjustments,
+        "warnings": warnings,
+        "team_context_warning_delta": warning_delta,
         "probability_pct_to_rating_points": probability_pct_to_rating_points,
         "max_signal_rating_delta": max_signal_delta,
         "max_team_context_rating_delta": max_team_delta,

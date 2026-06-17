@@ -293,6 +293,57 @@ def test_monte_carlo_uses_same_team_context_signal_families_for_candidate_oppone
         item["team"] == "Suécia" and item["rating_delta"] > 120.0
         for item in adjusted["team_context"]["team_adjustments"]
     )
+    assert adjusted["team_context"]["warnings"] == [
+        {
+            "team": "Suécia",
+            "rating_delta": 132.0,
+            "threshold": 40.0,
+            "reason": "team_context_delta_above_warning_threshold",
+        },
+        {
+            "team": "Japão",
+            "rating_delta": -68.0,
+            "threshold": 40.0,
+            "reason": "team_context_delta_above_warning_threshold",
+        }
+    ]
+
+
+def test_monte_carlo_collapses_correlated_team_context_signals_by_normalized_family() -> None:
+    config = _mc_config(iterations=2000)
+    config["monte_carlo"]["team_context"] = {
+        "Brasil": [
+            {
+                "category": "lesões/cortes/notícias recentes",
+                "rating_delta": -8.0,
+                "confidence": 1.0,
+                "source_url": "https://example.com/neymar-injury",
+            },
+            {
+                "category": "lesões/cortes/notícias recentes",
+                "rating_delta": -13.4,
+                "confidence": 1.0,
+                "source_url": "https://example.com/raphinha-rest",
+            },
+            {
+                "category": "injuries_cuts_news",
+                "rating_delta": -13.6,
+                "confidence": 1.0,
+                "source_url": "https://example.com/brazil-injury-roundup",
+            },
+        ]
+    }
+
+    adjusted = run_brazil_monte_carlo(config)
+
+    brazil_adjustment = next(
+        item for item in adjusted["team_context"]["team_adjustments"] if item["team"] == "Brasil"
+    )
+    assert brazil_adjustment["rating_delta"] == -13.4
+    assert brazil_adjustment["source_families"] == ["injuries_cuts_news"]
+    assert brazil_adjustment["family_adjustments"] == [
+        {"source_family": "injuries_cuts_news", "rating_delta": -13.4, "signal_count": 3}
+    ]
 
 
 def test_monte_carlo_ignores_context_signals_without_numeric_effect_or_source() -> None:
@@ -520,16 +571,16 @@ def test_simulation_integrity_relaxed_thirds_prong_enforces_cap() -> None:
 
 
 def test_monte_carlo_output_is_bit_identical_after_hot_loop_memoization() -> None:
-    """Gate de regressão da otimização de performance (item 14 da auditoria 11/jun).
+    """Gate de regressão do contrato completo do Monte Carlo.
 
-    As memoizações de _normalize/_slot_kind/_rating_*_probability são puras: o
-    resultado COMPLETO do Monte Carlo (todas as fases, CIs, diagnostics, título
-    e placares realizados condicionantes) deve permanecer byte a byte estável
-    para o contrato atual. Qualquer mudança futura que altere um único número
-    quebra aqui.
+    O resultado COMPLETO do Monte Carlo (todas as fases, CIs, diagnostics,
+    título e placares realizados condicionantes) deve permanecer byte a byte
+    estável para o contrato atual. Qualquer mudança futura que altere um único
+    número precisa ser deliberada e atualizar este snapshot.
 
-    Ao contrário do red-green usual, este teste PASSA no código antigo e no novo —
-    é exatamente o que prova que a otimização não mudou o comportamento."""
+    Snapshot atualizado junto da mudança deliberada de team_context: sinais
+    correlacionados passam a ser agregados por mediana dentro da família antes
+    de mover o rating efetivo."""
     import hashlib
     import json as json_module
     from pathlib import Path
@@ -562,5 +613,5 @@ def test_monte_carlo_output_is_bit_identical_after_hot_loop_memoization() -> Non
         )
     )
 
-    assert _hash(result_off) == "d8af00efcc686ffe488820ea8b3b82b28fa9d22dacada1f87dff086e274a04f9"
-    assert _hash(result_on) == "ee08f86964498888362112ef0b1b7e031bf1c258e7d6e4e3f2681f423f6f8c1b"
+    assert _hash(result_off) == "c14d860cce5a79576dbdd1c54f9d80f7d5b6a57be3e9c7e5a4bd90951e2dce20"
+    assert _hash(result_on) == "9d6af7f799a18d6d05be0de7dea5b23e22a8cc0e7d435de02ec7be9ff57087e8"

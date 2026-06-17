@@ -50,6 +50,7 @@
     "probability_pct_to_rating_points": 8.0,
     "max_signal_rating_delta": 120.0,
     "max_team_context_rating_delta": 180.0,
+    "team_context_warning_delta": 40.0,
     "use_stage_probabilities": true,
     "path_gate_min_iterations": 10000,
     "path_gate_min_rating_coverage_pct": 65.0,
