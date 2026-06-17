@@ -21,7 +21,10 @@
     "absolute_gap_pct": 3.0,
     "relative_gap_pct": 0.4,
     "min_pct": 1.0,
-    "max_pct": 25.0
+    "max_pct": 25.0,
+    "robust_min_candidates": 5,
+    "robust_low_quantile": 0.2,
+    "robust_high_quantile": 0.8
   },
   "stage_probability_blend": {
     "enabled": true,

@@ -226,6 +226,56 @@ def test_market_title_challenge_rejects_model_probability_when_extracting_market
     assert challenge["absolute_gap_pct"] == 3.7
 
 
+def test_market_title_challenge_uses_robust_market_band_when_model_value_leaks_from_debate() -> None:
+    transcript = [
+        {
+            "round": 1,
+            "question": (
+                "Minha tese: o 2.9% de título do Modelo Principal está baixo demais e inconsistente "
+                "com o mercado — o Brasil drifou de 8/1 para 10/1 após o 1-1 com Marrocos mas "
+                "segue 5º no oddsboard (~9-10% bruto, ~7-8% sem overround), enquanto o penalty "
+                "efetivo de -64.9 derruba artificialmente a chance de título; proponho revisar "
+                "o título para ~6%."
+            ),
+        },
+        {
+            "round": 4,
+            "responses": [
+                {
+                    "agent": "GPT 5.5",
+                    "answer": (
+                        "O problema não é escolher entre 2.9% e 6.5% por barganha, "
+                        "mas corrigir o agregador. O fetch da Squawka sustenta que o mercado "
+                        "moveu o Brasil de 8/1 para 10/1 após o empate, mas ainda com odds muito "
+                        "acima de uma probabilidade de título de apenas 2.9%. Isso não prova 6.5%, "
+                        "mas torna 2.9% difícil de defender. Minha saída central é Brasil campeão "
+                        "em 6.3%, dentro da faixa 6.0-6.5%."
+                    ),
+                    "removed_from_main": False,
+                }
+            ],
+        },
+        {
+            "round": 6,
+            "question": (
+                "O de-vig do board fresco converge para cima: Brasil +1000 ≈ 9.1% implícita bruta "
+                "para campeão."
+            ),
+        },
+    ]
+
+    challenge = _market_title_challenge(
+        {"titulo": 4.3},
+        transcript,
+        config={"market_title_challenge": {"enabled": True, "absolute_gap_pct": 3.0, "relative_gap_pct": 0.40}},
+    )
+
+    assert challenge["triggered"] is True
+    assert challenge["market_low_pct"] > 2.9
+    assert challenge["market_mid_pct"] >= 7.3
+    assert challenge["market_band_method"] == "robust_percentile"
+
+
 def test_apply_meeting_match_probabilities_accepts_valid_group_win_pct() -> None:
     estimate = MatchEstimate(
         brazil="Brasil",

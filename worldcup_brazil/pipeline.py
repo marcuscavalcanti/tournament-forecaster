@@ -2599,6 +2599,9 @@ def _market_title_challenge_config(config: dict[str, Any]) -> dict[str, Any]:
         "min_pct": float(configured.get("min_pct", 1.0)),
         "max_pct": float(configured.get("max_pct", 25.0)),
         "max_evidence_items": int(configured.get("max_evidence_items", 4)),
+        "robust_min_candidates": int(configured.get("robust_min_candidates", 5)),
+        "robust_low_quantile": float(configured.get("robust_low_quantile", 0.20)),
+        "robust_high_quantile": float(configured.get("robust_high_quantile", 0.80)),
     }
 
 
@@ -2708,6 +2711,33 @@ def _market_title_values_from_text(text: str, *, config: dict[str, Any]) -> list
     return values
 
 
+def _percentile(values: list[float], quantile: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(float(value) for value in values)
+    bounded_q = max(0.0, min(1.0, float(quantile)))
+    if len(ordered) == 1:
+        return ordered[0]
+    position = bounded_q * (len(ordered) - 1)
+    lower = int(math.floor(position))
+    upper = int(math.ceil(position))
+    if lower == upper:
+        return ordered[lower]
+    fraction = position - lower
+    return ordered[lower] + (ordered[upper] - ordered[lower]) * fraction
+
+
+def _market_title_band_from_candidates(candidates: list[float], settings: dict[str, Any]) -> tuple[float, float, str]:
+    if not candidates:
+        return 0.0, 0.0, "none"
+    minimum_for_robust = max(1, int(settings.get("robust_min_candidates", 5)))
+    if len(candidates) >= minimum_for_robust:
+        low = _percentile(candidates, float(settings.get("robust_low_quantile", 0.20)))
+        high = _percentile(candidates, float(settings.get("robust_high_quantile", 0.80)))
+        return round(low, 1), round(max(low, high), 1), "robust_percentile"
+    return round(min(candidates), 1), round(max(candidates), 1), "min_max"
+
+
 def _market_title_challenge(
     stage_probabilities: dict[str, float],
     meeting_transcript: list[dict[str, Any]],
@@ -2749,8 +2779,7 @@ def _market_title_challenge(
         base["evidence"] = evidence
         return base
 
-    market_low = round(min(candidates), 1)
-    market_high = round(max(candidates), 1)
+    market_low, market_high, band_method = _market_title_band_from_candidates(candidates, settings)
     market_mid = round((market_low + market_high) / 2.0, 1)
     absolute_gap = round(abs(market_mid - model_title_pct), 1)
     relative_gap = round(absolute_gap / max(0.1, model_title_pct), 2)
@@ -2766,6 +2795,8 @@ def _market_title_challenge(
         "market_low_pct": market_low,
         "market_high_pct": market_high,
         "market_mid_pct": market_mid,
+        "market_band_method": band_method,
+        "market_candidate_count": len(candidates),
         "absolute_gap_pct": absolute_gap,
         "relative_gap_pct": relative_gap,
         "evidence": evidence,
