@@ -1009,6 +1009,14 @@ def test_opponent_room_prompt_asks_for_decisive_top_two_and_challengeable_mc_bas
         previous_turn=None,
         generated_at=generated_at,
     )
+    opponent_response_prompt = _meeting_response_prompt(
+        config=opponent_config,
+        round_index=1,
+        protagonist="GPT 5.5",
+        question="Quais são os top-2 por fase?",
+        previous_turn=None,
+        generated_at=generated_at,
+    )
     main_prompt = _protagonist_question_prompt(
         config=config,
         protagonist="GPT 5.5",
@@ -1018,5 +1026,16 @@ def test_opponent_room_prompt_asks_for_decisive_top_two_and_challengeable_mc_bas
 
     assert "top-2 por fase" in opponent_prompt.lower()
     assert "baseline auditável e desafiável" in opponent_prompt.lower()
+    for prompt in (opponent_prompt, opponent_response_prompt):
+        lowered = prompt.lower()
+        assert "exatamente top-2 adversários permitidos" in lowered
+        assert "16 avos" in lowered
+        assert "oitavas" in lowered
+        assert "quartas" in lowered
+        assert "semifinal" in lowered
+        assert "final" in lowered
+        assert "scenario_probabilities" in prompt
+        assert "match_probabilities" in prompt
+        assert "fonte/query por fase" in lowered
     assert "premissa forte" not in opponent_prompt.lower()
     assert "top-2 por fase" not in main_prompt.lower()

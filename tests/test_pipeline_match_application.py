@@ -195,6 +195,37 @@ def test_market_title_challenge_ignores_match_probability_distractors() -> None:
     assert "17" not in str(challenge["market_high_pct"])
 
 
+def test_market_title_challenge_rejects_model_probability_when_extracting_market_band() -> None:
+    transcript = [
+        {
+            "round": 4,
+            "responses": [
+                {
+                    "agent": "Opus 4.8",
+                    "answer": (
+                        "Mercado de título desafia o 2.9% de título do Modelo Principal; "
+                        "sportsbooks/outright para campeão "
+                        "Brasil ficam em ~9% bruta, de-vigado perto de 7-8%, com odds 10/1."
+                    ),
+                    "removed_from_main": False,
+                }
+            ],
+        }
+    ]
+
+    challenge = _market_title_challenge(
+        {"titulo": 4.3},
+        transcript,
+        config={"market_title_challenge": {"enabled": True, "absolute_gap_pct": 3.0, "relative_gap_pct": 0.40}},
+    )
+
+    assert challenge["triggered"] is True
+    assert challenge["market_low_pct"] == 7.0
+    assert challenge["market_high_pct"] == 9.0
+    assert challenge["market_mid_pct"] == 8.0
+    assert challenge["absolute_gap_pct"] == 3.7
+
+
 def test_apply_meeting_match_probabilities_accepts_valid_group_win_pct() -> None:
     estimate = MatchEstimate(
         brazil="Brasil",

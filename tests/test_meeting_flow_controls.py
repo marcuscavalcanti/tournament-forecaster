@@ -2017,7 +2017,14 @@ def test_opponent_debriefing_room_has_own_round_contract_fitting_budget() -> Non
     assert int(sub_config["meeting_stability_rounds"]) == 1
     assert int(sub_config["agent_timeout_seconds"]) <= 120
     assert int(sub_config["protagonist_timeout_seconds"]) <= 120  # 1ª chamada de toda rodada
+    assert float(sub_config["meeting_round_budget_seconds"]) >= 300
     assert _opponent_debriefing_budget_warning(config) is None
+
+    tight_round = dict(config)
+    tight_round["opponent_debriefing_round_budget_seconds"] = 120
+    round_warning = _opponent_debriefing_budget_warning(tight_round)
+    assert round_warning is not None
+    assert "orçamento acumulado de rodada" in round_warning
 
     tight = dict(config)
     tight["parallel_opponent_debriefing_timeout_seconds"] = 60

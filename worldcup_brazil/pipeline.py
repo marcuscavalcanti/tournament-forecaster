@@ -2552,10 +2552,14 @@ def _normalized_ascii_text(value: Any) -> str:
 
 
 _MARKET_TITLE_PERCENT_RE = re.compile(r"(?<!\d)(\d{1,2}(?:[,.]\d+)?)\s*%")
+_MARKET_TITLE_RANGE_RE = re.compile(
+    r"(?<!\d)(\d{1,2}(?:[,.]\d+)?)\s*[-–]\s*(\d{1,2}(?:[,.]\d+)?)\s*%"
+)
 _MARKET_TITLE_TERMS = (
     "mercado",
     "market",
     "odds",
+    "outright",
     "sportsbook",
     "bookmaker",
     "betfair",
@@ -2572,6 +2576,16 @@ _TITLE_CONTEXT_TERMS = (
     "campeonato",
     "winner",
     "levanta a taca",
+)
+_MODEL_TITLE_DENY_TERMS = (
+    "modelo principal",
+    "monte carlo",
+    "mc",
+    "funil",
+    "simulacao",
+    "simulation",
+    "modelo",
+    "model",
 )
 
 
@@ -2611,6 +2625,24 @@ def _iter_market_title_texts(meeting_transcript: list[dict[str, Any]]) -> list[t
     return texts
 
 
+def _market_title_candidate_is_model_reference(raw_text: str, start: int, end: int) -> bool:
+    prefix = _normalized_ascii_text(raw_text[max(0, start - 80) : start])
+    latest_model = max((prefix.rfind(term) for term in _MODEL_TITLE_DENY_TERMS), default=-1)
+    latest_market = max((prefix.rfind(term) for term in _MARKET_TITLE_TERMS), default=-1)
+    if latest_model != -1 and latest_model > latest_market:
+        return True
+
+    suffix = raw_text[end : min(len(raw_text), end + 100)]
+    suffix_stop_candidates = [
+        position
+        for separator in ",.;!?\n"
+        if (position := suffix.find(separator)) != -1
+    ]
+    suffix_stop = min(suffix_stop_candidates) if suffix_stop_candidates else len(suffix)
+    attached_suffix = _normalized_ascii_text(suffix[:suffix_stop])
+    return any(term in attached_suffix for term in _MODEL_TITLE_DENY_TERMS)
+
+
 def _market_title_values_from_text(text: str, *, config: dict[str, Any]) -> list[float]:
     settings = _market_title_challenge_config(config)
     values: list[float] = []
@@ -2620,6 +2652,7 @@ def _market_title_values_from_text(text: str, *, config: dict[str, Any]) -> list
         return values
     if not any(term in normalized for term in _TITLE_CONTEXT_TERMS):
         return values
+    processed_clauses: set[tuple[int, int]] = set()
     for match in _MARKET_TITLE_PERCENT_RE.finditer(raw_text):
         clause_start = max(raw_text.rfind(separator, 0, match.start()) for separator in ".;!?\n") + 1
         clause_end_candidates = [
@@ -2628,22 +2661,50 @@ def _market_title_values_from_text(text: str, *, config: dict[str, Any]) -> list
             if (position := raw_text.find(separator, match.end())) != -1
         ]
         clause_end = min(clause_end_candidates) if clause_end_candidates else len(raw_text)
+        if (clause_start, clause_end) in processed_clauses:
+            continue
+        processed_clauses.add((clause_start, clause_end))
         clause = raw_text[clause_start:clause_end]
         clause_normalized = _normalized_ascii_text(clause)
         if not any(term in clause_normalized for term in _MARKET_TITLE_TERMS):
             continue
         if not any(term in clause_normalized for term in _TITLE_CONTEXT_TERMS):
             continue
-        try:
-            value = float(match.group(1).replace(",", "."))
-        except ValueError:
-            continue
-        if not (settings["min_pct"] <= value <= settings["max_pct"]):
-            continue
-        prefix = _normalized_ascii_text(raw_text[clause_start : match.start()])
-        if not any(term in prefix for term in _MARKET_TITLE_TERMS):
-            continue
-        values.append(round(value, 1))
+        consumed_spans: list[tuple[int, int]] = []
+        for range_match in _MARKET_TITLE_RANGE_RE.finditer(clause):
+            range_start = clause_start + range_match.start()
+            range_end = clause_start + range_match.end()
+            if _market_title_candidate_is_model_reference(raw_text, range_start, range_end):
+                continue
+            range_prefix = _normalized_ascii_text(raw_text[clause_start:range_start])
+            if not any(term in range_prefix for term in _MARKET_TITLE_TERMS):
+                continue
+            try:
+                low_value = float(range_match.group(1).replace(",", "."))
+                high_value = float(range_match.group(2).replace(",", "."))
+            except ValueError:
+                continue
+            for value in sorted((low_value, high_value)):
+                if settings["min_pct"] <= value <= settings["max_pct"]:
+                    values.append(round(value, 1))
+            consumed_spans.append((range_start, range_end))
+        for percent_match in _MARKET_TITLE_PERCENT_RE.finditer(clause):
+            percent_start = clause_start + percent_match.start()
+            percent_end = clause_start + percent_match.end()
+            if any(start <= percent_start < end for start, end in consumed_spans):
+                continue
+            try:
+                value = float(percent_match.group(1).replace(",", "."))
+            except ValueError:
+                continue
+            if not (settings["min_pct"] <= value <= settings["max_pct"]):
+                continue
+            if _market_title_candidate_is_model_reference(raw_text, percent_start, percent_end):
+                continue
+            prefix = _normalized_ascii_text(raw_text[clause_start:percent_start])
+            if not any(term in prefix for term in _MARKET_TITLE_TERMS):
+                continue
+            values.append(round(value, 1))
     return values
 
 
@@ -4119,6 +4180,8 @@ def _sanitize_main_meeting_opinions(
     *,
     baseline_title_pct: float,
     config: dict[str, Any] | None = None,
+    semantic_policy_stage: str = "initial",
+    admit_policy_suspected: bool = False,
 ) -> list[Any]:
     sanitized: list[Any] = []
     for opinion in opinions:
@@ -4167,30 +4230,62 @@ def _sanitize_main_meeting_opinions(
         ):
             sanitized.append(_with_inherited_meeting_sources(opinion, config))
             continue
+        issue_reasons: list[str] = []
         if has_reserved_benchmark:
-            removal_reason = "tentar usar benchmark reservado"
-        elif has_impossible_bracket_opponent:
-            removal_reason = _format_impossible_opponent_reason(impossible_bracket_detail)
-        elif has_unconfigured_group_opponent:
-            removal_reason = "citar adversário de grupo fora do JSON configurado"
-        elif has_unusable_payload:
-            removal_reason = "devolver resposta parcial ou sem campos auditáveis"
-        elif external_search_issue:
-            removal_reason = external_search_issue
-        elif has_fixed_quanti_quali_allocation:
-            removal_reason = "usar alocação fixa quanti/quali proibida"
-        elif has_unsupported_meeting_vote:
-            removal_reason = "responder concordância/discordância sem hipótese auditável"
-        else:
-            removal_reason = "inconsistência quantitativa no title_pct"
+            issue_reasons.append("tentar usar benchmark reservado")
+        if has_impossible_bracket_opponent:
+            issue_reasons.append(_format_impossible_opponent_reason(impossible_bracket_detail))
+        if has_unconfigured_group_opponent:
+            issue_reasons.append("citar adversário de grupo fora do JSON configurado")
+        if has_unusable_payload:
+            issue_reasons.append("devolver resposta parcial ou sem campos auditáveis")
+        if external_search_issue:
+            issue_reasons.append(external_search_issue)
+        if has_fixed_quanti_quali_allocation:
+            issue_reasons.append("usar alocação fixa quanti/quali proibida")
+        if has_unsupported_meeting_vote:
+            issue_reasons.append("responder concordância/discordância sem hipótese auditável")
+        if has_implausible_title_jump:
+            issue_reasons.append("inconsistência quantitativa no title_pct")
+
         validation_issues = [
             _validation_issue_from_reason(
                 gate_name="main_meeting_sanitizer",
-                reason=removal_reason,
+                reason=reason,
                 opinion=opinion,
                 field="answer",
+                semantic_policy_stage=semantic_policy_stage,
             )
+            for reason in issue_reasons
         ]
+        terminal_issues = [
+            issue
+            for issue in validation_issues
+            if str(issue.get("recoverability", "")).strip().lower() != "policy_suspected"
+        ]
+        if admit_policy_suspected and validation_issues and not terminal_issues:
+            sanitized.append(
+                replace(
+                    _with_inherited_meeting_sources(opinion, config),
+                    used_fallback=False,
+                    removed_from_main=False,
+                    removal_reason="",
+                    validation_issues=validation_issues,
+                )
+            )
+            continue
+
+        primary_issue = terminal_issues[0] if terminal_issues else validation_issues[0]
+        removal_reason = _issue_text_from_reason(str(primary_issue.get("offending_excerpt") or ""))
+        matched_rule = str(primary_issue.get("matched_rule") or "")
+        if matched_rule == "reserved_benchmark_opta":
+            removal_reason = "tentar usar benchmark reservado"
+        elif matched_rule == "impossible_bracket_opponent":
+            removal_reason = _format_impossible_opponent_reason(impossible_bracket_detail)
+        elif matched_rule == "fixed_quantitative_qualitative_allocation":
+            removal_reason = "usar alocação fixa quanti/quali proibida"
+        elif issue_reasons:
+            removal_reason = issue_reasons[0]
         sanitized.append(
             replace(
                 opinion,
@@ -7006,6 +7101,13 @@ def _opponent_debriefing_budget_warning(config: dict[str, Any]) -> str | None:
     min_rounds = max(1, int(sub_config.get("meeting_min_rounds", 1)))
     worst_case_seconds = min_rounds * per_round_worst_seconds
     budget_seconds = max(0.001, float(config.get("parallel_opponent_debriefing_timeout_seconds", 900)))
+    round_budget_seconds = float(sub_config.get("meeting_round_budget_seconds", 0) or 0)
+    if round_budget_seconds > 0 and per_round_worst_seconds > round_budget_seconds:
+        return (
+            f"sala paralela: ~{per_round_worst_seconds:.0f}s de pior caso por rodada excede "
+            f"o orçamento acumulado de rodada ({round_budget_seconds:.0f}s); ajuste "
+            "opponent_debriefing_round_budget_seconds ou reduza timeouts da sala lateral"
+        )
     if worst_case_seconds > budget_seconds:
         return (
             f"sala paralela: {min_rounds} rodada(s) mínima(s) × ~{per_round_worst_seconds:.0f}s de pior caso "
@@ -7218,6 +7320,23 @@ def _room_specific_protagonist_instruction(config: dict[str, Any]) -> str:
     )
 
 
+def _opponent_room_top_two_response_contract(config: dict[str, Any]) -> str:
+    if str(config.get("_meeting_room", "main_brazil") or "main_brazil") != "opponent_path":
+        return ""
+    phases = ["16 avos", "Oitavas", "Quartas", "Semifinal", "Final"]
+    phase_list = ", ".join(phases)
+    return (
+        "Contrato específico da sala lateral de cruzamentos: responda fase por fase para "
+        f"{phase_list}. Para cada fase, escolha exatamente top-2 adversários permitidos pelo bracket, "
+        "inclua a chance do cenário acontecer em scenario_probabilities com chaves no formato "
+        "'Fase: Seleção', inclua a chance do Brasil no confronto em match_probabilities quando houver "
+        "base auditável, e cite pelo menos uma fonte/query por fase ou explique por que o Monte Carlo/bracket "
+        "permanece melhor que a evidência fresca. Cubra explicitamente todas as fases na answer. "
+        "Se não houver duas opções fortes numa fase, preencha a segunda como 'Fase: Adversário alternativo a definir' "
+        "com rationale, em vez de omitir a fase."
+    )
+
+
 def _protagonist_question_prompt(
     *,
     config: dict[str, Any],
@@ -7254,6 +7373,7 @@ def _protagonist_question_prompt(
         f"{_opponent_research_instruction(config)} "
         f"{_quantitative_qualitative_decision_instruction()} "
         f"{_meeting_full_path_instruction(config)} "
+        f"{_opponent_room_top_two_response_contract(config)} "
         f"{_event_impact_prompt_instruction()} "
         f"{_auditable_sources_instruction(config)} "
         f"{_room_specific_protagonist_instruction(config)} "
@@ -7300,6 +7420,7 @@ def _meeting_response_prompt(
         "'16 avos: Uruguai' ou 'Oitavas: Uruguai' e valores percentuais de chance do Brasil vencer/passar. "
         "Em scenario_probabilities, use chaves como '16 avos: Holanda' para a chance daquele confronto acontecer; "
         "só use candidatos permitidos por allowed_opponents/bracket_opponent_slots. "
+        f"{_opponent_room_top_two_response_contract(config)} "
         "Em team_context_signals, registre sinais por seleção com team, category, rating_delta ou probability_delta_pct, confidence, rationale e source_url/source_query; "
         "use as mesmas famílias de dados do Brasil para adversários: bets/prediction markets, ratings, Sofascore/performance, lesões/cortes/notícias recentes, amistosos recentes, arbitragem/VAR/cartões e imprensa especializada. "
         "A decisão não é do orquestrador: ela deve sair do debate. Este é o Modelo Principal: use sportsbooks, "
@@ -7442,7 +7563,7 @@ async def _repair_invalid_meeting_responses(
         return sanitized_opinions, []
 
     spec_by_slot = _agent_spec_by_slot(responder_specs)
-    repaired_by_agent: dict[str, Any] = {}
+    checked_by_agent: dict[str, Any] = {}
     raw_repairs: list[Any] = []
 
     for raw_opinion, sanitized_opinion in zip(raw_opinions, sanitized_opinions, strict=False):
@@ -7473,15 +7594,16 @@ async def _repair_invalid_meeting_responses(
             [repaired],
             baseline_title_pct=baseline_title_pct,
             config=config,
+            semantic_policy_stage="post_repair",
+            admit_policy_suspected=True,
         )[0]
-        if not bool(getattr(checked, "used_fallback", False)):
-            repaired_by_agent[checked.agent] = checked
+        checked_by_agent[checked.agent] = checked
 
-    if not repaired_by_agent:
+    if not checked_by_agent:
         return sanitized_opinions, raw_repairs
 
     merged = [
-        repaired_by_agent.get(str(getattr(opinion, "agent", "")), opinion)
+        checked_by_agent.get(str(getattr(opinion, "agent", "")), opinion)
         for opinion in sanitized_opinions
     ]
     return merged, raw_repairs

@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime, timezone
+from pathlib import Path
 
 from worldcup_brazil.agents import AgentSpec
 from worldcup_brazil.consensus import AgentOpinion, build_consensus
@@ -15,6 +16,7 @@ from worldcup_brazil.pipeline import (
     _repair_invalid_meeting_responses,
     _run_model_meeting,
     _sanitize_main_meeting_opinions,
+    load_config,
 )
 
 
@@ -409,6 +411,153 @@ def test_targeted_meeting_repair_replaces_bad_response_without_reasking_all_mode
     assert repaired[0].used_fallback is False
     assert repaired[0].title_pct == 10.7
     assert repair_opinions[0].agent == "GPT 5.5"
+
+
+def test_targeted_meeting_repair_admits_unresolved_policy_suspected_without_structural_issue(monkeypatch) -> None:
+    raw_bad = AgentOpinion(
+        agent="DeepSeek V4 Pro",
+        title_pct=6.0,
+        summary="Uso Opta como comparativo.",
+        answer="Opta aparece no texto inicial.",
+        agrees_with_protagonist=True,
+        source_queries=["Brazil title odds non Opta"],
+    )
+    config = {
+        "meeting_response_repair_attempts": 1,
+        "group_matches": [{"opponent": "Marrocos"}, {"opponent": "Haiti"}, {"opponent": "Escócia"}],
+        "knockout_matches": [{"phase": "16 avos", "opponent": "Adversário mais provável a definir"}],
+        "require_auditable_source_urls_for_meeting_votes": True,
+    }
+    sanitized = _sanitize_main_meeting_opinions([raw_bad], baseline_title_pct=6.0, config=config)
+
+    async def fake_call_agent(spec, prompt, **kwargs):
+        return AgentOpinion(
+            agent=spec.slot,
+            title_pct=6.1,
+            summary="Eu menciono Opta apenas para dizer que está excluída; uso odds e imprensa.",
+            answer="Concordo com a tese usando mercado de título, lesões e bracket configurado.",
+            agrees_with_protagonist=True,
+            source_urls=["https://example.com/title-odds"],
+            source_queries=["Brazil World Cup title odds without Opta"],
+        )
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_agent", fake_call_agent)
+
+    repaired, _repair_opinions = asyncio.run(
+        _repair_invalid_meeting_responses(
+            config=config,
+            round_index=2,
+            protagonist="GPT 5.5",
+            question="Há consenso?",
+            previous_turn=None,
+            generated_at=datetime(2026, 6, 17, 12, tzinfo=timezone.utc),
+            responder_specs=[
+                AgentSpec(
+                    slot="DeepSeek V4 Pro",
+                    provider="openai-compatible",
+                    model="deepseek-v4-pro",
+                    env_api_key=None,
+                    endpoint="https://api.deepseek.com",
+                )
+            ],
+            raw_opinions=[raw_bad],
+            sanitized_opinions=sanitized,
+            baseline_title_pct=6.0,
+            allow_agent_fallback=True,
+            timeout=30,
+        )
+    )
+
+    assert repaired[0].used_fallback is False
+    assert repaired[0].removed_from_main is False
+    assert repaired[0].title_pct == 6.1
+    assert repaired[0].validation_issues[0]["recoverability"] == "policy_suspected"
+
+
+def test_targeted_meeting_repair_keeps_real_policy_reuse_removed(monkeypatch) -> None:
+    raw_bad = AgentOpinion(
+        agent="Opus 4.8",
+        title_pct=6.0,
+        summary="Uso Opta como comparativo.",
+        answer="Opta aparece no texto inicial.",
+        agrees_with_protagonist=True,
+        source_queries=["Brazil title odds"],
+    )
+    config = {
+        "meeting_response_repair_attempts": 1,
+        "group_matches": [{"opponent": "Marrocos"}, {"opponent": "Haiti"}, {"opponent": "Escócia"}],
+        "knockout_matches": [{"phase": "16 avos", "opponent": "Adversário mais provável a definir"}],
+        "require_auditable_source_urls_for_meeting_votes": True,
+    }
+    sanitized = _sanitize_main_meeting_opinions([raw_bad], baseline_title_pct=6.0, config=config)
+
+    async def fake_call_agent(spec, prompt, **kwargs):
+        return AgentOpinion(
+            agent=spec.slot,
+            title_pct=6.4,
+            summary="Uso ranking da Opta como âncora de mercado.",
+            answer="A Opta move o título para 6.4%.",
+            agrees_with_protagonist=True,
+            source_urls=["https://example.com/title-odds"],
+        )
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_agent", fake_call_agent)
+
+    repaired, _repair_opinions = asyncio.run(
+        _repair_invalid_meeting_responses(
+            config=config,
+            round_index=2,
+            protagonist="GPT 5.5",
+            question="Há consenso?",
+            previous_turn=None,
+            generated_at=datetime(2026, 6, 17, 12, tzinfo=timezone.utc),
+            responder_specs=[
+                AgentSpec(
+                    slot="Opus 4.8",
+                    provider="anthropic",
+                    model="claude-opus-4-8",
+                    env_api_key=None,
+                    endpoint=None,
+                )
+            ],
+            raw_opinions=[raw_bad],
+            sanitized_opinions=sanitized,
+            baseline_title_pct=6.0,
+            allow_agent_fallback=True,
+            timeout=30,
+        )
+    )
+
+    assert repaired[0].used_fallback is True
+    assert repaired[0].removed_from_main is True
+    assert repaired[0].validation_issues[0]["recoverability"] == "policy"
+
+
+def test_post_repair_policy_suspected_does_not_mask_impossible_bracket() -> None:
+    config = load_config(Path("config/worldcup_brazil.example.json"))
+    opinion = AgentOpinion(
+        agent="Perplexity Pro",
+        title_pct=5.9,
+        summary="Eu menciono Opta apenas para dizer que está excluída; Oitavas: Japão é o adversário mais provável.",
+        answer="Japão nas Oitavas exigiria um cruzamento que não existe em nenhum caminho do Brasil.",
+        agrees_with_protagonist=False,
+        source_urls=["https://example.com/bracket"],
+    )
+
+    sanitized = _sanitize_main_meeting_opinions(
+        [opinion],
+        baseline_title_pct=5.0,
+        config={**config, "require_auditable_source_urls_for_meeting_votes": True},
+        semantic_policy_stage="post_repair",
+        admit_policy_suspected=True,
+    )
+
+    assert sanitized[0].used_fallback is True
+    assert sanitized[0].removed_from_main is True
+    assert any(
+        issue["matched_rule"] == "impossible_bracket_opponent"
+        for issue in sanitized[0].validation_issues
+    )
 
 
 def test_meeting_coverage_requires_group_knockout_and_title_before_consensus_close() -> None:
