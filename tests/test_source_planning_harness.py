@@ -13,6 +13,7 @@ from worldcup_brazil.pipeline import (
     _is_format_repairable_planning_reason,
     _sanitize_source_planning_opinions,
     _source_planning_readiness_report,
+    _validation_issue_from_reason,
     build_report_bundle,
     load_config,
 )
@@ -98,8 +99,8 @@ def test_source_planning_readiness_report_structures_validation_issues() -> None
 
     opta = removed["Opus 4.8"]["validation_issues"][0]
     assert opta["matched_rule"] == "reserved_benchmark_opta"
-    assert opta["recoverability"] == "policy"
-    assert opta["reentry_eligible"] is False
+    assert opta["recoverability"] == "policy_suspected"
+    assert opta["reentry_eligible"] is True
     assert "Opta Power Rankings" in opta["offending_excerpt"]
 
 
@@ -382,6 +383,76 @@ def test_source_planning_readiness_rejects_reserved_benchmark_mentions() -> None
 
     assert report["quorum_met"] is False
     assert "benchmark reservado" in report["removed_agents"][0]["reason"]
+
+
+def test_source_planning_accepts_opta_substitution_language_as_compliance() -> None:
+    report = _source_planning_readiness_report(
+        [
+            AgentOpinion(
+                agent="DeepSeek V4 Pro",
+                title_pct=6.5,
+                summary=(
+                    "As fontes frescas — odds em tempo real, ratings Elo atualizadas, Sofascore "
+                    "e notícias de lesões — substituem a dependência de Opta e permitem recalibrar "
+                    "as forças das seleções."
+                ),
+                source_urls=["https://www.theguardian.com/football/world-cup"],
+                source_queries=["Brazil World Cup 2026 odds Elo Sofascore injuries"],
+            )
+        ],
+        {
+            "require_agent_source_plan": True,
+            "minimum_source_ready_agents": 1,
+        },
+    )
+
+    assert report["quorum_met"] is True
+    assert report["active_agents"] == ["DeepSeek V4 Pro"]
+    assert report["removed_agents"] == []
+    assert _has_opta_marker("fontes frescas substituem a dependência de Opta") is False
+
+
+def test_negated_policy_reason_is_suspected_and_reentry_eligible() -> None:
+    issue = _validation_issue_from_reason(
+        gate_name="source_planning_readiness",
+        reason="alocação fixa quanti/quali proibida; modelos devem decidir sem percentual fixo",
+        opinion=AgentOpinion(
+            agent="Gemini Pro",
+            title_pct=6.5,
+            summary=(
+                "Estimamos as probabilidades de mata-mata sem alocação fixa quanti/quali, "
+                "deixando cada modelo decidir livremente o peso entre dados quantitativos e qualitativos."
+            ),
+            source_urls=["https://www.eloratings.net/"],
+        ),
+        source_items=["https://www.eloratings.net/"],
+    )
+
+    assert issue["matched_rule"] == "fixed_quantitative_qualitative_allocation"
+    assert issue["recoverability"] == "policy_suspected"
+    assert issue["reentry_eligible"] is True
+    assert "repair direcionado" in issue["repair_hint"].lower()
+
+
+def test_real_opta_use_is_suspected_before_repair_even_when_other_policy_is_negated() -> None:
+    issue = _validation_issue_from_reason(
+        gate_name="source_planning_readiness",
+        reason="referência a benchmark reservado no planejamento sem Opta",
+        opinion=AgentOpinion(
+            agent="Opus 4.8",
+            title_pct=6.5,
+            summary=(
+                "Usei Opta Power Rankings como benchmark para calibrar o Brasil. "
+                "Sem alocação fixa quanti/quali na ponderação final."
+            ),
+            source_urls=["https://example.com/non-opta-market"],
+        ),
+        source_items=["https://example.com/non-opta-market"],
+    )
+
+    assert issue["matched_rule"] == "reserved_benchmark_opta"
+    assert issue["recoverability"] == "policy_suspected"
+    assert issue["reentry_eligible"] is True
 
 
 def test_failed_source_planning_quorum_is_logged_with_agent_diagnostics(
@@ -796,13 +867,26 @@ def test_agent_removal_watchdog_keeps_source_planning_reason(
     assert removal["extra"]["validation_issues"][0]["offending_excerpt"]
 
 
-def test_real_source_planning_violation_is_not_reentry_eligible_and_logs_excerpt(
+def test_real_opta_use_becomes_terminal_only_after_failed_repair_and_logs_excerpt(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    calls = {"source_planning": 0, "repair": 0}
     captured: dict[str, object] = {}
 
-    async def fake_call_all_agents(*args, **kwargs):
+    async def fake_call_all_agents(prompt, *, specs, **kwargs):
+        if "RODADA DE REPARO" in str(prompt):
+            calls["repair"] += 1
+            return [
+                AgentOpinion(
+                    agent=spec.slot,
+                    title_pct=8.0,
+                    summary="Usei ranking da Opta como âncora mesmo após o repair.",
+                    source_urls=["https://example.com/non-opta-market-after-repair"],
+                )
+                for spec in specs
+            ]
+        calls["source_planning"] += 1
         return [
             AgentOpinion(
                 agent="Opus 4.8",
@@ -859,7 +943,7 @@ def test_real_source_planning_violation_is_not_reentry_eligible_and_logs_excerpt
             config={
                 "baseline_title_pct": 8.0,
                 "minimum_source_ready_agents": 3,
-                "source_planning_repair_attempts": 0,
+                "source_planning_repair_attempts": 1,
                 "meeting_min_participants": 3,
                 "agent_reentry_probe_enabled": True,
                 "parallel_opponent_debriefing_enabled": False,
@@ -879,10 +963,12 @@ def test_real_source_planning_violation_is_not_reentry_eligible_and_logs_excerpt
         )
     )
 
+    assert calls == {"source_planning": 1, "repair": 1}
     assert "Opus 4.8" not in captured["active_slots"]
     assert captured["reentry_slots"] == []
     opus_issues = artifacts.bundle.metadata["removed_agent_validation_issues"]["Opus 4.8"]
     assert opus_issues[0]["matched_rule"] == "reserved_benchmark_opta"
+    assert opus_issues[0]["recoverability"] == "policy"
     assert opus_issues[0]["reentry_eligible"] is False
 
     events = [json.loads(line) for line in watchdog_path.read_text(encoding="utf-8").splitlines()]
@@ -896,8 +982,343 @@ def test_real_source_planning_violation_is_not_reentry_eligible_and_logs_excerpt
     ][0]
     assert removal["extra"]["reentry_eligible"] is False
     assert removal["extra"]["validation_issues"][0]["matched_rule"] == "reserved_benchmark_opta"
-    assert "Opta Power Rankings" in removal["extra"]["offending_excerpt"]
+    assert "Opta como âncora" in removal["extra"]["offending_excerpt"]
     assert "reentry elegível: não" in removal["detail"]
+
+
+def test_pre_meeting_repairs_policy_suspected_slot_even_above_quorum_floor(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls = {"source_planning": 0, "repair": 0}
+    captured: dict[str, object] = {}
+
+    async def fake_call_all_agents(prompt, *, specs, **kwargs):
+        if "RODADA DE REPARO" in str(prompt):
+            calls["repair"] += 1
+            return [
+                AgentOpinion(
+                    agent=spec.slot,
+                    title_pct=8.2,
+                    summary="Plano reparado: uso odds, Elo, notícias e desempenho; Opta fica fora do Modelo Principal.",
+                    source_urls=["https://example.com/repaired-market"],
+                    source_queries=["Brazil World Cup 2026 odds Elo injuries"],
+                )
+                for spec in specs
+            ]
+        calls["source_planning"] += 1
+        return [
+            AgentOpinion(
+                agent="Opus 4.8",
+                title_pct=8.0,
+                summary="Usei Opta Power Rankings como benchmark reservado no planejamento.",
+                source_urls=["https://example.com/opus-market"],
+            ),
+            AgentOpinion(
+                agent="GPT 5.5",
+                title_pct=8.0,
+                summary="Plano com fonte verificável.",
+                source_urls=["https://example.com/gpt"],
+            ),
+            AgentOpinion(
+                agent="Perplexity Pro",
+                title_pct=8.1,
+                summary="Plano com fonte verificável.",
+                source_urls=["https://example.com/perplexity"],
+            ),
+            AgentOpinion(
+                agent="DeepSeek V4 Pro",
+                title_pct=8.2,
+                summary="Plano com fonte verificável.",
+                source_urls=["https://example.com/deepseek"],
+            ),
+            AgentOpinion(
+                agent="Gemini Pro",
+                title_pct=8.3,
+                summary="Plano com fonte verificável.",
+                source_urls=["https://example.com/gemini"],
+            ),
+        ]
+
+    async def fake_run_model_meeting(
+        *,
+        config,
+        planning_opinions,
+        generated_at,
+        agent_specs,
+        baseline_title_pct,
+        allow_agent_fallback,
+        watchdog,
+        token_cost_ledger=None,
+        reentry_candidate_specs=None,
+        **_kwargs,
+    ):
+        captured["active_slots"] = [spec.slot for spec in agent_specs]
+        captured["planning_agents"] = [opinion.agent for opinion in planning_opinions]
+        captured["reentry_slots"] = [spec.slot for spec in (reentry_candidate_specs or [])]
+        consensus = build_consensus(planning_opinions, agent_slots=[spec.slot for spec in agent_specs])
+        return consensus, planning_opinions, [], planning_opinions
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+    monkeypatch.setattr("worldcup_brazil.pipeline._run_model_meeting", fake_run_model_meeting)
+    watchdog_path = tmp_path / "watchdog.jsonl"
+
+    asyncio.run(
+        build_report_bundle(
+            config={
+                "baseline_title_pct": 8.0,
+                "minimum_source_ready_agents": 3,
+                "source_planning_repair_attempts": 1,
+                "meeting_min_participants": 3,
+                "agent_reentry_probe_enabled": True,
+                "parallel_opponent_debriefing_enabled": False,
+                "monte_carlo": {"enabled": False},
+                "agents": [
+                    {"slot": "Opus 4.8", "provider": "anthropic", "model": "opus", "endpoint": "x"},
+                    {"slot": "GPT 5.5", "provider": "openai", "model": "gpt-5.5", "endpoint": "x"},
+                    {"slot": "Perplexity Pro", "provider": "openai-compatible", "model": "sonar", "endpoint": "x"},
+                    {"slot": "DeepSeek V4 Pro", "provider": "openai-compatible", "model": "deepseek", "endpoint": "x"},
+                    {"slot": "Gemini Pro", "provider": "google-gemini", "model": "gemini", "endpoint": "x"},
+                ],
+                "group_matches": [{"opponent": "Marrocos", "brazil_pct": 59.0}],
+                "knockout_matches": [],
+            },
+            source_memory=SourceMemory(tmp_path / "source_memory.json"),
+            generated_at=datetime(2026, 6, 7, 12, tzinfo=timezone.utc),
+            watchdog=RunWatchdog(path=watchdog_path, verbose=False),
+        )
+    )
+
+    assert calls == {"source_planning": 1, "repair": 1}
+    assert captured["active_slots"] == [
+        "Opus 4.8",
+        "GPT 5.5",
+        "Perplexity Pro",
+        "DeepSeek V4 Pro",
+        "Gemini Pro",
+    ]
+    assert captured["planning_agents"] == [
+        "Opus 4.8",
+        "GPT 5.5",
+        "Perplexity Pro",
+        "DeepSeek V4 Pro",
+        "Gemini Pro",
+    ]
+    assert captured["reentry_slots"] == []
+
+
+def test_pre_meeting_admits_unresolved_policy_suspected_after_bounded_repair(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls = {"source_planning": 0, "repair": 0}
+    captured: dict[str, object] = {}
+
+    async def fake_call_all_agents(prompt, *, specs, **kwargs):
+        if "RODADA DE REPARO" in str(prompt):
+            calls["repair"] += 1
+            return [
+                AgentOpinion(
+                    agent=spec.slot,
+                    title_pct=8.2,
+                    summary=(
+                        "Opta mencionada apenas como benchmark proibido; "
+                        "a análise usa odds, Elo, lesões e desempenho recente."
+                    ),
+                    source_urls=["https://example.com/repaired-market"],
+                )
+                for spec in specs
+            ]
+        calls["source_planning"] += 1
+        return [
+            AgentOpinion(
+                agent="Opus 4.8",
+                title_pct=8.0,
+                summary="Opta mencionada apenas como benchmark proibido; uso odds e Elo.",
+                source_urls=["https://example.com/opus-market"],
+            ),
+            AgentOpinion(
+                agent="GPT 5.5",
+                title_pct=8.0,
+                summary="Plano com fonte verificável.",
+                source_urls=["https://example.com/gpt"],
+            ),
+            AgentOpinion(
+                agent="Perplexity Pro",
+                title_pct=8.1,
+                summary="Plano com fonte verificável.",
+                source_urls=["https://example.com/perplexity"],
+            ),
+            AgentOpinion(
+                agent="DeepSeek V4 Pro",
+                title_pct=8.2,
+                summary="Plano com fonte verificável.",
+                source_urls=["https://example.com/deepseek"],
+            ),
+        ]
+
+    async def fake_run_model_meeting(
+        *,
+        config,
+        planning_opinions,
+        generated_at,
+        agent_specs,
+        baseline_title_pct,
+        allow_agent_fallback,
+        watchdog,
+        token_cost_ledger=None,
+        reentry_candidate_specs=None,
+        **_kwargs,
+    ):
+        captured["active_slots"] = [spec.slot for spec in agent_specs]
+        captured["reentry_slots"] = [spec.slot for spec in (reentry_candidate_specs or [])]
+        consensus = build_consensus(planning_opinions, agent_slots=[spec.slot for spec in agent_specs])
+        return consensus, planning_opinions, [], planning_opinions
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+    monkeypatch.setattr("worldcup_brazil.pipeline._run_model_meeting", fake_run_model_meeting)
+    watchdog_path = tmp_path / "watchdog.jsonl"
+
+    artifacts = asyncio.run(
+        build_report_bundle(
+            config={
+                "baseline_title_pct": 8.0,
+                "minimum_source_ready_agents": 3,
+                "source_planning_repair_attempts": 1,
+                "meeting_min_participants": 3,
+                "agent_reentry_probe_enabled": True,
+                "parallel_opponent_debriefing_enabled": False,
+                "monte_carlo": {"enabled": False},
+                "agents": [
+                    {"slot": "Opus 4.8", "provider": "anthropic", "model": "opus", "endpoint": "x"},
+                    {"slot": "GPT 5.5", "provider": "openai", "model": "gpt-5.5", "endpoint": "x"},
+                    {"slot": "Perplexity Pro", "provider": "openai-compatible", "model": "sonar", "endpoint": "x"},
+                    {"slot": "DeepSeek V4 Pro", "provider": "openai-compatible", "model": "deepseek", "endpoint": "x"},
+                ],
+                "group_matches": [{"opponent": "Marrocos", "brazil_pct": 59.0}],
+                "knockout_matches": [],
+            },
+            source_memory=SourceMemory(tmp_path / "source_memory.json"),
+            generated_at=datetime(2026, 6, 7, 12, tzinfo=timezone.utc),
+            watchdog=RunWatchdog(path=watchdog_path, verbose=False),
+        )
+    )
+
+    assert calls == {"source_planning": 1, "repair": 1}
+    assert captured["active_slots"] == ["Opus 4.8", "GPT 5.5", "Perplexity Pro", "DeepSeek V4 Pro"]
+    assert captured["reentry_slots"] == []
+    assert not artifacts.bundle.metadata.get("removed_agent_validation_issues", {}).get("Opus 4.8")
+    warnings = artifacts.bundle.metadata.get("source_planning_warnings", [])
+    assert any("Opus 4.8" in warning and "policy_suspected" in warning for warning in warnings)
+    events = [json.loads(line) for line in watchdog_path.read_text(encoding="utf-8").splitlines()]
+    assert any(
+        event["step"] == "agent_source_policy_admit"
+        and event["status"] == "warning"
+        and event["extra"].get("agent") == "Opus 4.8"
+        for event in events
+    )
+
+
+def test_quorum_floor_repairs_reentry_eligible_removed_slot_before_opening_meeting(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls = {"source_planning": 0, "repair": 0}
+    captured: dict[str, object] = {}
+
+    async def fake_call_all_agents(prompt, *, specs, **kwargs):
+        prompt_text = str(prompt)
+        if "RODADA DE REPARO" in prompt_text or "REPARO" in prompt_text:
+            calls["repair"] += 1
+            return [
+                AgentOpinion(
+                    agent=spec.slot,
+                    title_pct=8.2,
+                    summary="Plano reparado com fontes auditáveis não-Opta e sem fórmula fixa.",
+                    source_urls=["https://example.com/repaired-market"],
+                    source_queries=["Brazil World Cup 2026 odds Elo Sofascore injuries"],
+                )
+                for spec in specs
+            ]
+        calls["source_planning"] += 1
+        return [
+            AgentOpinion(
+                agent="Opus 4.8",
+                title_pct=8.0,
+                summary="Plano com fonte verificável.",
+                source_urls=["https://example.com/opus"],
+            ),
+            AgentOpinion(
+                agent="GPT 5.5",
+                title_pct=8.0,
+                summary="Plano com fonte verificável.",
+                source_urls=["https://example.com/gpt"],
+            ),
+            AgentOpinion(
+                agent="Perplexity Pro",
+                title_pct=8.1,
+                summary="Plano com fonte verificável.",
+                source_urls=["https://example.com/perplexity"],
+            ),
+            AgentOpinion(
+                agent="DeepSeek V4 Pro",
+                title_pct=8.2,
+                summary="Plano válido, mas sem source_urls/source_queries nesta primeira resposta.",
+            ),
+        ]
+
+    async def fake_run_model_meeting(
+        *,
+        config,
+        planning_opinions,
+        generated_at,
+        agent_specs,
+        baseline_title_pct,
+        allow_agent_fallback,
+        watchdog,
+        token_cost_ledger=None,
+        reentry_candidate_specs=None,
+        **_kwargs,
+    ):
+        captured["active_slots"] = [spec.slot for spec in agent_specs]
+        captured["planning_agents"] = [opinion.agent for opinion in planning_opinions]
+        captured["reentry_slots"] = [spec.slot for spec in (reentry_candidate_specs or [])]
+        consensus = build_consensus(planning_opinions, agent_slots=[spec.slot for spec in agent_specs])
+        return consensus, planning_opinions, [], planning_opinions
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+    monkeypatch.setattr("worldcup_brazil.pipeline._run_model_meeting", fake_run_model_meeting)
+    watchdog_path = tmp_path / "watchdog.jsonl"
+
+    asyncio.run(
+        build_report_bundle(
+            config={
+                "baseline_title_pct": 8.0,
+                "minimum_source_ready_agents": 3,
+                "source_planning_repair_attempts": 1,
+                "meeting_min_participants": 3,
+                "agent_reentry_probe_enabled": True,
+                "parallel_opponent_debriefing_enabled": False,
+                "monte_carlo": {"enabled": False},
+                "agents": [
+                    {"slot": "Opus 4.8", "provider": "anthropic", "model": "opus", "endpoint": "x"},
+                    {"slot": "GPT 5.5", "provider": "openai", "model": "gpt-5.5", "endpoint": "x"},
+                    {"slot": "Perplexity Pro", "provider": "openai-compatible", "model": "sonar", "endpoint": "x"},
+                    {"slot": "DeepSeek V4 Pro", "provider": "openai-compatible", "model": "deepseek", "endpoint": "x"},
+                ],
+                "group_matches": [{"opponent": "Marrocos", "brazil_pct": 59.0}],
+                "knockout_matches": [],
+            },
+            source_memory=SourceMemory(tmp_path / "source_memory.json"),
+            generated_at=datetime(2026, 6, 7, 12, tzinfo=timezone.utc),
+            watchdog=RunWatchdog(path=watchdog_path, verbose=False),
+        )
+    )
+
+    assert calls == {"source_planning": 1, "repair": 1}
+    assert captured["active_slots"] == ["Opus 4.8", "GPT 5.5", "Perplexity Pro", "DeepSeek V4 Pro"]
+    assert captured["planning_agents"] == ["Opus 4.8", "GPT 5.5", "Perplexity Pro", "DeepSeek V4 Pro"]
+    assert captured["reentry_slots"] == []
 
 
 def test_gemini_billing_depleted_reason_reaches_watchdog_and_bundle_metadata(

@@ -65,6 +65,8 @@ def test_agent_source_planning_watchdog_payload_includes_contract_and_operationa
         "source_planning_repair_attempts": 2,
         "repair_format_removals_with_quorum": True,
         "source_planning_format_repair_timeout_seconds": 60,
+        "repair_reentry_eligible_removals_before_meeting": True,
+        "source_planning_floor_repair_timeout_seconds": 120,
         "blind_peer_review_enabled": False,
         "blind_peer_review_shadow_only": True,
         "blind_peer_review_timeout_seconds": 90,
@@ -95,6 +97,8 @@ def test_agent_source_planning_watchdog_payload_includes_contract_and_operationa
     assert "self_heal_attempts=2" in detail
     assert "format_repair=True" in detail
     assert "format_repair_timeout_s=60" in detail
+    assert "pre_meeting_repair=True" in detail
+    assert "floor_repair_timeout_s=120" in detail
     assert "blind_review=False" in detail
     assert "blind_review_timeout_s=90" in detail
     assert "numeric_chairman=True" in detail
@@ -117,6 +121,8 @@ def test_agent_source_planning_watchdog_payload_includes_contract_and_operationa
     assert extra["operational_knobs"]["source_planning_repair_attempts"] == 2
     assert extra["operational_knobs"]["repair_format_removals_with_quorum"] is True
     assert extra["operational_knobs"]["source_planning_format_repair_timeout_seconds"] == 60
+    assert extra["operational_knobs"]["repair_reentry_eligible_removals_before_meeting"] is True
+    assert extra["operational_knobs"]["source_planning_floor_repair_timeout_seconds"] == 120
     assert extra["operational_knobs"]["blind_peer_review_enabled"] is False
     assert extra["operational_knobs"]["blind_peer_review_shadow_only"] is True
     assert extra["operational_knobs"]["blind_peer_review_timeout_seconds"] == 90

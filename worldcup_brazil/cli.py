@@ -226,6 +226,14 @@ def _config_watchdog_extra(
                 "source_planning_format_repair_timeout_seconds",
                 min(90, int(config.get("agent_timeout_seconds", 90))),
             ),
+            "repair_reentry_eligible_removals_before_meeting": config.get(
+                "repair_reentry_eligible_removals_before_meeting",
+                config.get("repair_reentry_eligible_removals_at_quorum_floor", True),
+            ),
+            "source_planning_floor_repair_timeout_seconds": config.get(
+                "source_planning_floor_repair_timeout_seconds",
+                config.get("agent_timeout_seconds", 90),
+            ),
             "blind_peer_review_enabled": config.get("blind_peer_review_enabled", False),
             "blind_peer_review_shadow_only": config.get("blind_peer_review_shadow_only", True),
             "blind_peer_review_on_consensus_exit": config.get("blind_peer_review_on_consensus_exit", True),
@@ -320,6 +328,7 @@ def _config_watchdog_detail(
         f"preflight_timeout_s={cfg['model_preflight_timeout_seconds']}; "
         f"quorum_min={cfg['minimum_source_ready_agents']}; "
         f"repair_attempts={cfg['source_planning_repair_attempts']}; "
+        f"pre_meeting_repair={cfg['repair_reentry_eligible_removals_before_meeting']}; "
         f"meeting_min_participants={cfg['meeting_min_participants']}; "
         f"meeting_quorum_rule={cfg['meeting_quorum_rule']}; "
         f"numeric_chairman={cfg['numeric_chairman_enabled']}; "

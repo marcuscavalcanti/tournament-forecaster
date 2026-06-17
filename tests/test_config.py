@@ -39,6 +39,8 @@ def test_example_config_uses_three_agent_source_quorum_and_repair_attempts() -> 
     assert config["source_planning_repair_attempts"] >= 1
     assert config["repair_format_removals_with_quorum"] is True
     assert config["source_planning_format_repair_timeout_seconds"] == 60
+    assert config["repair_reentry_eligible_removals_before_meeting"] is True
+    assert config["source_planning_floor_repair_timeout_seconds"] == 120
     assert config["blind_peer_review_enabled"] is False
     assert config["blind_peer_review_shadow_only"] is True
     assert config["blind_peer_review_on_consensus_exit"] is True
@@ -96,6 +98,8 @@ def test_load_config_watchdog_payload_exposes_safe_operational_config() -> None:
         "source_planning_repair_attempts": 2,
         "repair_format_removals_with_quorum": True,
         "source_planning_format_repair_timeout_seconds": 60,
+        "repair_reentry_eligible_removals_before_meeting": True,
+        "source_planning_floor_repair_timeout_seconds": 120,
         "blind_peer_review_enabled": False,
         "blind_peer_review_shadow_only": True,
         "blind_peer_review_on_consensus_exit": True,
@@ -143,6 +147,7 @@ def test_load_config_watchdog_payload_exposes_safe_operational_config() -> None:
     assert "rating_uncertainty=True" in detail
     assert "quorum_min=3" in detail
     assert "repair_attempts=2" in detail
+    assert "pre_meeting_repair=True" in detail
     assert "meeting_min_participants=3" in detail
     assert "meeting_quorum_rule=maioria simples" in detail
     assert "full_path_coverage=True" in detail
@@ -162,6 +167,8 @@ def test_load_config_watchdog_payload_exposes_safe_operational_config() -> None:
     assert extra["watchdog_config"]["source_planning_repair_attempts"] == 2
     assert extra["watchdog_config"]["repair_format_removals_with_quorum"] is True
     assert extra["watchdog_config"]["source_planning_format_repair_timeout_seconds"] == 60
+    assert extra["watchdog_config"]["repair_reentry_eligible_removals_before_meeting"] is True
+    assert extra["watchdog_config"]["source_planning_floor_repair_timeout_seconds"] == 120
     assert extra["watchdog_config"]["blind_peer_review_enabled"] is False
     assert extra["watchdog_config"]["blind_peer_review_shadow_only"] is True
     assert extra["watchdog_config"]["blind_peer_review_on_consensus_exit"] is True

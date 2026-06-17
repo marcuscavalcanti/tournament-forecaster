@@ -87,7 +87,8 @@ def _is_negated_opta_mention(lowered: str, *, start: int, end: int) -> bool:
     prefix = lowered[max(0, start - 56) : start]
     suffix = lowered[end : min(len(lowered), end + 56)]
     if re.search(
-        r"(?:nao|non|sem|exclu\w*|proibid\w*|vedad\w*|ignore\w*|remov\w*)"
+        r"(?:nao|non|sem|exclu\w*|proibid\w*|vedad\w*|ignore\w*|remov\w*|"
+        r"substitu\w*|dispens\w*|evit\w*|troc\w*|retir\w*)"
         r"(?:\W+\w+){0,7}\W*$",
         prefix,
     ):
@@ -116,6 +117,38 @@ def _has_opta_marker(value: str) -> bool:
             continue
         return True
     return False
+
+
+def _has_opta_negation_or_compliance_language(text: str) -> bool:
+    normalized = _normalize_text(str(text or ""))
+    if not normalized:
+        return False
+    patterns = (
+        r"\b(?:sem|nao|non)\W+(?:usar|uso|usei|utilizar|utilizei|inclu\w*|consider\w*|ancor\w*)"
+        r"(?:\W+\w+){0,8}\W+opta",
+        r"\b(?:substitu\w*|dispens\w*|evit\w*|troc\w*|retir\w*|exclu\w*|remov\w*)"
+        r"(?:\W+\w+){0,8}\W+opta",
+        r"\bopta\W+(?:nao\W+conta|fora|excluid\w*|removid\w*|proibid\w*)",
+        r"\bopta(?:\W+\w+){0,5}\W+(?:proibid\w*|vedad\w*|fora|excluid\w*|removid\w*)",
+    )
+    return any(re.search(pattern, normalized) for pattern in patterns)
+
+
+def _has_fixed_allocation_negation_or_compliance_language(text: str) -> bool:
+    normalized = _normalize_text(str(text or ""))
+    if not normalized:
+        return False
+    patterns = (
+        r"\b(?:sem|nao|non)\W+(?:usar|uso|usei|utilizar|utilizei|aplicar|apliquei)"
+        r"(?:\W+\w+){0,8}\W+(?:alocacao\W+fixa|percentual\W+fixo|peso\W+fixo|quanti/quali)",
+        r"\b(?:substitu\w*|dispens\w*|evit\w*|troc\w*|retir\w*|exclu\w*|remov\w*)"
+        r"(?:\W+\w+){0,8}\W+(?:alocacao\W+fixa|percentual\W+fixo|peso\W+fixo|quanti/quali)",
+        r"\b(?:sem|nao\W+ha|nao\W+uso|nao\W+usei)\W+"
+        r"(?:alocacao\W+fixa|percentual\W+fixo|peso\W+fixo|quanti/quali)",
+        r"\b(?:alocacao\W+fixa|percentual\W+fixo|peso\W+fixo|quanti/quali)"
+        r"\W+(?:proibid\w*|fora|excluid\w*|removid\w*)",
+    )
+    return any(re.search(pattern, normalized) for pattern in patterns)
 
 
 def _is_opta_source(source: EvidenceSource) -> bool:
@@ -552,6 +585,23 @@ def _issue_text_from_reason(reason: str) -> str:
     return reason or "violação de contrato operacional"
 
 
+def _semantic_policy_recoverability(*, kind: str, diagnostic_text: str, semantic_policy_stage: str) -> str:
+    """Semantic policy hits start repairable; only post-repair affirmative reuse becomes terminal.
+
+    The initial matcher is intentionally conservative: Opta/fixed-allocation hits are language-level
+    policies, and negation detection has already produced false positives. Structural gates such as
+    bracket impossibility stay terminal elsewhere because they are machine-checkable.
+    """
+    stage = str(semantic_policy_stage or "initial").strip().lower()
+    if stage != "post_repair":
+        return "policy_suspected"
+    if kind == "opta" and _has_opta_negation_or_compliance_language(diagnostic_text):
+        return "policy_suspected"
+    if kind == "fixed_allocation" and _has_fixed_allocation_negation_or_compliance_language(diagnostic_text):
+        return "policy_suspected"
+    return "policy"
+
+
 def _validation_issue_from_reason(
     *,
     gate_name: str,
@@ -559,6 +609,7 @@ def _validation_issue_from_reason(
     opinion: Any | None = None,
     source_items: list[str] | None = None,
     field: str = "summary",
+    semantic_policy_stage: str = "initial",
 ) -> dict[str, Any]:
     normalized = _normalize_text(reason)
     diagnostic_text = _opinion_diagnostic_text(opinion, source_items) if opinion is not None else reason
@@ -600,9 +651,17 @@ def _validation_issue_from_reason(
         repair_hint = "Pode reentrar apenas se trouxer source_urls HTTP ou source_queries específicas executadas agora."
     elif "benchmark reservado" in normalized or "opta" in normalized:
         matched_rule = "reserved_benchmark_opta"
-        recoverability = "policy"
+        recoverability = _semantic_policy_recoverability(
+            kind="opta",
+            diagnostic_text=diagnostic_text,
+            semantic_policy_stage=semantic_policy_stage,
+        )
         markers = ("Opta", "opta", "benchmark reservado")
-        repair_hint = "Não reentrar; remover Opta/benchmark reservado e trazer fontes não reservadas em novo planejamento."
+        repair_hint = (
+            "Repair direcionado: reescrever sem mencionar Opta/benchmark reservado e confirmar fontes não reservadas."
+            if recoverability == "policy_suspected"
+            else "Não reentrar; remover Opta/benchmark reservado e trazer fontes não reservadas em novo planejamento."
+        )
     elif "adversario impossivel" in normalized or "cruzamento oficial" in normalized:
         matched_rule = "impossible_bracket_opponent"
         recoverability = "bracket"
@@ -610,9 +669,17 @@ def _validation_issue_from_reason(
         repair_hint = "Não reentrar; respeitar adversários possíveis pelo bracket oficial configurado."
     elif "alocacao fixa" in normalized or "quanti/quali" in normalized:
         matched_rule = "fixed_quantitative_qualitative_allocation"
-        recoverability = "policy"
+        recoverability = _semantic_policy_recoverability(
+            kind="fixed_allocation",
+            diagnostic_text=diagnostic_text,
+            semantic_policy_stage=semantic_policy_stage,
+        )
         markers = ("70/30", "60/40", "quanti", "qualit")
-        repair_hint = "Não reentrar; modelos devem decidir livremente o peso entre dados quantitativos e qualitativos."
+        repair_hint = (
+            "Repair direcionado: reescrever sem citar fórmula/alocação fixa e confirmar que o peso quanti/quali é livre."
+            if recoverability == "policy_suspected"
+            else "Não reentrar; modelos devem decidir livremente o peso entre dados quantitativos e qualitativos."
+        )
     elif "busca/fetch externo indisponivel" in normalized or "sem permissao" in normalized or "permission" in normalized:
         matched_rule = "external_fetch_unavailable"
         recoverability = "source"
@@ -660,6 +727,11 @@ def _reentry_policy_for_validation_issue(issue: dict[str, Any] | None) -> dict[s
         return {
             "eligible": False,
             "decision_reason": "ferramenta/permissão de busca indisponível; probe repetiria a mesma falha",
+        }
+    if recoverability == "policy_suspected":
+        return {
+            "eligible": True,
+            "decision_reason": "violação semântica ambígua/negada ganha repair direcionado antes de remoção terminal",
         }
     if recoverability in {"policy", "bracket", "fatal"}:
         return {
@@ -772,6 +844,7 @@ def _source_planning_relevance_issue(opinion: Any, source_items: list[str]) -> s
 def _source_planning_readiness_report(planning_opinions: list[Any], config: dict[str, Any]) -> dict[str, Any]:
     require_source_plan = bool(config.get("require_agent_source_plan", True))
     drop_all_candidates, candidates = _source_planning_drop_candidates(config)
+    semantic_policy_stage = str(config.get("_source_planning_semantic_policy_stage", "initial") or "initial")
     entries: list[dict[str, Any]] = []
     active_agents: list[str] = []
     removed_agents: list[dict[str, Any]] = []
@@ -808,6 +881,7 @@ def _source_planning_readiness_report(planning_opinions: list[Any], config: dict
                         if "source_urls/source_queries" in _normalize_text(reason)
                         else "summary"
                     ),
+                    semantic_policy_stage=semantic_policy_stage,
                 )
             ]
         primary_issue = validation_issues[0] if validation_issues else {}
@@ -939,6 +1013,15 @@ def _agent_source_planning_watchdog_extra(config: dict[str, Any]) -> dict[str, A
                     min(90, int(config.get("agent_timeout_seconds", 90))),
                 )
             ),
+            "repair_reentry_eligible_removals_before_meeting": bool(
+                config.get(
+                    "repair_reentry_eligible_removals_before_meeting",
+                    config.get("repair_reentry_eligible_removals_at_quorum_floor", True),
+                )
+            ),
+            "source_planning_floor_repair_timeout_seconds": int(
+                config.get("source_planning_floor_repair_timeout_seconds", config.get("agent_timeout_seconds", 90))
+            ),
             "blind_peer_review_enabled": bool(config.get("blind_peer_review_enabled", False)),
             "blind_peer_review_shadow_only": bool(config.get("blind_peer_review_shadow_only", True)),
             "blind_peer_review_on_consensus_exit": bool(config.get("blind_peer_review_on_consensus_exit", True)),
@@ -1021,6 +1104,8 @@ def _agent_source_planning_watchdog_detail(config: dict[str, Any]) -> str:
         f"self_heal_attempts={knobs['source_planning_repair_attempts']}; "
         f"format_repair={knobs['repair_format_removals_with_quorum']}; "
         f"format_repair_timeout_s={knobs['source_planning_format_repair_timeout_seconds']}; "
+        f"pre_meeting_repair={knobs['repair_reentry_eligible_removals_before_meeting']}; "
+        f"floor_repair_timeout_s={knobs['source_planning_floor_repair_timeout_seconds']}; "
         f"blind_review={knobs['blind_peer_review_enabled']}; "
         f"blind_review_timeout_s={knobs['blind_peer_review_timeout_seconds']}; "
         f"numeric_chairman={knobs['numeric_chairman_enabled']}; "
@@ -1258,6 +1343,183 @@ def _merge_planning_opinions(current: list[Any], repaired: list[Any], agent_spec
     ]
 
 
+def _quorum_floor_repair_slots(source_readiness_report: dict[str, Any], config: dict[str, Any]) -> list[str]:
+    enabled = bool(
+        config.get(
+            "repair_reentry_eligible_removals_before_meeting",
+            config.get("repair_reentry_eligible_removals_at_quorum_floor", True),
+        )
+    )
+    if not enabled:
+        return []
+    slots: list[str] = []
+    for entry in source_readiness_report.get("removed_agents", []):
+        if bool(entry.get("reentry_eligible", False)):
+            slots.append(str(entry.get("agent", "")))
+    return [slot for slot in slots if slot]
+
+
+def _admit_unresolved_policy_suspected_slots(
+    source_readiness_report: dict[str, Any],
+    *,
+    watchdog: RunWatchdog | None,
+) -> dict[str, Any]:
+    entries: list[dict[str, Any]] = []
+    admitted_agents: list[str] = []
+    for entry in source_readiness_report.get("agents", []):
+        entry_copy = dict(entry)
+        issues = list(entry_copy.get("validation_issues", []) or [])
+        primary_issue = issues[0] if issues else {}
+        if (
+            not bool(entry_copy.get("ready", False))
+            and str(primary_issue.get("recoverability", "")).lower() == "policy_suspected"
+        ):
+            agent = str(entry_copy.get("agent", "Modelo sem nome"))
+            entry_copy["ready"] = True
+            entry_copy["reason"] = (
+                "admitido com ressalva após repair esgotado; hit semântico permaneceu ambíguo, "
+                "mas não houve violação estrutural confirmada"
+            )
+            entry_copy["admitted_with_policy_warning"] = True
+            entry_copy["reentry_eligible"] = False
+            entry_copy["reentry_decision_reason"] = (
+                "policy_suspected esgotou repair; fail-open controlado para não matar a sala por falso-positivo"
+            )
+            admitted_agents.append(agent)
+            if watchdog:
+                watchdog.event(
+                    "agent_source_policy_admit",
+                    "warning",
+                    detail=(
+                        f"{agent} admitido com ressalva após repair esgotado; "
+                        f"trecho que disparou: {entry_copy.get('offending_excerpt', '')}"
+                    ),
+                    extra={
+                        "agent": agent,
+                        "validation_issues": issues,
+                        "offending_excerpt": entry_copy.get("offending_excerpt", ""),
+                        "recoverability": "policy_suspected",
+                    },
+                )
+        entries.append(entry_copy)
+    if not admitted_agents:
+        return source_readiness_report
+    active_agents = [str(entry.get("agent", "")) for entry in entries if bool(entry.get("ready", False))]
+    removed_agents = [entry for entry in entries if not bool(entry.get("ready", False))]
+    updated = dict(source_readiness_report)
+    updated.update(
+        {
+            "agents": entries,
+            "active_agents": active_agents,
+            "removed_agents": removed_agents,
+            "ready_count": len(active_agents),
+            "quorum_met": len(active_agents) >= int(source_readiness_report.get("required_count", 0) or 0),
+        }
+    )
+    return updated
+
+
+def _source_planning_policy_warnings(source_readiness_report: dict[str, Any]) -> list[str]:
+    warnings: list[str] = []
+    for entry in source_readiness_report.get("agents", []):
+        if bool(entry.get("admitted_with_policy_warning", False)):
+            warnings.append(
+                "policy_suspected admitido com ressalva: "
+                f"{entry.get('agent', 'Modelo sem nome')} — trecho: {entry.get('offending_excerpt', '')}"
+            )
+    return warnings
+
+
+async def _repair_quorum_floor_planning_removals(
+    *,
+    config: dict[str, Any],
+    planning_opinions: list[Any],
+    source_readiness_report: dict[str, Any],
+    agent_specs: list[Any],
+    generated_at: datetime,
+    baseline_title_pct: float,
+    allow_agent_fallback: bool,
+    watchdog: RunWatchdog | None,
+    token_cost_ledger: dict[str, Any],
+) -> tuple[list[Any], dict[str, Any]]:
+    attempts = max(0, int(config.get("source_planning_repair_attempts", DEFAULT_SOURCE_PLANNING_REPAIR_ATTEMPTS)))
+    if attempts <= 0:
+        return planning_opinions, source_readiness_report
+    timeout = int(config.get("source_planning_floor_repair_timeout_seconds", config.get("agent_timeout_seconds", 90)))
+    merged_opinions = list(planning_opinions)
+    report = source_readiness_report
+    repaired_at_least_once = False
+    for attempt_index in range(1, attempts + 1):
+        repair_slots = _quorum_floor_repair_slots(report, config)
+        repair_specs = [spec for spec in agent_specs if spec.slot in repair_slots]
+        if not repair_specs:
+            break
+        repaired_at_least_once = True
+        if watchdog:
+            watchdog.start(
+                "agent_source_pre_meeting_repair",
+                detail=(
+                    f"attempt {attempt_index}/{attempts}; removido(s) reparável(eis) antes da sala: "
+                    f"{', '.join(spec.slot for spec in repair_specs)}; timeout_s={timeout}"
+                ),
+                extra={
+                    "attempt": attempt_index,
+                    "agents": [spec.slot for spec in repair_specs],
+                    "timeout_seconds": timeout,
+                    "ready_count": report.get("ready_count"),
+                    "required_count": report.get("required_count"),
+                },
+            )
+        repair_prompt = _source_planning_repair_prompt(
+            config=config,
+            generated_at=generated_at,
+            readiness_report=report,
+            attempt_index=attempt_index,
+        )
+        raw_repair_opinions = await call_all_agents(
+            repair_prompt,
+            specs=repair_specs,
+            baseline_title_pct=baseline_title_pct,
+            timeout=timeout,
+            allow_local_fallback=allow_agent_fallback,
+        )
+        _record_token_costs(
+            token_cost_ledger,
+            config=config,
+            prompt=repair_prompt,
+            opinions=raw_repair_opinions,
+            stage=f"source_planning_pre_meeting_repair_{attempt_index}",
+        )
+        repaired_opinions = _sanitize_source_planning_opinions(
+            raw_repair_opinions,
+            baseline_title_pct=baseline_title_pct,
+            config=config,
+        )
+        merged_opinions = _merge_planning_opinions(merged_opinions, repaired_opinions, agent_specs)
+        report = _source_planning_readiness_report(
+            merged_opinions,
+            {**config, "_source_planning_semantic_policy_stage": "post_repair"},
+        )
+        recovered = [
+            slot
+            for slot in repair_slots
+            if slot not in {str(entry.get("agent", "")) for entry in report.get("removed_agents", [])}
+        ]
+        if watchdog:
+            watchdog.finish(
+                "agent_source_pre_meeting_repair",
+                detail=(
+                    f"attempt {attempt_index}/{attempts}; recuperados antes da sala: "
+                    f"{', '.join(recovered) or 'nenhum'}; "
+                    f"prontos agora: {report.get('ready_count')}/{report.get('required_count')}"
+                ),
+                extra={"attempt": attempt_index, "recovered": recovered},
+            )
+    if repaired_at_least_once:
+        report = _admit_unresolved_policy_suspected_slots(report, watchdog=watchdog)
+    return merged_opinions, report
+
+
 async def _self_heal_source_planning_quorum(
     *,
     config: dict[str, Any],
@@ -1318,7 +1580,10 @@ async def _self_heal_source_planning_quorum(
             config=config,
         )
         current_opinions = _merge_planning_opinions(current_opinions, repaired_opinions, agent_specs)
-        report = _source_planning_readiness_report(current_opinions, config)
+        report = _source_planning_readiness_report(
+            current_opinions,
+            {**config, "_source_planning_semantic_policy_stage": "post_repair"},
+        )
         if watchdog:
             _emit_source_planning_readiness(
                 watchdog,
@@ -1339,7 +1604,7 @@ async def _self_heal_source_planning_quorum(
                     detail=status_detail,
                     extra={"attempt": attempt_index, "quorum_met": False},
                 )
-
+    report = _admit_unresolved_policy_suspected_slots(report, watchdog=watchdog)
     return current_opinions, report
 
 
@@ -7639,6 +7904,18 @@ async def build_report_bundle(
             watchdog=watchdog,
             token_cost_ledger=token_cost_ledger,
         )
+        planning_opinions, source_readiness_report = await _repair_quorum_floor_planning_removals(
+            config=config,
+            planning_opinions=planning_opinions,
+            source_readiness_report=source_readiness_report,
+            agent_specs=agent_specs,
+            generated_at=generated_at,
+            baseline_title_pct=baseline_title_pct,
+            allow_agent_fallback=allow_agent_fallback,
+            watchdog=watchdog,
+            token_cost_ledger=token_cost_ledger,
+        )
+    source_planning_warnings = _source_planning_policy_warnings(source_readiness_report)
     removed_agent_slots = [str(entry["agent"]) for entry in source_readiness_report["removed_agents"]]
     removed_issues_by_agent = {
         str(entry.get("agent", "")): list(entry.get("validation_issues", []) or [])
@@ -8179,6 +8456,7 @@ async def build_report_bundle(
             "removed_agent_slots": removed_agent_slots,
             "removed_agent_reasons": removed_reason_by_agent,
             "removed_agent_validation_issues": removed_issues_by_agent,
+            "source_planning_warnings": source_planning_warnings,
             "agent_source_planning": {
                 opinion.agent: {
                     "source_urls": opinion.source_urls,

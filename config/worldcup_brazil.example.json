@@ -447,6 +447,8 @@
   "allow_informed_agreement_votes": true,
   "repair_format_removals_with_quorum": true,
   "source_planning_format_repair_timeout_seconds": 60,
+  "repair_reentry_eligible_removals_before_meeting": true,
+  "source_planning_floor_repair_timeout_seconds": 120,
   "post_editor_enabled": false,
   "post_editor_agent_slot": "Opus 4.8",
   "post_editor_timeout_seconds": 120
