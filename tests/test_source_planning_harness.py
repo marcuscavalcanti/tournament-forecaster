@@ -217,6 +217,8 @@ def test_source_planning_sanitizer_keeps_partial_payload_when_sources_are_parsea
     )
 
     assert sanitized[0].used_fallback is False
+    assert sanitized[0].title_pct is None
+    assert sanitized[0].title_pct_source == "parser_default_rejected"
     assert sanitized[0].source_urls == opinion.source_urls
 
 

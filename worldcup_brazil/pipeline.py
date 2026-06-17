@@ -3020,6 +3020,44 @@ def _report_uncertainty_metadata(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _team_context_warning_messages(monte_carlo_result: dict[str, Any]) -> list[str]:
+    team_context = monte_carlo_result.get("team_context")
+    if not isinstance(team_context, dict):
+        return []
+    warnings = team_context.get("warnings")
+    if not isinstance(warnings, list):
+        return []
+    messages: list[str] = []
+    for warning in warnings:
+        if not isinstance(warning, dict):
+            continue
+        team = str(warning.get("team", "") or "").strip()
+        reason = str(warning.get("reason", "") or "").strip()
+        try:
+            rating_delta = float(warning.get("rating_delta"))
+        except (TypeError, ValueError):
+            continue
+        try:
+            threshold = float(warning.get("threshold"))
+        except (TypeError, ValueError):
+            threshold = 0.0
+        if not team:
+            continue
+        if reason == "team_context_delta_above_warning_threshold":
+            threshold_text = f"{threshold:.1f}" if threshold > 0 else "configurado"
+            messages.append(
+                "Ajuste contextual fora da faixa de revisão: "
+                f"{team} teve {rating_delta:+.1f} pontos de rating, acima do limiar {threshold_text}; "
+                "validar se há dupla contagem ou reação excessiva antes de publicar."
+            )
+        else:
+            messages.append(
+                f"Aviso de contexto do Monte Carlo para {team}: {reason or 'sem razão informada'} "
+                f"({rating_delta:+.1f} pontos de rating)."
+            )
+    return messages
+
+
 def _stage_confidence_intervals(
     probabilities: dict[str, float],
     *,
@@ -3978,6 +4016,8 @@ def _has_implausible_title_jump(
     max_shift_pct = float((config or {}).get("max_agent_title_shift_pct", 5.0))
     if max_shift_pct <= 0:
         return False
+    if getattr(opinion, "title_pct", None) is None:
+        return False
     try:
         title_pct = float(getattr(opinion, "title_pct"))
     except (TypeError, ValueError):
@@ -4321,6 +4361,7 @@ def _sanitize_main_meeting_opinions(
             replace(
                 opinion,
                 title_pct=round(float(baseline_title_pct), 1),
+                title_pct_source="fallback",
                 summary=(
                     f"Resposta removida do Modelo Principal por {removal_reason}; "
                     "não conta como consenso do Modelo Principal."
@@ -4431,6 +4472,7 @@ def _sanitize_source_planning_opinions(
                 replace(
                     opinion,
                     title_pct=round(float(baseline_title_pct), 1),
+                    title_pct_source="fallback",
                     summary=rendered_summary,
                     opening_argument="",
                     question="",
@@ -4456,7 +4498,8 @@ def _sanitize_source_planning_opinions(
             sanitized.append(
                 replace(
                     opinion,
-                    title_pct=round(float(baseline_title_pct), 1),
+                    title_pct=None,
+                    title_pct_source="parser_default_rejected",
                     summary=(
                         f"{getattr(opinion, 'summary', '')} "
                         "[payload parcial, mas fontes auditáveis foram extraídas e preservadas para o quórum.]"
@@ -4474,7 +4517,8 @@ def _sanitize_source_planning_opinions(
             sanitized.append(
                 replace(
                     opinion,
-                    title_pct=round(float(baseline_title_pct), 1),
+                    title_pct=None,
+                    title_pct_source="parser_default_rejected",
                     summary=(
                         f"{getattr(opinion, 'summary', '')} "
                         "[title_pct neutralizado no planejamento por salto quantitativo implausível; "
@@ -4946,7 +4990,11 @@ def _blind_peer_review_positions(
         raw_positions.append(
             {
                 "_agent": slot,
-                "title_pct": round(float(getattr(opinion, "title_pct", 0.0) or 0.0), 1),
+                "title_pct": (
+                    round(float(getattr(opinion, "title_pct")), 1)
+                    if getattr(opinion, "title_pct", None) is not None
+                    else None
+                ),
                 "summary": _blind_peer_review_public_text(
                     str(getattr(opinion, "summary", "") or ""),
                     agent_slots=agent_slots,
@@ -5980,6 +6028,7 @@ async def _run_model_meeting(
             protagonist_position = AgentOpinion(
                 agent=protagonist,
                 title_pct=round(float(baseline_title_pct), 1),
+                title_pct_source="fallback",
                 summary="Protagonista manteve a tese da pergunta; posição sintética criada por ausência de resposta parseável.",
                 question=question,
                 answer=question,
@@ -7322,13 +7371,17 @@ def _agent_debate_prompt(
     generated_at: datetime,
     opening_opinions: list[Any],
 ) -> str:
-    opening_lines = [
-        (
-            f"- {opinion.agent}: título={opinion.title_pct:.1f}%; "
+    opening_lines = []
+    for opinion in opening_opinions:
+        title_text = (
+            f"{float(opinion.title_pct):.1f}%"
+            if getattr(opinion, "title_pct", None) is not None
+            else "sem número próprio"
+        )
+        opening_lines.append(
+            f"- {opinion.agent}: título={title_text}; "
             f"tese={opinion.summary}; crítica={opinion.critique or 'não informada'}"
         )
-        for opinion in opening_opinions
-    ]
     return (
         _agent_prompt(config=config, evidence=evidence, generated_at=generated_at)
         + "\n\nRodada 1 dos outros modelos:\n"
@@ -7641,13 +7694,14 @@ async def _repair_invalid_meeting_responses(
 
 
 def _compose_debate_transcript(opening_opinions: list[Any], final_consensus: Any) -> list[str]:
-    lines = [
-        (
-            f"Rodada 1 - {opinion.agent}: {opinion.summary} "
-            f"Projeção inicial de título: {opinion.title_pct:.1f}%."
+    lines = []
+    for opinion in opening_opinions:
+        title_text = (
+            f"{float(opinion.title_pct):.1f}%"
+            if getattr(opinion, "title_pct", None) is not None
+            else "sem número próprio"
         )
-        for opinion in opening_opinions
-    ]
+        lines.append(f"Rodada 1 - {opinion.agent}: {opinion.summary} Projeção inicial de título: {title_text}.")
     for line in final_consensus.debate_transcript:
         if line.startswith("Rodada 1"):
             lines.append(line.replace("Rodada 1", "Rodada 2 - ajuste pós-crítica", 1))
@@ -7684,7 +7738,13 @@ def calculate_model_influence(opening_opinions: list[Any], final_opinions: list[
             score += 0.25
         if getattr(final, "adjustment", ""):
             score += 0.20
-        distance = abs(float(final.title_pct) - float(consensus.title_pct))
+        try:
+            final_title_pct = float(final.title_pct) if getattr(final, "title_pct", None) is not None else float(
+                consensus.title_pct
+            )
+        except (TypeError, ValueError):
+            final_title_pct = float(consensus.title_pct)
+        distance = abs(final_title_pct - float(consensus.title_pct))
         score += max(0.0, 0.8 - distance * 0.08)
         scores[agent] = max(score, 0.05)
 
@@ -7905,8 +7965,14 @@ def calculate_model_participation(
 def _model_predictions_no_opta(opinions: list[Any]) -> dict[str, dict[str, Any]]:
     predictions: dict[str, dict[str, Any]] = {}
     for opinion in opinions:
+        raw_title_pct = getattr(opinion, "title_pct", None)
+        try:
+            title_pct = round(float(raw_title_pct), 1) if raw_title_pct is not None else None
+        except (TypeError, ValueError):
+            title_pct = None
         predictions[opinion.agent] = {
-            "title_pct": round(float(opinion.title_pct), 1),
+            "title_pct": title_pct,
+            "title_pct_source": str(getattr(opinion, "title_pct_source", "") or "explicit"),
             "summary": opinion.summary,
             "answer": opinion.answer,
             "source_urls": [url for url in getattr(opinion, "source_urls", []) if not _has_opta_marker(url)],
@@ -7973,6 +8039,7 @@ async def build_report_bundle(
 ) -> RunArtifacts:
     _apply_runtime_env_overrides(config)
     generated_at = generated_at or datetime.now(timezone.utc)
+    run_id = str(getattr(watchdog, "run_id", "") or config.get("run_id") or "").strip()
     baseline_title_pct = float(config.get("baseline_title_pct", 11.0))
     agent_specs = load_agent_specs_from_config(config)
     agent_specs = _specs_after_preflight_exclusion(agent_specs, config, watchdog)
@@ -8158,6 +8225,9 @@ async def build_report_bundle(
         f"Configuração de bracket inválida: {error}"
         for error in invalid_configured_knockout_opponents(config)
     ]
+    for team_context_warning in _team_context_warning_messages(monte_carlo_result):
+        if team_context_warning not in warnings:
+            warnings.append(team_context_warning)
 
     if watchdog:
         watchdog.start("estimate_matches", detail="building directional quant/qual match estimates with confidence intervals")
@@ -8537,6 +8607,7 @@ async def build_report_bundle(
     )
 
     bundle = ReportBundle(
+        run_id=run_id,
         generated_at_iso=generated_at.isoformat(),
         group_matches=group_estimates,
         knockout_matches=knockout_estimates,
@@ -8559,6 +8630,7 @@ async def build_report_bundle(
         model_predictions_no_opta=_model_predictions_no_opta(opinions),
         model_self_identification=_model_self_identification([*active_planning_opinions, *meeting_opinions, *opinions]),
         metadata={
+            "run_id": run_id,
             "agent_title_consensus_pct": consensus.title_pct,
             "agent_opening_consensus_pct": meeting_transcript[0]["consensus_title_pct"] if meeting_transcript else consensus.title_pct,
             "agent_dispersion_pct": consensus.dispersion_pct,

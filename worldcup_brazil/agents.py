@@ -1486,6 +1486,17 @@ def _coerce_pct(value: Any, fallback: float) -> float:
     return fallback
 
 
+def _coerce_pct_or_none(value: Any) -> float | None:
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip().rstrip("%"))
+        except ValueError:
+            return None
+    return None
+
+
 def _string_list(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(item) for item in value if isinstance(item, str) and item.strip()]
@@ -1845,17 +1856,27 @@ def parse_agent_opinion(slot: str, text: str, *, fallback_title_pct: float) -> A
     match_probabilities = {}
 
     title_pct = payload.get("title_pct")
+    title_pct_source = "explicit" if "title_pct" in payload else "missing"
     if isinstance(title_pct, dict):
         match_probabilities.update(_coerce_probability_map(title_pct))
-        title_pct = fallback_title_pct
+        title_pct = None
+        title_pct_source = "parser_default_rejected"
     if title_pct is None:
         percent = re.search(
             r"(?:t[ií]tulo|campe[aã]o|champion|title)[^0-9]{0,40}(\d+(?:\.\d+)?)\s*%",
             text,
             flags=re.I,
         )
-        title_pct = float(percent.group(1)) if percent else fallback_title_pct
-    title_pct = _coerce_pct(title_pct, fallback_title_pct)
+        if percent:
+            title_pct = float(percent.group(1))
+            title_pct_source = "explicit"
+    else:
+        coerced_title_pct = _coerce_pct_or_none(title_pct)
+        if coerced_title_pct is None:
+            title_pct = None
+            title_pct_source = "parser_default_rejected"
+        else:
+            title_pct = coerced_title_pct
 
     summary = payload.get("summary")
     if not summary:
@@ -1895,7 +1916,8 @@ def parse_agent_opinion(slot: str, text: str, *, fallback_title_pct: float) -> A
 
     return AgentOpinion(
         agent=slot,
-        title_pct=round(title_pct, 1),
+        title_pct=round(title_pct, 1) if title_pct is not None else None,
+        title_pct_source=title_pct_source,
         summary=str(summary),
         opening_argument=str(payload.get("opening_argument") or payload.get("argument") or summary),
         question=str(payload.get("question") or ""),
@@ -1940,6 +1962,7 @@ def _local_fallback_opinion(spec: AgentSpec, reason: str, *, baseline_title_pct:
     return AgentOpinion(
         agent=spec.slot,
         title_pct=round(baseline_title_pct, 1),
+        title_pct_source="fallback",
         summary=(
             f"Modelo sem resposta externa verificável porque {reason}. "
             "O slot não participa do consenso até trazer plano de fontes próprio."

@@ -178,6 +178,43 @@ def test_meeting_turn_records_accepted_leadership_bid_as_next_question_candidate
     assert turn["responses"][0]["proposed_next_question"] == "Cartões dos volantes mudam o Brasil nas quartas?"
 
 
+def test_meeting_turn_inherits_consensus_title_for_accepted_missing_title_response() -> None:
+    turn = build_meeting_turn(
+        round_index=3,
+        protagonist="DeepSeek V4 Pro",
+        question="Mantemos o top-2 do Monte Carlo por fase?",
+        opinions=[
+            AgentOpinion(
+                agent="GPT 5.5",
+                title_pct=5.7,
+                summary="Concordo com DeepSeek.",
+                answer="Concordo com DeepSeek V4 Pro e mantenho o baseline.",
+                agrees_with_protagonist=True,
+            ),
+            AgentOpinion(
+                agent="Perplexity Pro",
+                title_pct=None,
+                title_pct_source="missing",
+                summary="Concordo integralmente e não proponho correção externa.",
+                answer="Concordo integralmente com o racional do protagonista e não proponho correção externa.",
+                agrees_with_protagonist=True,
+            ),
+            AgentOpinion(
+                agent="Gemini Pro",
+                title_pct=5.7,
+                summary="Concordo integralmente.",
+                answer="Concordo integralmente com o racional do protagonista.",
+                agrees_with_protagonist=True,
+            ),
+        ],
+        consensus_title_pct=5.7,
+    )
+
+    assert turn["consensus_spread_pct"] == 0.0
+    assert turn["responses"][1]["title_pct"] == 5.7
+    assert turn["responses"][1]["title_pct_source"] == "inherited_from_current_consensus"
+
+
 def test_meeting_turn_treats_disagreement_text_as_disagreement_even_if_boolean_is_wrong() -> None:
     turn = build_meeting_turn(
         round_index=1,
