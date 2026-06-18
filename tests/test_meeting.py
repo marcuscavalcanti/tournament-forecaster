@@ -215,6 +215,45 @@ def test_meeting_turn_inherits_consensus_title_for_accepted_missing_title_respon
     assert turn["responses"][1]["title_pct_source"] == "inherited_from_current_consensus"
 
 
+def test_meeting_turn_spread_ignores_removed_fallback_titles() -> None:
+    turn = build_meeting_turn(
+        round_index=3,
+        protagonist="DeepSeek V4 Pro",
+        question="Mantemos o top-2 do Monte Carlo por fase?",
+        opinions=[
+            AgentOpinion(
+                agent="Opus 4.8",
+                title_pct=11.0,
+                title_pct_source="fallback",
+                summary="fallback",
+                answer="Resposta removida do Modelo Principal por falha operacional.",
+                used_fallback=True,
+                removed_from_main=True,
+                removal_reason="fallback operacional sem fonte auditável",
+            ),
+            AgentOpinion(
+                agent="GPT 5.5",
+                title_pct=3.7,
+                title_pct_source="explicit",
+                summary="Concordo com DeepSeek.",
+                answer="Concordo com DeepSeek V4 Pro e mantenho 3.7%.",
+                agrees_with_protagonist=True,
+            ),
+            AgentOpinion(
+                agent="Perplexity Pro",
+                title_pct=3.8,
+                title_pct_source="explicit",
+                summary="Concordo integralmente.",
+                answer="Concordo integralmente com o racional do protagonista.",
+                agrees_with_protagonist=True,
+            ),
+        ],
+        consensus_title_pct=3.7,
+    )
+
+    assert turn["consensus_spread_pct"] == 0.1
+
+
 def test_meeting_turn_treats_disagreement_text_as_disagreement_even_if_boolean_is_wrong() -> None:
     turn = build_meeting_turn(
         round_index=1,

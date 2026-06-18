@@ -128,6 +128,16 @@ def _turn_response_counts_for_acceptance(response: dict[str, Any]) -> bool:
     return True
 
 
+def _meeting_response_counts_for_spread(response: MeetingResponse) -> bool:
+    if response.removed_from_main:
+        return False
+    if _looks_unusable(response.answer):
+        return False
+    if response.used_fallback and response.source_count <= 0:
+        return False
+    return True
+
+
 def _response_acceptance(
     opinion: Any,
     *,
@@ -306,7 +316,11 @@ def build_meeting_turn(
         current_protagonist=protagonist,
         protagonist_counts=protagonist_counts,
     )
-    values = [float(response.title_pct) for response in responses if response.title_pct is not None]
+    values = [
+        float(response.title_pct)
+        for response in responses
+        if response.title_pct is not None and _meeting_response_counts_for_spread(response)
+    ]
     spread = round(max(values) - min(values), 1) if values else 0.0
     return {
         "round": round_index,
