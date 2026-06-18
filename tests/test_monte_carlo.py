@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from worldcup_brazil.monte_carlo import (
     _stage_uncertainty_intervals,
     monte_carlo_compact_summary,
@@ -41,6 +43,65 @@ def _mc_config(iterations: int = 6000) -> dict:
     ]
     config["completed_group_matches"] = []
     return config
+
+
+def _completed_match_anchor_config(iterations: int = 2000) -> dict:
+    config = _mc_config(iterations=iterations)
+    config["monte_carlo"]["team_ratings"].update(
+        {
+            "Alemanha": 1860,
+            "Curaçau": 1360,
+        }
+    )
+    config["completed_group_matches"] = [
+        {
+            "group": "C",
+            "team_a": "Brasil",
+            "team_b": "Marrocos",
+            "score_a": 1,
+            "score_b": 1,
+            "date": "2026-06-13",
+        },
+        {
+            "group": "C",
+            "team_a": "Escócia",
+            "team_b": "Haiti",
+            "score_a": 1,
+            "score_b": 0,
+            "date": "2026-06-13",
+        },
+        {
+            "group": "E",
+            "team_a": "Alemanha",
+            "team_b": "Curaçau",
+            "score_a": 7,
+            "score_b": 1,
+            "date": "2026-06-14",
+        },
+        {
+            "group": "F",
+            "team_a": "Holanda",
+            "team_b": "Japão",
+            "score_a": 2,
+            "score_b": 2,
+            "date": "2026-06-14",
+        },
+        {
+            "group": "F",
+            "team_a": "Suécia",
+            "team_b": "Tunísia",
+            "score_a": 5,
+            "score_b": 1,
+            "date": "2026-06-15",
+        },
+    ]
+    return config
+
+
+def _team_context_adjustment(result: dict, team: str) -> dict:
+    return next(
+        item for item in result["team_context"]["team_adjustments"] if item["team"] == team
+    )
 
 
 def test_monte_carlo_conditions_group_on_completed_results() -> None:
@@ -296,6 +357,11 @@ def test_monte_carlo_uses_same_team_context_signal_families_for_candidate_oppone
     assert adjusted["team_context"]["warnings"] == [
         {
             "team": "Suécia",
+            "reason": "team_context_reactive_families_without_calendar_anchor",
+            "source_families": ["bets_prediction_markets", "specialized_press"],
+        },
+        {
+            "team": "Suécia",
             "rating_delta": 132.0,
             "threshold": 40.0,
             "reason": "team_context_delta_above_warning_threshold",
@@ -347,7 +413,7 @@ def test_monte_carlo_collapses_correlated_team_context_signals_by_normalized_fam
 
 
 def test_monte_carlo_shrinks_cross_family_signals_for_same_correlation_group() -> None:
-    config = _mc_config(iterations=2000)
+    config = _completed_match_anchor_config(iterations=2000)
     config["monte_carlo"]["team_context_correlation_default_rho"] = 0.7
     config["monte_carlo"]["team_context"] = {
         "Brasil": [
@@ -400,8 +466,8 @@ def test_monte_carlo_shrinks_cross_family_signals_for_same_correlation_group() -
         item["correlation_group"]: item
         for item in brazil_adjustment["correlation_adjustments"]
     }
-    assert adjustments_by_group["match_event:brasil:marrocos"] == {
-        "correlation_group": "match_event:brasil:marrocos",
+    assert adjustments_by_group["match_event:brasil:marrocos:2026-06-13"] == {
+        "correlation_group": "match_event:brasil:marrocos:2026-06-13",
         "rho": 0.7,
         "rating_delta": -24.2,
         "dominant_family": "injuries_cuts_news",
@@ -413,6 +479,7 @@ def test_monte_carlo_shrinks_cross_family_signals_for_same_correlation_group() -
             "performance",
             "ratings",
         ],
+        "correlation_group_source": "completed_match",
     }
     assert adjustments_by_group["brasil_structural_talent"] == {
         "correlation_group": "brasil_structural_talent",
@@ -431,7 +498,7 @@ def test_monte_carlo_derives_match_shock_when_models_use_different_group_labels(
     correlation_group. O motor antigo confiava cegamente nesses labels e somava
     o choque 4x; o motor precisa derivar um grupo determinístico de evento
     quando a evidência aponta para o mesmo jogo."""
-    config = _mc_config(iterations=2000)
+    config = _completed_match_anchor_config(iterations=2000)
     config["monte_carlo"]["team_context_correlation_default_rho"] = 0.7
     config["monte_carlo"]["team_context"] = {
         "Brasil": [
@@ -468,7 +535,7 @@ def test_monte_carlo_derives_match_shock_when_models_use_different_group_labels(
                 "source_url": "https://example.com/brazil-morocco-injuries",
             },
             {
-                "category": "injuries_cuts_news",
+                "category": "squad_depth",
                 "rating_delta": -16.5,
                 "confidence": 1.0,
                 "correlation_group": "br_squad_attrition",
@@ -476,7 +543,7 @@ def test_monte_carlo_derives_match_shock_when_models_use_different_group_labels(
                 "source_url": "https://example.com/brazil-squad-attrition",
             },
             {
-                "category": "performance",
+                "category": "elenco_talento",
                 "rating_delta": -6.6,
                 "confidence": 1.0,
                 "correlation_group": "bra_attack_structure_2026",
@@ -504,9 +571,221 @@ def test_monte_carlo_derives_match_shock_when_models_use_different_group_labels(
     assert match_groups, brazil_adjustment["correlation_adjustments"]
     assert match_groups[0]["rating_delta"] > -35.0
     assert {item["correlation_group"] for item in brazil_adjustment["correlation_adjustments"]} >= {
+        "match_event:brasil:marrocos:2026-06-13",
         "br_squad_attrition",
         "bra_attack_structure_2026",
     }
+
+
+def test_monte_carlo_anchors_brazil_event_reactive_context_to_completed_match_not_text_opponent() -> None:
+    config = _completed_match_anchor_config(iterations=2000)
+    config["monte_carlo"]["team_context_correlation_default_rho"] = 0.7
+    config["monte_carlo"]["team_context_correlation_rho_by_group"] = {
+        "match_event:brasil:marrocos": 0.9,
+    }
+    config["monte_carlo"]["team_context"] = {
+        "Brasil": [
+            {
+                "category": "performance",
+                "rating_delta": -10.0,
+                "confidence": 1.0,
+                "date": "2026-06-13",
+                "rationale": "Performance review do Brasil; contexto geral cita Marrocos em notas amplas.",
+                "source_url": "https://example.com/contexto-amplo-marrocos",
+            },
+            {
+                "category": "injuries_cuts_news",
+                "rating_delta": -8.0,
+                "confidence": 1.0,
+                "correlation_group": "brasil_haiti_prep",
+                "rationale": "Cortes e preparação citam Haiti como próximo adversário no calendário.",
+                "source_url": "https://example.com/brasil-prep-haiti",
+            },
+        ]
+    }
+
+    adjusted = run_brazil_monte_carlo(config)
+
+    brazil_adjustment = _team_context_adjustment(adjusted, "Brasil")
+    adjustments_by_group = {
+        item["correlation_group"]: item
+        for item in brazil_adjustment["correlation_adjustments"]
+    }
+    match_group = adjustments_by_group["match_event:brasil:marrocos:2026-06-13"]
+    assert match_group["correlation_group_source"] == "completed_match"
+    assert match_group["rho"] == 0.9
+    assert match_group["member_families"] == ["injuries_cuts_news", "performance"]
+    assert match_group["residual_delta"] != 0.0
+    assert "match_event:brasil:haiti" not in adjustments_by_group
+    assert all(
+        signal["correlation_group"] == "match_event:brasil:marrocos:2026-06-13"
+        and signal["correlation_group_source"] == "completed_match"
+        for signal in brazil_adjustment["signals"]
+    )
+    overridden_signal = next(
+        signal for signal in brazil_adjustment["signals"]
+        if signal.get("model_correlation_group_hint") == "brasil_haiti_prep"
+    )
+    assert overridden_signal["correlation_group_override_reason"] == "completed_match_overrode_model_hint"
+
+
+@pytest.mark.parametrize(
+    ("team", "expected_group"),
+    [
+        ("Alemanha", "match_event:alemanha:curacau:2026-06-14"),
+        ("Holanda", "match_event:holanda:japao:2026-06-14"),
+        ("Suécia", "match_event:suecia:tunisia:2026-06-15"),
+    ],
+)
+def test_monte_carlo_anchors_non_brazil_event_context_to_completed_match_when_text_mentions_marrocos(
+    team: str,
+    expected_group: str,
+) -> None:
+    config = _completed_match_anchor_config(iterations=2000)
+    config["monte_carlo"]["team_context_correlation_default_rho"] = 0.7
+    config["monte_carlo"]["team_context"] = {
+        team: [
+            {
+                "category": "performance",
+                "rating_delta": 12.0,
+                "confidence": 1.0,
+                "date": "2026-06-16",
+                "rationale": "Relatório de performance traz Marrocos apenas como contexto paralelo do torneio.",
+                "source_url": "https://example.com/world-cup-marrocos-roundup",
+            },
+            {
+                "category": "ratings",
+                "rating_delta": 7.0,
+                "confidence": 1.0,
+                "date": "2026-06-16",
+                "rationale": "Rating pós-jogo; a página de origem também linka análise de Marrocos.",
+                "source_url": "https://example.com/ratings-marrocos-sidebar",
+            },
+        ]
+    }
+
+    adjusted = run_brazil_monte_carlo(config)
+
+    team_adjustment = _team_context_adjustment(adjusted, team)
+    adjustments_by_group = {
+        item["correlation_group"]: item
+        for item in team_adjustment["correlation_adjustments"]
+    }
+    match_group = adjustments_by_group[expected_group]
+    assert match_group["correlation_group_source"] == "completed_match"
+    assert match_group["member_families"] == ["performance", "ratings"]
+    assert "match_event:brasil:marrocos" not in adjustments_by_group
+    assert all(
+        signal["correlation_group"] == expected_group
+        and signal["correlation_group_source"] == "completed_match"
+        for signal in team_adjustment["signals"]
+    )
+
+
+def test_monte_carlo_keeps_recent_news_family_and_calendar_anchors_it() -> None:
+    config = _completed_match_anchor_config(iterations=2000)
+    config["monte_carlo"]["team_context_correlation_default_rho"] = 0.7
+    config["monte_carlo"]["team_context"] = {
+        "Brasil": [
+            {
+                "category": "recent_news",
+                "rating_delta": -9.0,
+                "confidence": 1.0,
+                "rationale": "Notícia recente do ciclo pós-jogo; texto lateral menciona Haiti.",
+                "source_url": "https://example.com/brasil-news-haiti-sidebar",
+            },
+            {
+                "category": "performance",
+                "rating_delta": -6.0,
+                "confidence": 1.0,
+                "rationale": "Performance pós-jogo.",
+                "source_url": "https://example.com/brasil-performance",
+            },
+        ]
+    }
+
+    adjusted = run_brazil_monte_carlo(config)
+
+    brazil_adjustment = _team_context_adjustment(adjusted, "Brasil")
+    match_group = next(
+        item for item in brazil_adjustment["correlation_adjustments"]
+        if item["correlation_group"] == "match_event:brasil:marrocos:2026-06-13"
+    )
+    assert match_group["member_families"] == ["performance", "recent_news"]
+    assert "recent_news" in brazil_adjustment["source_families"]
+    assert all(signal["correlation_group_source"] == "completed_match" for signal in brazil_adjustment["signals"])
+
+
+def test_monte_carlo_does_not_collapse_structural_context_into_completed_match_event() -> None:
+    config = _completed_match_anchor_config(iterations=2000)
+    config["monte_carlo"]["team_context_correlation_default_rho"] = 0.7
+    config["monte_carlo"]["team_context"] = {
+        "Brasil": [
+            {
+                "category": "elenco_talento",
+                "rating_delta": 15.0,
+                "confidence": 1.0,
+                "rationale": "Leitura estrutural de talento do elenco; texto amplo menciona Marrocos.",
+                "source_url": "https://example.com/brasil-marrocos-talento",
+            },
+            {
+                "category": "squad_depth",
+                "rating_delta": 6.0,
+                "confidence": 1.0,
+                "correlation_group": "match_event:brasil:marrocos:2026-06-13",
+                "rationale": "Profundidade estrutural de elenco no ciclo 2026, não reação ao jogo.",
+                "source_url": "https://example.com/brasil-squad-depth-marrocos",
+            },
+        ]
+    }
+
+    adjusted = run_brazil_monte_carlo(config)
+
+    brazil_adjustment = _team_context_adjustment(adjusted, "Brasil")
+    assert all(
+        not item["correlation_group"].startswith("match_event:")
+        for item in brazil_adjustment["correlation_adjustments"]
+    )
+    assert all(signal["correlation_group_source"] == "structural" for signal in brazil_adjustment["signals"])
+
+
+def test_monte_carlo_does_not_create_match_event_from_reactive_text_without_completed_match() -> None:
+    config = _mc_config(iterations=2000)
+    config["completed_group_matches"] = []
+    config["monte_carlo"]["team_context_correlation_default_rho"] = 0.7
+    config["monte_carlo"]["team_context"] = {
+        "Brasil": [
+            {
+                "category": "performance",
+                "rating_delta": -10.0,
+                "confidence": 1.0,
+                "correlation_group": "brasil_pos_marrocos",
+                "rationale": "Texto menciona empate com Marrocos, mas o calendário concluído não foi carregado.",
+                "source_url": "https://example.com/brasil-marrocos-performance",
+            },
+            {
+                "category": "ratings",
+                "rating_delta": -8.0,
+                "confidence": 1.0,
+                "correlation_group": "brasil_pos_marrocos",
+                "rationale": "Rating pós-Marrocos sem completed_group_matches.",
+                "source_url": "https://example.com/brasil-marrocos-rating",
+            },
+        ]
+    }
+
+    adjusted = run_brazil_monte_carlo(config)
+
+    brazil_adjustment = _team_context_adjustment(adjusted, "Brasil")
+    groups = {item["correlation_group"] for item in brazil_adjustment["correlation_adjustments"]}
+    assert not any(group.startswith("match_event:") for group in groups)
+    assert groups == {"performance", "ratings"}
+    assert all(signal["correlation_group_source"] == "fallback_family" for signal in brazil_adjustment["signals"])
+    assert {
+        "team": "Brasil",
+        "reason": "team_context_reactive_families_without_calendar_anchor",
+        "source_families": ["performance", "ratings"],
+    } in adjusted["team_context"]["warnings"]
 
 
 def test_monte_carlo_keeps_cross_family_sum_when_correlation_rho_is_zero() -> None:

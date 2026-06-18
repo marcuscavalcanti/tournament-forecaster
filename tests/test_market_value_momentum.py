@@ -229,3 +229,47 @@ def test_team_context_warnings_are_rendered_as_operator_visible_messages() -> No
         "Ajuste contextual fora da faixa de revisão: Alemanha teve +48.4 pontos de rating, "
         "acima do limiar 40.0; validar se há dupla contagem ou reação excessiva antes de publicar."
     ]
+
+
+def test_team_context_under_merge_warning_is_operator_visible_without_rating_delta() -> None:
+    messages = _team_context_warning_messages(
+        {
+            "team_context": {
+                "warnings": [
+                    {
+                        "team": "Brasil",
+                        "reason": "team_context_event_reactive_under_merge_guard",
+                        "source_families": ["performance", "ratings"],
+                    }
+                ]
+            }
+        }
+    )
+
+    assert messages == [
+        "Ajuste contextual pode estar subagrupado: Brasil teve famílias reativas com âncora de calendário "
+        "sem grupo multifamília (performance, ratings); validar completed_group_matches e correlation_group "
+        "antes de publicar."
+    ]
+
+
+def test_team_context_missing_calendar_warning_is_operator_visible_without_rating_delta() -> None:
+    messages = _team_context_warning_messages(
+        {
+            "team_context": {
+                "warnings": [
+                    {
+                        "team": "Brasil",
+                        "reason": "team_context_reactive_families_without_calendar_anchor",
+                        "source_families": ["performance", "ratings"],
+                    }
+                ]
+            }
+        }
+    )
+
+    assert messages == [
+        "Ajuste contextual pode estar subagrupado: Brasil teve famílias reativas com âncora de calendário "
+        "sem grupo multifamília (performance, ratings); validar completed_group_matches e correlation_group "
+        "antes de publicar."
+    ]

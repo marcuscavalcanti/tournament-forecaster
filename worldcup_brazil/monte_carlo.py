@@ -5,6 +5,7 @@ import math
 import random
 import re
 import unicodedata
+from datetime import date
 from itertools import combinations
 from statistics import NormalDist, median
 from typing import Any
@@ -155,7 +156,9 @@ def _canonical_signal_family(category: str) -> str:
     normalized = _normalize(raw).replace("-", "_").replace("/", "_").replace(" ", "_")
     normalized = re.sub(r"_+", "_", normalized).strip("_")
 
-    if any(marker in normalized for marker in ("injur", "lesao", "lesoes", "corte", "cuts_news", "recent_news")):
+    if normalized in {"recent_news", "noticias_recentes", "recent_updates"}:
+        return "recent_news"
+    if any(marker in normalized for marker in ("injur", "lesao", "lesoes", "corte", "cuts_news")):
         return "injuries_cuts_news"
     if "performance" in normalized or "sofascore" in normalized:
         return "performance"
@@ -219,8 +222,16 @@ EVENT_REACTIVE_SIGNAL_FAMILIES = {
     "ratings",
     "performance",
     "injuries_cuts_news",
+    "recent_news",
     "specialized_press",
     "recent_friendlies",
+}
+
+STRUCTURAL_SIGNAL_FAMILIES = {
+    "elenco_talento",
+    "squad_depth",
+    "tactical_cycle",
+    "managerial_structure",
 }
 
 STRUCTURAL_CONTEXT_MARKERS = (
@@ -299,15 +310,92 @@ def _match_date_token(text: str) -> str:
     return "undated"
 
 
+def _parse_match_date(value: Any) -> date | None:
+    token = _match_date_token(_normalize(value))
+    if not token.startswith("20"):
+        return None
+    try:
+        return date.fromisoformat(token)
+    except ValueError:
+        return None
+
+
+def _signal_date(signal: dict[str, Any]) -> date | None:
+    for key in ("event_date", "match_date", "date", "played_at"):
+        parsed = _parse_match_date(signal.get(key))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _is_structural_context_signal(
+    signal: dict[str, Any],
+    *,
+    source_family: str,
+    explicit_group: Any = "",
+) -> bool:
+    return source_family in STRUCTURAL_SIGNAL_FAMILIES
+
+
+def _raw_correlation_group_hint(signal: dict[str, Any]) -> Any:
+    for key in ("correlation_group", "shock_id", "event_id", "context_group"):
+        raw = signal.get(key)
+        if raw:
+            return raw
+    return None
+
+
+def _completed_match_index(config: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    by_team: dict[str, list[dict[str, Any]]] = {}
+    for match in _completed_group_matches(config):
+        match_date = _parse_match_date(match.get("date"))
+        if match_date is None:
+            continue
+        team_a = str(match.get("team_a") or "").strip()
+        team_b = str(match.get("team_b") or "").strip()
+        if not team_a or not team_b:
+            continue
+        team_a_key = _normalize(team_a)
+        team_b_key = _normalize(team_b)
+        indexed = {
+            "date": match_date,
+            "date_token": match_date.isoformat(),
+            "teams": (team_a_key, team_b_key),
+        }
+        by_team.setdefault(team_a_key, []).append({**indexed, "opponent": team_b_key})
+        by_team.setdefault(team_b_key, []).append({**indexed, "opponent": team_a_key})
+    for matches in by_team.values():
+        matches.sort(key=lambda item: item["date"])
+    return by_team
+
+
+def _completed_match_anchor_group(
+    signal: dict[str, Any],
+    *,
+    team: str,
+    completed_match_index: dict[str, list[dict[str, Any]]],
+) -> str | None:
+    team_key = _normalize(team)
+    matches = completed_match_index.get(team_key) or []
+    if not matches:
+        return None
+    signal_played_at = _signal_date(signal)
+    candidates = [
+        match for match in matches
+        if signal_played_at is None or match["date"] <= signal_played_at
+    ]
+    if not candidates:
+        return None
+    match = candidates[-1]
+    return f"match_event:{team_key}:{match['opponent']}:{match['date_token']}"
+
+
 def _derived_match_event_group(signal: dict[str, Any], *, team: str, source_family: str, explicit_group: Any = "") -> str | None:
     if source_family not in EVENT_REACTIVE_SIGNAL_FAMILIES:
         return None
-    explicit_group_text = _normalize(explicit_group)
-    if explicit_group_text and any(marker in explicit_group_text for marker in STRUCTURAL_CONTEXT_MARKERS):
+    if _is_structural_context_signal(signal, source_family=source_family, explicit_group=explicit_group):
         return None
     text = _signal_text(signal, explicit_group=explicit_group)
-    if any(marker in text for marker in STRUCTURAL_CONTEXT_MARKERS):
-        return None
     team_key = _normalize(team)
     for opponent_key, aliases in MATCH_EVENT_OPPONENT_ALIASES.items():
         if opponent_key == team_key:
@@ -325,24 +413,55 @@ def _derived_match_event_group(signal: dict[str, Any], *, team: str, source_fami
     return None
 
 
-def _signal_correlation_group(signal: dict[str, Any], *, source_family: str, team: str) -> str:
+def _signal_correlation_group(
+    signal: dict[str, Any],
+    *,
+    source_family: str,
+    team: str,
+    completed_match_index: dict[str, list[dict[str, Any]]],
+) -> tuple[str, str]:
+    if _is_structural_context_signal(signal, source_family=source_family):
+        for key in ("correlation_group", "shock_id", "event_id", "context_group"):
+            raw = signal.get(key)
+            if raw:
+                normalized_raw = _normalize(raw)
+                if normalized_raw.startswith("match_event"):
+                    continue
+                return normalized_raw, "structural"
+        return source_family, "structural"
+
+    if source_family in EVENT_REACTIVE_SIGNAL_FAMILIES:
+        completed_anchor = _completed_match_anchor_group(
+            signal,
+            team=team,
+            completed_match_index=completed_match_index,
+        )
+        if completed_anchor:
+            return completed_anchor, "completed_match"
+        return source_family, "fallback_family"
+
     for key in ("correlation_group", "shock_id", "event_id", "context_group"):
         raw = signal.get(key)
         derived = _derived_match_event_group(signal, team=team, source_family=source_family, explicit_group=raw)
         if derived:
-            return derived
+            return derived, "explicit"
         if raw:
-            return _normalize(raw)
+            return _normalize(raw), "explicit"
     derived = _derived_match_event_group(signal, team=team, source_family=source_family)
     if derived:
-        return derived
-    return source_family
+        return derived, "explicit"
+    return source_family, "fallback_family"
 
 
 def _team_context_group_rho(mc_config: dict[str, Any], correlation_group: str) -> float:
     default_rho = mc_config.get("team_context_correlation_default_rho", 0.0)
     raw_by_group = mc_config.get("team_context_correlation_rho_by_group") or {}
-    raw_value = raw_by_group.get(correlation_group, default_rho) if isinstance(raw_by_group, dict) else default_rho
+    raw_value = default_rho
+    if isinstance(raw_by_group, dict):
+        raw_value = raw_by_group.get(correlation_group, default_rho)
+        if raw_value == default_rho and correlation_group.startswith("match_event:"):
+            base_group = ":".join(correlation_group.split(":")[:3])
+            raw_value = raw_by_group.get(base_group, raw_value)
     try:
         rho = float(raw_value)
     except (TypeError, ValueError):
@@ -368,17 +487,18 @@ def _correlated_family_adjustments(
             float(item["rating_delta"]) for item in members if item is not dominant
         )
         rating_delta = float(dominant["rating_delta"]) + (1.0 - rho) * residual_delta
-        rendered.append(
-            {
-                "correlation_group": correlation_group,
-                "rho": round(rho, 3),
-                "rating_delta": round(rating_delta, 1),
-                "dominant_family": str(dominant["source_family"]),
-                "dominant_delta": round(float(dominant["rating_delta"]), 1),
-                "residual_delta": round(residual_delta, 1),
-                "member_families": sorted(str(item["source_family"]) for item in members),
-            }
-        )
+        rendered_adjustment = {
+            "correlation_group": correlation_group,
+            "rho": round(rho, 3),
+            "rating_delta": round(rating_delta, 1),
+            "dominant_family": str(dominant["source_family"]),
+            "dominant_delta": round(float(dominant["rating_delta"]), 1),
+            "residual_delta": round(residual_delta, 1),
+            "member_families": sorted(str(item["source_family"]) for item in members),
+        }
+        if any(item.get("_correlation_group_source") == "completed_match" for item in members):
+            rendered_adjustment["correlation_group_source"] = "completed_match"
+        rendered.append(rendered_adjustment)
     return rendered
 
 
@@ -396,6 +516,7 @@ def _apply_team_context_adjustments(config: dict[str, Any], ratings: dict[str, f
     ignored_signal_count = 0
     source_families: set[str] = set()
     team_adjustments: dict[str, dict[str, Any]] = {}
+    completed_matches_by_team = _completed_match_index(config)
 
     for signal in _configured_team_context_signals(config):
         team_key = _normalize(signal.get("team") or signal.get("selection") or signal.get("country"))
@@ -428,11 +549,18 @@ def _apply_team_context_adjustments(config: dict[str, Any], ratings: dict[str, f
             },
         )
         bucket["source_families"].add(source_family)
-        correlation_group = _signal_correlation_group(signal, source_family=source_family, team=team)
+        correlation_group, correlation_group_source = _signal_correlation_group(
+            signal,
+            source_family=source_family,
+            team=team,
+            completed_match_index=completed_matches_by_team,
+        )
         bucket["family_deltas"].setdefault((source_family, correlation_group), []).append(weighted_delta)
+        bucket.setdefault("family_group_sources", {})[(source_family, correlation_group)] = correlation_group_source
         rendered_signal = {
             "category": source_family,
             "correlation_group": correlation_group,
+            "correlation_group_source": correlation_group_source,
             "rating_delta": round(weighted_delta, 1),
             "confidence": round(confidence, 2),
             "source": signal.get("source_url")
@@ -444,6 +572,14 @@ def _apply_team_context_adjustments(config: dict[str, Any], ratings: dict[str, f
         }
         if category != source_family:
             rendered_signal["original_category"] = category
+        raw_group_hint = _raw_correlation_group_hint(signal)
+        if (
+            correlation_group_source == "completed_match"
+            and raw_group_hint
+            and _normalize(raw_group_hint) != correlation_group
+        ):
+            rendered_signal["model_correlation_group_hint"] = _normalize(raw_group_hint)
+            rendered_signal["correlation_group_override_reason"] = "completed_match_overrode_model_hint"
         bucket["signals"].append(rendered_signal)
         source_families.add(source_family)
         applied_signal_count += 1
@@ -452,9 +588,14 @@ def _apply_team_context_adjustments(config: dict[str, Any], ratings: dict[str, f
     warnings: list[dict[str, Any]] = []
     for team, bucket in team_adjustments.items():
         family_adjustments: list[dict[str, Any]] = []
+        internal_family_adjustments: list[dict[str, Any]] = []
         for (family, correlation_group), values in sorted(bucket["family_deltas"].items()):
             if not values:
                 continue
+            correlation_group_source = bucket.get("family_group_sources", {}).get(
+                (family, correlation_group),
+                "fallback_family",
+            )
             adjustment = {
                 "source_family": family,
                 "rating_delta": round(float(median(values)), 1),
@@ -463,10 +604,46 @@ def _apply_team_context_adjustments(config: dict[str, Any], ratings: dict[str, f
             if correlation_group != family:
                 adjustment["correlation_group"] = correlation_group
             family_adjustments.append(adjustment)
+            internal_adjustment = dict(adjustment)
+            internal_adjustment["_correlation_group_source"] = correlation_group_source
+            internal_family_adjustments.append(internal_adjustment)
         correlation_adjustments = _correlated_family_adjustments(
-            family_adjustments,
+            internal_family_adjustments,
             mc_config=mc_config,
         )
+        completed_multi_family_groups = [
+            item for item in correlation_adjustments
+            if item.get("correlation_group_source") == "completed_match"
+            and len(item.get("member_families") or []) > 1
+        ]
+        completed_anchor_signals = [
+            signal for signal in bucket["signals"]
+            if signal.get("correlation_group_source") == "completed_match"
+            and signal.get("category") in EVENT_REACTIVE_SIGNAL_FAMILIES
+        ]
+        completed_anchor_families = {str(signal["category"]) for signal in completed_anchor_signals}
+        if len(completed_anchor_families) > 1 and not completed_multi_family_groups:
+            warnings.append(
+                {
+                    "team": team,
+                    "reason": "team_context_event_reactive_under_merge_guard",
+                    "source_families": sorted(completed_anchor_families),
+                }
+            )
+        fallback_reactive_families = {
+            str(signal["category"])
+            for signal in bucket["signals"]
+            if signal.get("category") in EVENT_REACTIVE_SIGNAL_FAMILIES
+            and signal.get("correlation_group_source") != "completed_match"
+        }
+        if len(fallback_reactive_families) > 1 and not completed_anchor_signals:
+            warnings.append(
+                {
+                    "team": team,
+                    "reason": "team_context_reactive_families_without_calendar_anchor",
+                    "source_families": sorted(fallback_reactive_families),
+                }
+            )
         bucket["rating_delta"] = sum(float(item["rating_delta"]) for item in correlation_adjustments)
         bounded_team_delta = max(-max_team_delta, min(max_team_delta, float(bucket["rating_delta"])))
         if abs(bounded_team_delta) > warning_delta:

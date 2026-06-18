@@ -3036,6 +3036,21 @@ def _team_context_warning_messages(monte_carlo_result: dict[str, Any]) -> list[s
             continue
         team = str(warning.get("team", "") or "").strip()
         reason = str(warning.get("reason", "") or "").strip()
+        if not team:
+            continue
+        if reason in {
+            "team_context_event_reactive_under_merge_guard",
+            "team_context_reactive_families_without_calendar_anchor",
+        }:
+            raw_families = warning.get("source_families") or []
+            families = ", ".join(str(item) for item in raw_families) if isinstance(raw_families, list) else ""
+            suffix = f" ({families})" if families else ""
+            messages.append(
+                "Ajuste contextual pode estar subagrupado: "
+                f"{team} teve famílias reativas com âncora de calendário sem grupo multifamília{suffix}; "
+                "validar completed_group_matches e correlation_group antes de publicar."
+            )
+            continue
         try:
             rating_delta = float(warning.get("rating_delta"))
         except (TypeError, ValueError):
@@ -3044,8 +3059,6 @@ def _team_context_warning_messages(monte_carlo_result: dict[str, Any]) -> list[s
             threshold = float(warning.get("threshold"))
         except (TypeError, ValueError):
             threshold = 0.0
-        if not team:
-            continue
         if reason == "team_context_delta_above_warning_threshold":
             threshold_text = f"{threshold:.1f}" if threshold > 0 else "configurado"
             messages.append(
