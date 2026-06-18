@@ -214,11 +214,128 @@ def _signal_raw_rating_delta(signal: dict[str, Any], *, probability_pct_to_ratin
     return None
 
 
-def _signal_correlation_group(signal: dict[str, Any], *, source_family: str) -> str:
+EVENT_REACTIVE_SIGNAL_FAMILIES = {
+    "bets_prediction_markets",
+    "ratings",
+    "performance",
+    "injuries_cuts_news",
+    "specialized_press",
+    "recent_friendlies",
+}
+
+STRUCTURAL_CONTEXT_MARKERS = (
+    "attrition",
+    "squad",
+    "elenco",
+    "talent",
+    "talento",
+    "attack_structure",
+    "estrutura",
+    "estrutural",
+    "cycle",
+    "ciclo",
+    "ausencias acumuladas",
+    "ausencias",
+    "ausencias estruturais",
+    "ausencias acumuladas",
+)
+
+MATCH_EVENT_OPPONENT_ALIASES = {
+    "marrocos": ("marrocos", "morocco", "morocco"),
+    "haiti": ("haiti",),
+    "escocia": ("escocia", "scotland", "escócia"),
+    "holanda": ("holanda", "netherlands", "paises baixos", "países baixos"),
+    "japao": ("japao", "japan", "japão"),
+    "suecia": ("suecia", "sweden", "suécia"),
+    "tunisia": ("tunisia", "tunísia", "tunis"),
+    "argentina": ("argentina",),
+    "portugal": ("portugal",),
+    "franca": ("franca", "frança", "france"),
+    "espanha": ("espanha", "spain"),
+    "alemanha": ("alemanha", "germany"),
+    "inglaterra": ("inglaterra", "england"),
+}
+
+
+def _signal_text(signal: dict[str, Any], *, explicit_group: Any = "") -> str:
+    parts: list[str] = []
+    for key in (
+        "rationale",
+        "summary",
+        "answer",
+        "headline",
+        "title",
+        "event",
+        "match",
+        "opponent",
+        "fixture",
+        "source",
+        "source_url",
+        "source_query",
+        "source_urls",
+        "source_queries",
+    ):
+        value = signal.get(key)
+        if isinstance(value, list):
+            parts.extend(str(item) for item in value)
+        elif value is not None:
+            parts.append(str(value))
+    if explicit_group:
+        parts.append(str(explicit_group))
+    return _normalize(" ".join(parts))
+
+
+def _match_date_token(text: str) -> str:
+    match = re.search(r"\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b", text)
+    if match:
+        year, month, day = match.groups()
+        return f"{year}-{int(month):02d}-{int(day):02d}"
+    match = re.search(r"\b(\d{1,2})[-/](\d{1,2})(?:[-/](20\d{2}|\d{2}))?\b", text)
+    if match:
+        day, month, year = match.groups()
+        if year and len(year) == 2:
+            year = f"20{year}"
+        return f"{year or 'undated'}-{int(month):02d}-{int(day):02d}"
+    return "undated"
+
+
+def _derived_match_event_group(signal: dict[str, Any], *, team: str, source_family: str, explicit_group: Any = "") -> str | None:
+    if source_family not in EVENT_REACTIVE_SIGNAL_FAMILIES:
+        return None
+    explicit_group_text = _normalize(explicit_group)
+    if explicit_group_text and any(marker in explicit_group_text for marker in STRUCTURAL_CONTEXT_MARKERS):
+        return None
+    text = _signal_text(signal, explicit_group=explicit_group)
+    if any(marker in text for marker in STRUCTURAL_CONTEXT_MARKERS):
+        return None
+    team_key = _normalize(team)
+    for opponent_key, aliases in MATCH_EVENT_OPPONENT_ALIASES.items():
+        if opponent_key == team_key:
+            continue
+        if any(alias in text for alias in aliases):
+            explicit_date = (
+                signal.get("event_date")
+                or signal.get("match_date")
+                or signal.get("date")
+                or signal.get("played_at")
+            )
+            date_token = _match_date_token(_normalize(explicit_date)) if explicit_date else ""
+            suffix = f":{date_token}" if date_token else ""
+            return f"match_event:{team_key}:{opponent_key}{suffix}"
+    return None
+
+
+def _signal_correlation_group(signal: dict[str, Any], *, source_family: str, team: str) -> str:
     for key in ("correlation_group", "shock_id", "event_id", "context_group"):
         raw = signal.get(key)
+        derived = _derived_match_event_group(signal, team=team, source_family=source_family, explicit_group=raw)
+        if derived:
+            return derived
         if raw:
             return _normalize(raw)
+    derived = _derived_match_event_group(signal, team=team, source_family=source_family)
+    if derived:
+        return derived
     return source_family
 
 
@@ -311,7 +428,7 @@ def _apply_team_context_adjustments(config: dict[str, Any], ratings: dict[str, f
             },
         )
         bucket["source_families"].add(source_family)
-        correlation_group = _signal_correlation_group(signal, source_family=source_family)
+        correlation_group = _signal_correlation_group(signal, source_family=source_family, team=team)
         bucket["family_deltas"].setdefault((source_family, correlation_group), []).append(weighted_delta)
         rendered_signal = {
             "category": source_family,

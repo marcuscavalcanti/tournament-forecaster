@@ -2136,6 +2136,148 @@ def test_meeting_at_ceiling_publishes_last_valid_consensus_when_final_round_is_s
     assert not any(e.get("step") == "model_meeting" and e.get("status") == "fail" for e in events)
 
 
+def test_meeting_after_coverage_missing_forces_next_question_to_missing_phase(monkeypatch, tmp_path) -> None:
+    """Regressão do run a30341: a sala chegou a consenso numérico, mas o gate
+    coverage_missing apontou Semifinal ausente e a próxima rodada continuou
+    perguntando sobre outro assunto. O moderador precisa transformar essa lacuna
+    em pauta obrigatória da rodada seguinte."""
+    config = {
+        **_base_config(),
+        "group_matches": [{"opponent": "Marrocos"}],
+        "knockout_matches": [
+            {"phase": "16 avos", "opponent": "Holanda"},
+            {"phase": "Semifinal", "opponent": "Argentina"},
+        ],
+        "meeting_min_rounds": 1,
+        "meeting_max_rounds": 2,
+        "meeting_consensus_threshold_pct": 2.5,
+        "meeting_require_full_path_coverage": True,
+        "meeting_slot_breaker_threshold": 99,
+        "meeting_stability_rounds": 99,
+    }
+    call_count = {"question": 0}
+
+    async def fake_call_agent(spec, prompt, **kwargs):
+        call_count["question"] += 1
+        return AgentOpinion(
+            agent=spec.slot,
+            title_pct=9.0,
+            summary="Pergunta genérica sem cobrir a Semifinal.",
+            question="Com odds e Elo, concordam com Marrocos, 16 avos e título em 9%?",
+            answer="Marrocos e 16 avos sustentam título em 9%.",
+            source_urls=["https://example.com/odds"],
+            agrees_with_protagonist=True,
+        )
+
+    async def fake_call_all_agents(prompt, *, specs, **kwargs):
+        if "Rodada de cobertura obrigatória" in prompt:
+            return [
+                AgentOpinion(
+                    agent=spec.slot,
+                    title_pct=9.0,
+                    summary="Cubro a Semifinal faltante.",
+                    answer=(
+                        "Cobrindo a lacuna: na Semifinal, Argentina e Portugal são top-2; "
+                        "mantém título em 9% com fonte auditável."
+                    ),
+                    source_urls=["https://example.com/semi"],
+                    agrees_with_protagonist=True,
+                )
+                for spec in specs
+            ]
+        return [
+            AgentOpinion(
+                agent=spec.slot,
+                title_pct=9.0,
+                summary="Concordo com Marrocos e 16 avos.",
+                answer="Marrocos e 16 avos estão cobertos; título em 9% com fonte auditável.",
+                source_urls=["https://example.com/odds"],
+                agrees_with_protagonist=True,
+            )
+            for spec in specs
+        ]
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_agent", fake_call_agent)
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+
+    watchdog_path = tmp_path / "watchdog.jsonl"
+    consensus, _opinions, transcript, _all = asyncio.run(
+        _run_model_meeting(
+            config=config,
+            planning_opinions=_planning_opinions(),
+            generated_at=datetime(2026, 6, 18, tzinfo=timezone.utc),
+            agent_specs=_specs(),
+            baseline_title_pct=11.0,
+            allow_agent_fallback=True,
+            watchdog=RunWatchdog(path=watchdog_path, verbose=False),
+        )
+    )
+
+    assert len(transcript) == 2
+    assert "Semifinal" in transcript[1]["question"]
+    assert "cobertura" in transcript[1]["question"].lower()
+    assert transcript[1]["coverage"]["complete"] is True
+    assert getattr(consensus, "exit_status", "consensus") in ("consensus", "max_rounds_no_consensus")
+    events = [json.loads(line) for line in watchdog_path.read_text(encoding="utf-8").splitlines()]
+    assert any(event["step"] == "model_room" and event["status"] == "coverage_missing" for event in events)
+    assert any(event["step"] == "model_room" and event["status"] == "coverage_followup" for event in events)
+
+
+def test_meeting_sterile_abort_publishes_last_valid_consensus_conditionally(monkeypatch, tmp_path) -> None:
+    """Se a sala já produziu consenso válido e auditável, duas rodadas estéreis
+    posteriores não devem destruir o run inteiro. O resultado precisa sair
+    marcado como condicional/degradado, e sala sem consenso prévio continua
+    falhando em outro teste."""
+    config = {
+        **_base_config(),
+        "meeting_min_rounds": 99,
+        "meeting_max_rounds": 4,
+        "meeting_sterile_round_limit": 2,
+        "meeting_slot_breaker_threshold": 99,
+        "meeting_stability_rounds": 99,
+    }
+    round_counter = {"n": 0}
+
+    async def fake_call_agent(spec, prompt, **kwargs):
+        round_counter["n"] += 1
+        if round_counter["n"] >= 3:
+            return _invalid_response(spec.slot)
+        return _healthy_question_opinion(spec.slot)
+
+    async def fake_call_all_agents(prompt, *, specs, **kwargs):
+        if round_counter["n"] >= 3:
+            return [_invalid_response(spec.slot) for spec in specs]
+        return [_healthy_response(spec.slot, 9.0) for spec in specs]
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_agent", fake_call_agent)
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+
+    watchdog_path = tmp_path / "watchdog.jsonl"
+    consensus, opinions, transcript, _all = asyncio.run(
+        _run_model_meeting(
+            config=config,
+            planning_opinions=_planning_opinions(),
+            generated_at=datetime(2026, 6, 18, tzinfo=timezone.utc),
+            agent_specs=_specs(),
+            baseline_title_pct=11.0,
+            allow_agent_fallback=True,
+            watchdog=RunWatchdog(path=watchdog_path, verbose=False),
+        )
+    )
+
+    assert len(transcript) == 3
+    assert abs(float(consensus.title_pct) - 9.3) < 0.1
+    assert getattr(consensus, "exit_status") == "conditional_last_valid_after_sterile"
+    assert "sala estéril" in getattr(consensus, "exit_warning")
+    assert opinions, "deveria devolver as opiniões da última rodada válida"
+    events = [json.loads(line) for line in watchdog_path.read_text(encoding="utf-8").splitlines()]
+    assert any(
+        event["step"] == "model_meeting" and event["status"] == "conditional_publish"
+        for event in events
+    )
+    assert not any(event["step"] == "model_meeting" and event["status"] == "fail" for event in events)
+
+
 def test_meeting_at_ceiling_with_valid_round_but_no_exit_marks_no_consensus(monkeypatch, tmp_path) -> None:
     """Teto com rodada final válida, mas sem consenso explícito, não pode parecer
     consenso normal. Esse caso ficou mais provável na sala paralela ao reduzir

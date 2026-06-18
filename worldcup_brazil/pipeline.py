@@ -5638,11 +5638,13 @@ async def _run_model_meeting(
     final_opinions: list[Any] = []
     last_valid_consensus = None
     last_valid_opinions: list[Any] = []
+    last_valid_coverage_complete = False
     max_rounds = int(config.get("meeting_max_rounds", 9))
     min_rounds = int(config.get("meeting_min_rounds", 6))
     configured_min_participants = int(config.get("meeting_min_participants", config.get("meeting_min_real_agents", 3)))
     threshold = float(config.get("meeting_consensus_threshold_pct", 2.5))
     require_peer_acceptance = bool(config.get("meeting_require_peer_acceptance", True))
+    require_full_coverage = bool(config.get("meeting_require_full_path_coverage", True))
     timeout = int(config.get("agent_timeout_seconds", 90))
     protagonist_timeout = int(config.get("protagonist_timeout_seconds", timeout))
     breaker_threshold = max(1, int(config.get("meeting_slot_breaker_threshold", 3)))
@@ -5693,6 +5695,7 @@ async def _run_model_meeting(
     fallback_question_streak: dict[str, int] = {}
     reentry_skip_announced: dict[str, str] = {}
     last_invalid_issues: dict[str, list[dict[str, Any]]] = {}
+    forced_coverage_question: str | None = None
 
     if watchdog:
         watchdog.start("model_meeting", detail=f"starting dynamic meeting with protagonist {protagonist}")
@@ -5999,6 +6002,27 @@ async def _run_model_meeting(
                     detail=f"question_phase; round={round_index}; agent={protagonist}; elapsed_ms={elapsed_ms}",
                     extra={"phase": "question", "round": round_index, "agent": protagonist, "elapsed_ms": elapsed_ms},
                 )
+        if forced_coverage_question:
+            original_question = question
+            question = forced_coverage_question
+            forced_coverage_question = None
+            invalid_question_reason = None
+            if question_opinion is not None:
+                question_opinion = replace(
+                    question_opinion,
+                    question=question,
+                    answer=(
+                        "Moderador redirecionou a rodada para a lacuna obrigatória de cobertura. "
+                        f"Pergunta original do protagonista: {original_question}"
+                    ),
+                )
+            if watchdog:
+                watchdog.event(
+                    "model_room",
+                    "coverage_followup",
+                    detail="moderador substituiu a pauta por cobertura obrigatória faltante",
+                    extra={"round": round_index, "question": question, "original_question": original_question},
+                )
         question_was_fallback = (
             question_opinion is None
             or bool(getattr(question_opinion, "used_fallback", False))
@@ -6150,6 +6174,34 @@ async def _run_model_meeting(
                 for pending_slot, pending_task in pending_reentry_tasks.items():
                     if not pending_task.done():
                         pending_task.cancel()
+                if last_valid_consensus is not None and (last_valid_coverage_complete or not require_full_coverage):
+                    final_consensus = last_valid_consensus
+                    final_opinions = last_valid_opinions
+                    exited_with_consensus = True
+                    object.__setattr__(final_consensus, "exit_status", "conditional_last_valid_after_sterile")
+                    object.__setattr__(
+                        final_consensus,
+                        "exit_warning",
+                        (
+                            f"sala estéril por {consecutive_sterile} rodadas consecutivas após consenso válido; "
+                            "publicado último consenso válido em modo condicional"
+                        ),
+                    )
+                    if watchdog:
+                        watchdog.event(
+                            "model_meeting",
+                            "conditional_publish",
+                            detail=(
+                                f"sala estéril na rodada {round_index}; usando último consenso válido "
+                                f"(título {last_valid_consensus.title_pct:.1f}%) em modo condicional"
+                            ),
+                            extra={
+                                "round": round_index,
+                                "consecutive_sterile": consecutive_sterile,
+                                "last_valid_title_pct": last_valid_consensus.title_pct,
+                            },
+                        )
+                    break
                 if watchdog:
                     watchdog.fail(
                         "model_meeting",
@@ -6195,6 +6247,8 @@ async def _run_model_meeting(
                     current_protagonist=protagonist,
                 )
         turn["coverage"] = _meeting_coverage_report([*meeting_transcript, turn], config)
+        if last_round_consensus_valid:
+            last_valid_coverage_complete = bool(turn.get("coverage", {}).get("complete", False))
         meeting_transcript.append(turn)
         if progress_sink is not None:
             progress_sink["pending_round"] = None
@@ -6418,7 +6472,6 @@ async def _run_model_meeting(
             last_turn=turn,
             require_peer_acceptance=require_peer_acceptance,
         )
-        require_full_coverage = bool(config.get("meeting_require_full_path_coverage", True))
         coverage_complete = bool(turn.get("coverage", {}).get("complete", False))
         coverage_ok = coverage_complete or not require_full_coverage
         majority_accepts = _enough_peer_acceptances(turn, required_acceptances=minimum_peer_acceptances)
@@ -6552,6 +6605,7 @@ async def _run_model_meeting(
                 detail="consensus numerically ready but full path coverage is incomplete",
                 extra=turn.get("coverage", {}),
             )
+            forced_coverage_question = _coverage_followup_question(turn.get("coverage", {}))
         protagonist = turn["next_protagonist"]
         previous_turn = turn
         if pending_reentry_tasks:
@@ -7632,6 +7686,26 @@ def _meeting_coverage_report(meeting_transcript: list[dict[str, Any]], config: d
         "missing_knockout_phases": missing_phases,
         "title_covered": title_covered,
     }
+
+
+def _coverage_followup_question(coverage: dict[str, Any]) -> str:
+    missing_group = [str(item).strip() for item in coverage.get("missing_group_opponents", []) if str(item).strip()]
+    missing_phases = [str(item).strip() for item in coverage.get("missing_knockout_phases", []) if str(item).strip()]
+    missing_parts: list[str] = []
+    if missing_group:
+        missing_parts.append("fase de grupos: " + ", ".join(missing_group))
+    if missing_phases:
+        missing_parts.append("mata-mata: " + ", ".join(missing_phases))
+    if not bool(coverage.get("title_covered", False)):
+        missing_parts.append("chance de título")
+    missing_text = "; ".join(missing_parts) or "cobertura obrigatória pendente"
+    return _ensure_consensus_request(
+        "Rodada de cobertura obrigatória: o consenso numérico está pronto, mas o caminho ainda não está completo. "
+        f"Cubram somente o que falta ({missing_text}) antes de encerrar. "
+        "Para cada fase faltante, tragam top-2 adversários possíveis pelo bracket, probabilidade do cenário em "
+        "scenario_probabilities, probabilidade do Brasil no confronto em match_probabilities quando houver base "
+        "auditável, fontes/queries verificáveis, e digam se concordam integralmente com manter o consenso salvo."
+    )
 
 
 async def _repair_invalid_meeting_responses(

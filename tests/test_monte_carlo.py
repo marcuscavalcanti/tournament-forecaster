@@ -396,31 +396,117 @@ def test_monte_carlo_shrinks_cross_family_signals_for_same_correlation_group() -
     )
     assert -25.0 < brazil_adjustment["rating_delta"] < -12.0
     assert brazil_adjustment["rating_delta"] != -43.1
-    assert brazil_adjustment["correlation_adjustments"] == [
-        {
-            "correlation_group": "brasil_pos_marrocos",
-            "rho": 0.7,
-            "rating_delta": -24.2,
-            "dominant_family": "injuries_cuts_news",
-            "dominant_delta": -13.6,
-            "residual_delta": -35.3,
-            "member_families": [
-                "bets_prediction_markets",
-                "injuries_cuts_news",
-                "performance",
-                "ratings",
-            ],
-        },
-        {
-            "correlation_group": "brasil_structural_talent",
-            "rho": 0.7,
-            "rating_delta": 5.8,
-            "dominant_family": "elenco_talento",
-            "dominant_delta": 5.8,
-            "residual_delta": 0.0,
-            "member_families": ["elenco_talento"],
-        },
+    adjustments_by_group = {
+        item["correlation_group"]: item
+        for item in brazil_adjustment["correlation_adjustments"]
+    }
+    assert adjustments_by_group["match_event:brasil:marrocos"] == {
+        "correlation_group": "match_event:brasil:marrocos",
+        "rho": 0.7,
+        "rating_delta": -24.2,
+        "dominant_family": "injuries_cuts_news",
+        "dominant_delta": -13.6,
+        "residual_delta": -35.3,
+        "member_families": [
+            "bets_prediction_markets",
+            "injuries_cuts_news",
+            "performance",
+            "ratings",
+        ],
+    }
+    assert adjustments_by_group["brasil_structural_talent"] == {
+        "correlation_group": "brasil_structural_talent",
+        "rho": 0.7,
+        "rating_delta": 5.8,
+        "dominant_family": "elenco_talento",
+        "dominant_delta": 5.8,
+        "residual_delta": 0.0,
+        "member_families": ["elenco_talento"],
+    }
+
+
+def test_monte_carlo_derives_match_shock_when_models_use_different_group_labels() -> None:
+    """Regressão do run a30341: o modelo pediu o mesmo choque Brasil 1-1
+    Marrocos em famílias diferentes, mas com labels diferentes de
+    correlation_group. O motor antigo confiava cegamente nesses labels e somava
+    o choque 4x; o motor precisa derivar um grupo determinístico de evento
+    quando a evidência aponta para o mesmo jogo."""
+    config = _mc_config(iterations=2000)
+    config["monte_carlo"]["team_context_correlation_default_rho"] = 0.7
+    config["monte_carlo"]["team_context"] = {
+        "Brasil": [
+            {
+                "category": "bets_prediction_markets",
+                "rating_delta": -16.0,
+                "confidence": 1.0,
+                "correlation_group": "br_marrocos_draw_shock",
+                "rationale": "Odds do Brasil driftaram depois do empate Brasil 1-1 Marrocos em 13/06.",
+                "source_url": "https://example.com/brazil-morocco-odds",
+            },
+            {
+                "category": "ratings",
+                "rating_delta": -13.0,
+                "confidence": 1.0,
+                "correlation_group": "br_marrocos_rating_update",
+                "rationale": "Rating/Elo atualizados após Brasil x Marrocos 1-1.",
+                "source_url": "https://example.com/brazil-morocco-ratings",
+            },
+            {
+                "category": "performance",
+                "rating_delta": -13.0,
+                "confidence": 1.0,
+                "correlation_group": "br_mar_2026_match_reaction",
+                "rationale": "Performance ruim no empate com Marrocos em 2026.",
+                "source_url": "https://example.com/brazil-morocco-performance",
+            },
+            {
+                "category": "injuries_cuts_news",
+                "rating_delta": -13.6,
+                "confidence": 1.0,
+                "correlation_group": "shock_group_c_debut",
+                "rationale": "Notícias de escalação e lesões para Brasil x Marrocos na estreia.",
+                "source_url": "https://example.com/brazil-morocco-injuries",
+            },
+            {
+                "category": "injuries_cuts_news",
+                "rating_delta": -16.5,
+                "confidence": 1.0,
+                "correlation_group": "br_squad_attrition",
+                "rationale": "Atrito estrutural do elenco por ausências acumuladas de Neymar, Rodrygo e Militão.",
+                "source_url": "https://example.com/brazil-squad-attrition",
+            },
+            {
+                "category": "performance",
+                "rating_delta": -6.6,
+                "confidence": 1.0,
+                "correlation_group": "bra_attack_structure_2026",
+                "rationale": "Problema estrutural de criação ofensiva do Brasil no ciclo 2026.",
+                "source_url": "https://example.com/brazil-attack-structure",
+            },
+        ]
+    }
+
+    adjusted = run_brazil_monte_carlo(config)
+
+    brazil_adjustment = next(
+        item for item in adjusted["team_context"]["team_adjustments"] if item["team"] == "Brasil"
+    )
+    assert brazil_adjustment["rating_delta"] > -55.0
+    match_groups = [
+        item for item in brazil_adjustment["correlation_adjustments"]
+        if set(item["member_families"]) == {
+            "bets_prediction_markets",
+            "injuries_cuts_news",
+            "performance",
+            "ratings",
+        }
     ]
+    assert match_groups, brazil_adjustment["correlation_adjustments"]
+    assert match_groups[0]["rating_delta"] > -35.0
+    assert {item["correlation_group"] for item in brazil_adjustment["correlation_adjustments"]} >= {
+        "br_squad_attrition",
+        "bra_attack_structure_2026",
+    }
 
 
 def test_monte_carlo_keeps_cross_family_sum_when_correlation_rho_is_zero() -> None:
