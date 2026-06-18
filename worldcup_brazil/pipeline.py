@@ -995,7 +995,8 @@ def _agent_source_planning_watchdog_extra(config: dict[str, Any]) -> dict[str, A
             ],
             "team_context_signal_rule": (
                 "cada sinal precisa de team, category, rating_delta ou probability_delta_pct, "
-                "confidence, rationale e source_url/source_query; sem fonte ou delta numérico, não altera o Monte Carlo"
+                "confidence, rationale e source_url/source_query; use correlation_group/shock_id igual quando "
+                "famílias diferentes reagem ao mesmo evento; sem fonte ou delta numérico, não altera o Monte Carlo"
             ),
             "source_requirement": "source_urls ou source_queries auditáveis escolhidas pelo próprio modelo neste run",
         },
@@ -1218,6 +1219,7 @@ def _source_planning_format_repair_prompt(*, config: dict[str, Any], generated_a
         f"{_effort_latency_instruction()}\n\n"
         "Campos obrigatórios no JSON: self_identification, title_pct, summary, opening_argument, critique, "
         "adjustment, source_urls, source_queries, scenario_probabilities, team_context_signals. "
+        "Em team_context_signals, preserve correlation_group/shock_id quando várias famílias reagem ao mesmo evento. "
         "Use as fontes que você acabou de buscar neste run; se precisar substituir uma fonte quebrada, use "
         "source_queries específicas e auditáveis. Não invente URL, ranking, score, lesão, odd, notícia ou método. "
         "Source_queries só contam quando representam busca realmente executada por você agora.\n\n"
@@ -1630,6 +1632,7 @@ def _agent_reentry_probe_prompt(
         "Não use Opta, não use cache, não invente URL, ranking, odd, lesão, escalação, score ou método. "
         "Campos obrigatórios: self_identification, title_pct, summary, opening_argument, critique, adjustment, "
         "source_urls, source_queries, scenario_probabilities, team_context_signals. "
+        "Em team_context_signals, preserve correlation_group/shock_id quando várias famílias reagem ao mesmo evento. "
         "Inclua pelo menos 2 source_urls HTTP verificáveis ou 2 source_queries específicas não-Opta. "
         "Se não tiver fonte verificável, declare isso em summary e não peça reentrada.\n"
         f"Motivo da saída temporária: {removed_reason or 'sem resposta externa verificável'}\n"
@@ -3203,6 +3206,7 @@ def _agent_prompt(
         "source_queries (lista de buscas), team_context_signals (lista). Antes de estimar, escolha as fontes que você usaria dentro do "
         "direcionamento macro; priorize sportsbooks, prediction markets, ratings, notícias de elenco/lesão "
         "performance dos jogadores via Sofascore, avaliação de arbitragem/VAR/cartões/disciplina e simulações públicas independentes. "
+        "Em team_context_signals, inclua correlation_group/shock_id; use o mesmo grupo quando odds, ratings, performance, lesões ou imprensa reagirem ao mesmo evento, e outro grupo para fatores estruturais independentes. "
         f"{_agent_owned_fresh_search_contract()} "
         "Não use torcida. Use dados quantitativos e qualitativos conforme a força das fontes encontradas, "
         "sem declarar percentual de divisão metodológica entre eles. "
@@ -3235,7 +3239,8 @@ def _source_planning_prompt(*, config: dict[str, Any], generated_at: datetime) -
         "Números importam; combine análise quantitativa e análise qualitativa, fatos, especialistas e futebol. "
         "Use dados quantitativos e qualitativos para formular hipótese auditável, com número, fonte/query e efeito em probabilidade; não declare percentual, razão ou peso metodológico para dividir quanti e quali. "
         "Pesquisa simétrica: Brasil e adversários/cenários, mesmas famílias de fontes: mercados/odds, Elo/FIFA/ratings, Sofascore/performance, lesões/cortes/cartões, arbitragem/VAR, descanso, chaveamento, elenco. "
-        "Para team_context_signals, traga sinais por seleção, inclusive adversários prováveis, com team, category, rating_delta ou probability_delta_pct, confidence, rationale e source_url/source_query. "
+        "Para team_context_signals, traga sinais por seleção, inclusive adversários prováveis, com team, category, rating_delta ou probability_delta_pct, confidence, rationale, source_url/source_query e correlation_group/shock_id. "
+        "Use o mesmo correlation_group quando odds, ratings, performance, lesões ou imprensa estiverem reagindo ao mesmo choque/evento; fatores estruturais de elenco/talento devem usar outro grupo. "
         "Famílias válidas incluem bets/prediction markets, ratings, Sofascore/performance, lesões/cortes/notícias recentes, amistosos recentes, arbitragem/VAR/cartões e opinião de imprensa especializada. "
         "Sem fonte auditável ou sem delta numérico, o sinal será ignorado pelo Monte Carlo. "
         "Monte Carlo: quando o escopo trouxer monte_carlo.enabled=true, trate a simulação como insumo quantitativo auditável "
@@ -7448,7 +7453,8 @@ def _protagonist_question_prompt(
         "title_pct deve ser sempre um número da chance de título do Brasil, nunca um objeto; "
         "probabilidades jogo a jogo devem ir somente em match_probabilities quando forem necessárias; "
         "probabilidade de um confronto específico acontecer deve ir em scenario_probabilities. "
-        "Se uma premissa por seleção deve afetar a simulação de adversários, inclua team_context_signals com team, category, rating_delta ou probability_delta_pct, confidence, rationale e source_url/source_query. "
+        "Se uma premissa por seleção deve afetar a simulação de adversários, inclua team_context_signals com team, category, rating_delta ou probability_delta_pct, confidence, rationale, source_url/source_query e correlation_group/shock_id. "
+        "Use o mesmo correlation_group para sinais de famílias diferentes que reagem ao mesmo choque; use outro grupo para fatores estruturais independentes. "
         "Na sua question, exponha sua opinião/racional em uma frase e pergunte explicitamente se os outros modelos "
         "concordam ou discordam dela, se concordam integralmente e se a sala pode sair com consenso para avançar "
         "para as próximas etapas. "
@@ -7505,7 +7511,8 @@ def _meeting_response_prompt(
         "Em scenario_probabilities, use chaves como '16 avos: Holanda' para a chance daquele confronto acontecer; "
         "só use candidatos permitidos por allowed_opponents/bracket_opponent_slots. "
         f"{_opponent_room_top_two_response_contract(config)} "
-        "Em team_context_signals, registre sinais por seleção com team, category, rating_delta ou probability_delta_pct, confidence, rationale e source_url/source_query; "
+        "Em team_context_signals, registre sinais por seleção com team, category, rating_delta ou probability_delta_pct, confidence, rationale, source_url/source_query e correlation_group/shock_id; "
+        "use o mesmo correlation_group para odds, ratings, performance, lesões ou imprensa que reagem ao mesmo evento, e outro grupo para fatores estruturais independentes; "
         "use as mesmas famílias de dados do Brasil para adversários: bets/prediction markets, ratings, Sofascore/performance, lesões/cortes/notícias recentes, amistosos recentes, arbitragem/VAR/cartões e imprensa especializada. "
         "A decisão não é do orquestrador: ela deve sair do debate. Este é o Modelo Principal: use sportsbooks, "
         "prediction markets, ratings independentes, Monte Carlo, Sofascore/performance de jogadores, lesões, cortes, cartões, "

@@ -214,6 +214,57 @@ def _signal_raw_rating_delta(signal: dict[str, Any], *, probability_pct_to_ratin
     return None
 
 
+def _signal_correlation_group(signal: dict[str, Any], *, source_family: str) -> str:
+    for key in ("correlation_group", "shock_id", "event_id", "context_group"):
+        raw = signal.get(key)
+        if raw:
+            return _normalize(raw)
+    return source_family
+
+
+def _team_context_group_rho(mc_config: dict[str, Any], correlation_group: str) -> float:
+    default_rho = mc_config.get("team_context_correlation_default_rho", 0.0)
+    raw_by_group = mc_config.get("team_context_correlation_rho_by_group") or {}
+    raw_value = raw_by_group.get(correlation_group, default_rho) if isinstance(raw_by_group, dict) else default_rho
+    try:
+        rho = float(raw_value)
+    except (TypeError, ValueError):
+        rho = 0.0
+    return max(0.0, min(1.0, rho))
+
+
+def _correlated_family_adjustments(
+    family_adjustments: list[dict[str, Any]],
+    *,
+    mc_config: dict[str, Any],
+) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for adjustment in family_adjustments:
+        correlation_group = str(adjustment.get("correlation_group") or adjustment["source_family"])
+        grouped.setdefault(correlation_group, []).append(adjustment)
+
+    rendered: list[dict[str, Any]] = []
+    for correlation_group, members in sorted(grouped.items()):
+        rho = _team_context_group_rho(mc_config, correlation_group)
+        dominant = max(members, key=lambda item: abs(float(item["rating_delta"])))
+        residual_delta = sum(
+            float(item["rating_delta"]) for item in members if item is not dominant
+        )
+        rating_delta = float(dominant["rating_delta"]) + (1.0 - rho) * residual_delta
+        rendered.append(
+            {
+                "correlation_group": correlation_group,
+                "rho": round(rho, 3),
+                "rating_delta": round(rating_delta, 1),
+                "dominant_family": str(dominant["source_family"]),
+                "dominant_delta": round(float(dominant["rating_delta"]), 1),
+                "residual_delta": round(residual_delta, 1),
+                "member_families": sorted(str(item["source_family"]) for item in members),
+            }
+        )
+    return rendered
+
+
 def _apply_team_context_adjustments(config: dict[str, Any], ratings: dict[str, float]) -> dict[str, Any]:
     mc_config = _mc_config(config)
     probability_pct_to_rating_points = float(
@@ -260,9 +311,11 @@ def _apply_team_context_adjustments(config: dict[str, Any], ratings: dict[str, f
             },
         )
         bucket["source_families"].add(source_family)
-        bucket["family_deltas"].setdefault(source_family, []).append(weighted_delta)
+        correlation_group = _signal_correlation_group(signal, source_family=source_family)
+        bucket["family_deltas"].setdefault((source_family, correlation_group), []).append(weighted_delta)
         rendered_signal = {
             "category": source_family,
+            "correlation_group": correlation_group,
             "rating_delta": round(weighted_delta, 1),
             "confidence": round(confidence, 2),
             "source": signal.get("source_url")
@@ -281,16 +334,23 @@ def _apply_team_context_adjustments(config: dict[str, Any], ratings: dict[str, f
     rendered_adjustments: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
     for team, bucket in team_adjustments.items():
-        family_adjustments = [
-            {
+        family_adjustments: list[dict[str, Any]] = []
+        for (family, correlation_group), values in sorted(bucket["family_deltas"].items()):
+            if not values:
+                continue
+            adjustment = {
                 "source_family": family,
                 "rating_delta": round(float(median(values)), 1),
                 "signal_count": len(values),
             }
-            for family, values in sorted(bucket["family_deltas"].items())
-            if values
-        ]
-        bucket["rating_delta"] = sum(float(item["rating_delta"]) for item in family_adjustments)
+            if correlation_group != family:
+                adjustment["correlation_group"] = correlation_group
+            family_adjustments.append(adjustment)
+        correlation_adjustments = _correlated_family_adjustments(
+            family_adjustments,
+            mc_config=mc_config,
+        )
+        bucket["rating_delta"] = sum(float(item["rating_delta"]) for item in correlation_adjustments)
         bounded_team_delta = max(-max_team_delta, min(max_team_delta, float(bucket["rating_delta"])))
         if abs(bounded_team_delta) > warning_delta:
             warnings.append(
@@ -308,6 +368,7 @@ def _apply_team_context_adjustments(config: dict[str, Any], ratings: dict[str, f
                 "rating_delta": round(bounded_team_delta, 1),
                 "source_families": sorted(bucket["source_families"]),
                 "family_adjustments": family_adjustments,
+                "correlation_adjustments": correlation_adjustments,
                 "signals": bucket["signals"],
             }
         )

@@ -380,6 +380,8 @@ def test_main_model_prompts_force_fresh_symmetric_opponent_research() -> None:
         assert "source_urls" in lowered
         assert "source_queries" in lowered
         assert "team_context_signals" in prompt
+        assert "correlation_group" in prompt
+        assert "mesmo evento" in lowered or "mesmo choque" in lowered
         assert "bets/prediction markets" in lowered
         assert "lesões/cortes" in lowered
         assert "amistosos" in lowered

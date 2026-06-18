@@ -346,6 +346,134 @@ def test_monte_carlo_collapses_correlated_team_context_signals_by_normalized_fam
     ]
 
 
+def test_monte_carlo_shrinks_cross_family_signals_for_same_correlation_group() -> None:
+    config = _mc_config(iterations=2000)
+    config["monte_carlo"]["team_context_correlation_default_rho"] = 0.7
+    config["monte_carlo"]["team_context"] = {
+        "Brasil": [
+            {
+                "category": "bets_prediction_markets",
+                "rating_delta": -13.1,
+                "confidence": 1.0,
+                "correlation_group": "brasil_pos_marrocos",
+                "source_url": "https://example.com/brazil-odds",
+            },
+            {
+                "category": "injuries_cuts_news",
+                "rating_delta": -13.6,
+                "confidence": 1.0,
+                "correlation_group": "brasil_pos_marrocos",
+                "source_url": "https://example.com/brazil-injuries",
+            },
+            {
+                "category": "ratings",
+                "rating_delta": -13.0,
+                "confidence": 1.0,
+                "correlation_group": "brasil_pos_marrocos",
+                "source_url": "https://example.com/brazil-ratings",
+            },
+            {
+                "category": "performance",
+                "rating_delta": -9.2,
+                "confidence": 1.0,
+                "correlation_group": "brasil_pos_marrocos",
+                "source_url": "https://example.com/brazil-performance",
+            },
+            {
+                "category": "elenco_talento",
+                "rating_delta": 5.8,
+                "confidence": 1.0,
+                "correlation_group": "brasil_structural_talent",
+                "source_url": "https://example.com/brazil-talent",
+            },
+        ]
+    }
+
+    adjusted = run_brazil_monte_carlo(config)
+
+    brazil_adjustment = next(
+        item for item in adjusted["team_context"]["team_adjustments"] if item["team"] == "Brasil"
+    )
+    assert -25.0 < brazil_adjustment["rating_delta"] < -12.0
+    assert brazil_adjustment["rating_delta"] != -43.1
+    assert brazil_adjustment["correlation_adjustments"] == [
+        {
+            "correlation_group": "brasil_pos_marrocos",
+            "rho": 0.7,
+            "rating_delta": -24.2,
+            "dominant_family": "injuries_cuts_news",
+            "dominant_delta": -13.6,
+            "residual_delta": -35.3,
+            "member_families": [
+                "bets_prediction_markets",
+                "injuries_cuts_news",
+                "performance",
+                "ratings",
+            ],
+        },
+        {
+            "correlation_group": "brasil_structural_talent",
+            "rho": 0.7,
+            "rating_delta": 5.8,
+            "dominant_family": "elenco_talento",
+            "dominant_delta": 5.8,
+            "residual_delta": 0.0,
+            "member_families": ["elenco_talento"],
+        },
+    ]
+
+
+def test_monte_carlo_keeps_cross_family_sum_when_correlation_rho_is_zero() -> None:
+    config = _mc_config(iterations=2000)
+    config["monte_carlo"]["team_context_correlation_default_rho"] = 0.0
+    config["monte_carlo"]["team_context"] = {
+        "Brasil": [
+            {
+                "category": "bets_prediction_markets",
+                "rating_delta": -13.1,
+                "confidence": 1.0,
+                "correlation_group": "brasil_pos_marrocos",
+                "source_url": "https://example.com/brazil-odds",
+            },
+            {
+                "category": "injuries_cuts_news",
+                "rating_delta": -13.6,
+                "confidence": 1.0,
+                "correlation_group": "brasil_pos_marrocos",
+                "source_url": "https://example.com/brazil-injuries",
+            },
+            {
+                "category": "ratings",
+                "rating_delta": -13.0,
+                "confidence": 1.0,
+                "correlation_group": "brasil_pos_marrocos",
+                "source_url": "https://example.com/brazil-ratings",
+            },
+            {
+                "category": "performance",
+                "rating_delta": -9.2,
+                "confidence": 1.0,
+                "correlation_group": "brasil_pos_marrocos",
+                "source_url": "https://example.com/brazil-performance",
+            },
+            {
+                "category": "elenco_talento",
+                "rating_delta": 5.8,
+                "confidence": 1.0,
+                "correlation_group": "brasil_structural_talent",
+                "source_url": "https://example.com/brazil-talent",
+            },
+        ]
+    }
+
+    adjusted = run_brazil_monte_carlo(config)
+
+    brazil_adjustment = next(
+        item for item in adjusted["team_context"]["team_adjustments"] if item["team"] == "Brasil"
+    )
+    assert brazil_adjustment["rating_delta"] == -43.1
+
+
 def test_monte_carlo_ignores_context_signals_without_numeric_effect_or_source() -> None:
     config = _mc_config(iterations=2000)
     config["monte_carlo"]["team_context"] = {

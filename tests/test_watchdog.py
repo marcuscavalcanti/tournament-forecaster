@@ -117,6 +117,7 @@ def test_agent_source_planning_watchdog_payload_includes_contract_and_operationa
     assert "team_context_signals" in extra["contract"]["required_agent_outputs"]
     assert "bets/prediction markets" in extra["contract"]["team_context_signal_families"]
     assert "lesões/cortes/notícias recentes" in extra["contract"]["team_context_signal_families"]
+    assert "correlation_group/shock_id" in extra["contract"]["team_context_signal_rule"]
     assert extra["operational_knobs"]["minimum_source_ready_agents"] == 3
     assert extra["operational_knobs"]["source_planning_repair_attempts"] == 2
     assert extra["operational_knobs"]["repair_format_removals_with_quorum"] is True
