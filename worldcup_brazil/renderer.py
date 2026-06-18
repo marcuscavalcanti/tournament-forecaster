@@ -243,7 +243,7 @@ def _render_model_predictions_no_opta(bundle: ReportBundle) -> list[str]:
     for agent, prediction in bundle.model_predictions_no_opta.items():
         fallback = " | fallback" if prediction.get("used_fallback") else ""
         raw_title_pct = prediction.get("title_pct")
-        title_text = _fmt_pct(float(raw_title_pct)) if raw_title_pct is not None else "sem número próprio"
+        title_text = _fmt_response_title(raw_title_pct)
         source = str(prediction.get("title_pct_source") or "").strip()
         source_note = f" [{source}]" if source and source != "explicit" else ""
         lines.append(
