@@ -259,6 +259,48 @@ def test_render_linkedin_post_keeps_required_sections_and_custom_hashtag() -> No
     assert len(post.splitlines()) <= 2500
 
 
+def test_render_reports_handle_meeting_response_without_own_title_number() -> None:
+    bundle = ReportBundle(
+        generated_at_iso="2026-06-18T04:00:00+00:00",
+        group_matches=[],
+        knockout_matches=[],
+        stage_probabilities={"quartas": 30.0, "semifinal": 15.0, "final": 8.0, "titulo": 5.0},
+        final_rationale="Racional.",
+        sources=[],
+        agent_summaries={},
+        warnings=[],
+        custom_hashtag="#CopaComAchismo",
+        meeting_transcript=[
+            {
+                "round": 1,
+                "protagonist": "GPT 5.5",
+                "question": "Concordam?",
+                "responses": [
+                    {
+                        "agent": "Opus 4.8",
+                        "answer": "Concordo sem número próprio.",
+                        "title_pct": None,
+                        "title_pct_source": "missing",
+                        "support_score": 1.0,
+                        "accepted": True,
+                        "used_fallback": False,
+                        "removed_from_main": False,
+                    }
+                ],
+                "next_protagonist": "GPT 5.5",
+                "consensus_title_pct": 5.0,
+                "consensus_spread_pct": 0.0,
+            }
+        ],
+    )
+
+    post = render_linkedin_post(bundle)
+    audit = render_audit_report(bundle)
+
+    assert "título: sem número próprio" in post
+    assert "Título: sem número próprio" in audit
+
+
 def test_render_group_block_uses_completed_result_ledger() -> None:
     bundle = ReportBundle(
         generated_at_iso="2026-06-15T12:00:00+00:00",

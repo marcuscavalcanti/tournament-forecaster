@@ -14,6 +14,12 @@ def _fmt_pct(value: float) -> str:
     return f"{value:.1f}%"
 
 
+def _fmt_response_title(value: float | int | str | None) -> str:
+    if value is None:
+        return "sem número próprio"
+    return _fmt_pct(float(value))
+
+
 def _fmt_ci(low: float | None, high: float | None) -> str | None:
     if low is None or high is None:
         return None
@@ -565,7 +571,7 @@ def render_linkedin_post(bundle: ReportBundle) -> str:
                 for response in turn.get("responses", []):
                     lines.append(f"[Rodada {turn['round']}] {response['agent']}: {_post_chat_text(response['answer'])}")
                     lines.append(
-                        f"  Status: {_response_status(response)} | título: {_fmt_pct(response['title_pct'])} | "
+                        f"  Status: {_response_status(response)} | título: {_fmt_response_title(response.get('title_pct'))} | "
                         f"aceitação: {response['support_score']:.2f}"
                     )
                 lines.append(
@@ -794,7 +800,10 @@ def render_audit_report(bundle: ReportBundle) -> str:
                 lines.append("")
                 lines.append(f"[{response['agent']}]")
                 lines.append(f"Status: {_response_status(response)}")
-                lines.append(f"Título: {_fmt_pct(response['title_pct'])}; aceitação: {response['support_score']:.2f}")
+                lines.append(
+                    f"Título: {_fmt_response_title(response.get('title_pct'))}; "
+                    f"aceitação: {response['support_score']:.2f}"
+                )
                 lines.append(f"Mensagem: {_compact_chat_text(response['answer'])}")
                 if response.get("leadership_bid"):
                     proposed = str(response.get("proposed_next_question", "") or "").strip()
