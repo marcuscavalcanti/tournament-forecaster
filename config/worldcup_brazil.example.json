@@ -146,6 +146,8 @@
   "meeting_min_participants": 3,
   "meeting_require_peer_acceptance": true,
   "meeting_require_full_path_coverage": true,
+  "meeting_require_challenger_when_exact_mc_consensus": true,
+  "meeting_exact_mc_consensus_rounds_before_challenge": 2,
   "meeting_slot_breaker_threshold": 3,
   "meeting_stability_delta_pp": 1.0,
   "meeting_stability_rounds": 2,
