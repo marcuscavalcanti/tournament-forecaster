@@ -192,6 +192,12 @@ def test_template_post_derives_group_loss_from_win_and_draw_when_bundle_opponent
 
 def test_template_post_discloses_active_models_and_opponent_room_fallback() -> None:
     bundle = _bundle()
+    bundle.source_plan_by_model = {
+        "Opus 4.8": {},
+        "GPT 5.5": {},
+        "DeepSeek V4 Pro": {},
+        "Gemini Pro": {},
+    }
     bundle.model_influence_pct = {
         "Opus 4.8": 0.5,
         "GPT 5.5": 0.5,
@@ -200,11 +206,15 @@ def test_template_post_discloses_active_models_and_opponent_room_fallback() -> N
         "Gemini Pro": 30.0,
     }
     bundle.model_participation["last_consensus_participants"] = [
-        "Perplexity Pro",
+        "Opus 4.8",
+        "GPT 5.5",
         "DeepSeek V4 Pro",
         "Gemini Pro",
     ]
-    bundle.metadata["removed_agent_slots"] = ["Opus 4.8", "GPT 5.5"]
+    bundle.metadata["removed_agent_slots"] = ["Perplexity Pro"]
+    bundle.metadata["removed_agent_reasons"] = {
+        "Perplexity Pro": "fontes fora do escopo estatístico/qualitativo do futebol competitivo",
+    }
     bundle.metadata["parallel_opponent_debriefing"] = {
         "enabled": True,
         "usable_for_main_room": False,
@@ -214,8 +224,9 @@ def test_template_post_discloses_active_models_and_opponent_room_fallback() -> N
     text = render_template_post(bundle, post_index=1, run_date=date(2026, 6, 11))
 
     validate_template_post(text, bundle)
-    assert "3 modelos ativos" in text
-    assert "2 removidos no planejamento" in text
+    assert "4 modelos ativos (Opus 4.8, GPT 5.5, DeepSeek V4 Pro e Gemini Pro)" in text
+    assert "Perplexity Pro saiu no planejamento" in text
+    assert "fontes fora do escopo competitivo" in text
     assert "os 5 modelos pesquisam" not in text
     assert "cruzamentos sem consenso lateral; usei Monte Carlo/bracket" in text
 
@@ -373,11 +384,23 @@ def test_template_post_includes_change_bullets_when_previous_bundle_is_available
 
     text = render_template_post(current, post_index=2, run_date=date(2026, 6, 13), previous_bundle=previous)
 
-    assert "O QUE MUDOU DESDE 11/JUN:" in text
+    assert "O QUE MUDOU DESDE A ESTREIA (13/06):" in text
     assert "• Hexa 8,6%→3,7%; final 16%→9%." in text
     assert "• Quartas: Inglaterra 31%→39%; Brasil 49%→37%." in text
     assert "• Por quê: Polymarket era Grupo C; caminho recalculado." in text
     assert "Esse mapa muda a cada rodada" not in text
+
+
+def test_template_post_change_header_uses_latest_brazil_match_already_played() -> None:
+    previous = _bundle()
+    current = _bundle()
+    current.generated_at_iso = "2026-06-20T12:00:00+00:00"
+    current.stage_probabilities = {"quartas": 42.0, "semifinal": 24.0, "final": 12.0, "titulo": 6.0}
+
+    text = render_template_post(current, post_index=3, run_date=date(2026, 6, 20), previous_bundle=previous)
+
+    assert "O QUE MUDOU DESDE BRASIL x HAITI (19/06):" in text
+    assert "O QUE MUDOU DESDE A ESTREIA" not in text
 
 
 def test_template_post_surfaces_team_context_warnings_in_run_note() -> None:

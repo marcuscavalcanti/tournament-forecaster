@@ -149,25 +149,76 @@ def _group_loss_pct(match: Any) -> float | None:
         return getattr(match, "opponent_pct", None)
 
 
+def _join_pt(items: list[str]) -> str:
+    clean = [item.strip() for item in items if item and item.strip()]
+    if not clean:
+        return ""
+    if len(clean) == 1:
+        return clean[0]
+    return ", ".join(clean[:-1]) + f" e {clean[-1]}"
+
+
+def _active_model_names(bundle: Any, removed: list[str]) -> list[str]:
+    removed_set = {name.strip() for name in removed if name and name.strip()}
+    source_plans = getattr(bundle, "source_plan_by_model", None)
+    if isinstance(source_plans, dict) and source_plans:
+        return [str(name) for name in source_plans if str(name).strip() and str(name) not in removed_set]
+
+    participation = getattr(bundle, "model_participation", {}) or {}
+    if not isinstance(participation, dict):
+        return []
+    consensus_participants = participation.get("last_consensus_participants")
+    if isinstance(consensus_participants, list) and consensus_participants:
+        return [
+            str(name)
+            for name in consensus_participants
+            if str(name).strip() and str(name).strip() not in removed_set
+        ]
+    protagonists = participation.get("protagonist_counts")
+    if isinstance(protagonists, dict):
+        return [str(name) for name in protagonists if str(name).strip() and str(name) not in removed_set]
+    return []
+
+
+def _compact_removed_reason(reason: str) -> str:
+    normalized = _normalize_beat(reason)
+    if "fora do escopo" in normalized and "futebol competitivo" in normalized:
+        return "fontes fora do escopo competitivo"
+    if "falha operacional" in normalized and "sem resposta externa verificavel" in normalized:
+        return "falha operacional sem fonte verificável"
+    if "sem fonte" in normalized or "fonte verificavel" in normalized:
+        return "sem fonte verificável"
+    if "quota" in normalized or "429" in normalized or "credit" in normalized:
+        return "limite/quota de API"
+    text = str(reason or "").strip()
+    return _truncate_words(text, 90) if text else "motivo operacional"
+
+
+def _removed_models_clause(removed: list[str], reasons: dict[str, Any]) -> str:
+    if not removed:
+        return ""
+    removed_names = _join_pt([str(name) for name in removed])
+    verb = "saiu" if len(removed) == 1 else "saíram"
+    reason_values = []
+    for name in removed:
+        reason = _compact_removed_reason(str(reasons.get(name, "") if isinstance(reasons, dict) else ""))
+        if reason and reason not in reason_values:
+            reason_values.append(reason)
+    reason_text = f" por {'; '.join(reason_values[:2])}" if reason_values else ""
+    return f"; {removed_names} {verb} no planejamento{reason_text}"
+
+
 def _model_intro(bundle: Any) -> str:
     metadata = getattr(bundle, "metadata", {}) or {}
     removed = list(metadata.get("removed_agent_slots") or [])
-    participation = getattr(bundle, "model_participation", {}) or {}
-    consensus_participants = participation.get("last_consensus_participants") if isinstance(participation, dict) else []
-    protagonists = participation.get("protagonist_counts") if isinstance(participation, dict) else {}
-    if isinstance(consensus_participants, list) and consensus_participants:
-        active_count = len({str(item) for item in consensus_participants if str(item).strip()})
-    else:
-        active_count = len(protagonists) if isinstance(protagonists, dict) else 0
-    if active_count and removed:
-        return (
-            f"Como prometi: neste run, {active_count} modelos ativos pesquisaram odds, rankings e notícias, "
-            f"debateram e fecharam uma decisão em grupo; {len(removed)} removidos no planejamento."
-        )
+    reasons = metadata.get("removed_agent_reasons") if isinstance(metadata, dict) else {}
+    active_names = _active_model_names(bundle, [str(item) for item in removed])
+    active_count = len(active_names)
     if active_count:
+        names = f" ({_join_pt(active_names)})" if active_names else ""
         return (
-            f"Como prometi: neste run, {active_count} modelos ativos pesquisaram odds, rankings e notícias, "
-            "debateram e fecharam uma decisão em grupo."
+            f"Como prometi: {active_count} modelos ativos{names} pesquisaram odds, rankings e notícias"
+            f"{_removed_models_clause([str(item) for item in removed], reasons)}."
         )
     return (
         "Como prometi: na véspera de cada jogo, os modelos pesquisam odds, rankings e notícias, "
@@ -224,6 +275,44 @@ def _analysis_short_date(bundle: Any) -> str:
         return _short_date(parsed.isoformat()).upper()
     except ValueError:
         return "ÚLTIMA ANÁLISE"
+
+
+def _bundle_date(bundle: Any) -> date | None:
+    raw = str(getattr(bundle, "generated_at_iso", "") or "")
+    try:
+        return datetime.fromisoformat(raw).date()
+    except ValueError:
+        return None
+
+
+def _bundle_year(bundle: Any) -> int:
+    parsed = _bundle_date(bundle)
+    return parsed.year if parsed is not None else date.today().year
+
+
+def _match_reference_label(match: Any, index: int, played_at: date) -> str:
+    when = f"{played_at.day:02d}/{played_at.month:02d}"
+    if index == 0:
+        return f"A ESTREIA ({when})"
+    opponent = str(getattr(match, "opponent", "") or "adversário").strip()
+    return f"BRASIL x {opponent.upper()} ({when})"
+
+
+def _change_reference_label(bundle: Any) -> str:
+    reference_date = _bundle_date(bundle)
+    group_matches = list(getattr(bundle, "group_matches", []) or [])
+    if reference_date is not None and group_matches:
+        year = _bundle_year(bundle)
+        played = [
+            (index, match, parsed)
+            for index, match in enumerate(group_matches)
+            if (parsed := _parse_group_date(getattr(match, "match_date", ""), year=year)) is not None
+            and parsed <= reference_date
+        ]
+        if played:
+            index, match, parsed = played[-1]
+            return _match_reference_label(match, index, parsed)
+    return _analysis_short_date(bundle)
 
 
 def _parse_group_date(raw: Any, *, year: int) -> date | None:
@@ -700,7 +789,7 @@ def _change_section(bundle: Any, previous_bundle: Any | None) -> str:
             "O QUE MUDOU DESDE A ÚLTIMA ANÁLISE:\n"
             "• O mapa foi recalculado, mas sem mudança material suficiente para virar headline.\n\n"
         )
-    return f"O QUE MUDOU DESDE {_analysis_short_date(previous_bundle)}:\n" + "\n".join(bullets[:3]) + "\n\n"
+    return f"O QUE MUDOU DESDE {_change_reference_label(bundle)}:\n" + "\n".join(bullets[:3]) + "\n\n"
 
 
 def render_template_post(
@@ -911,8 +1000,10 @@ def bundle_from_json(path: Path | str) -> Any:
         group_summary=payload.get("group_summary", ""),
         metadata=payload.get("metadata", {}),
         meeting_transcript=payload.get("meeting_transcript", []),
+        source_plan_by_model=payload.get("source_plan_by_model", {}),
         model_participation=payload.get("model_participation", {}),
         model_influence_pct=payload.get("model_influence_pct", {}),
         model_token_costs=payload.get("model_token_costs", {}),
+        agent_effort_profiles=payload.get("agent_effort_profiles", {}),
         sources=payload.get("sources", []),
     )
