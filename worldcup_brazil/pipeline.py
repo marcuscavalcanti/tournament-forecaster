@@ -2570,6 +2570,32 @@ def _stage_exit_distribution(stage_probabilities: dict[str, float]) -> dict[str,
     }
 
 
+def _team_context_sensitivity_summary(monte_carlo_result: dict[str, Any]) -> dict[str, Any]:
+    team_context = monte_carlo_result.get("team_context") if isinstance(monte_carlo_result, dict) else {}
+    adjustments = team_context.get("team_adjustments") if isinstance(team_context, dict) else []
+    brazil = next(
+        (
+            item
+            for item in adjustments or []
+            if str(item.get("team", "") or "").strip().casefold() == "brasil"
+        ),
+        None,
+    )
+    if not isinstance(brazil, dict):
+        return {"enabled": False, "reason": "no_brazil_team_context"}
+    return {
+        "enabled": True,
+        "brazil_rating_delta": round(float(brazil.get("rating_delta", 0.0) or 0.0), 1),
+        "requires_recalc": True,
+        "recommended_scenarios": [
+            "current",
+            "rho_1_price_once",
+            "rho_0_full_sum",
+            "no_brazil_context",
+        ],
+    }
+
+
 def _stage_probability_source(config: dict[str, Any]) -> str:
     if config.get("stage_probabilities"):
         return "configured_stage_probabilities"
@@ -8832,6 +8858,7 @@ async def build_report_bundle(
             "uncertainty": _report_uncertainty_metadata(config),
             "stage_interval_metadata": config.get("_stage_interval_metadata", {}),
             "monte_carlo": monte_carlo_compact_summary(monte_carlo_result),
+            "team_context_sensitivity": _team_context_sensitivity_summary(monte_carlo_result),
             "group_state": monte_carlo_result.get("group_state", {}),
             "meeting_rounds": len(meeting_transcript),
             "meeting_exit_status": meeting_exit_status,

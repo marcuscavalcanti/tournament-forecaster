@@ -8,6 +8,7 @@ from worldcup_brazil.pipeline import (
     _apply_meeting_match_probabilities,
     _market_title_challenge,
     _stage_exit_distribution,
+    _team_context_sensitivity_summary,
     _apply_monte_carlo_knockout_scenarios,
     _stage_confidence_intervals,
     _validate_report_coherence,
@@ -296,6 +297,39 @@ def test_stage_exit_distribution_derives_modal_exit_from_reach_probabilities() -
     assert distribution["modal_exit_pct"] == 38.4
     assert distribution["exit_buckets"][1] == {"stage": "16 avos", "exit_pct": 38.4}
     assert distribution["exit_buckets"][3] == {"stage": "quartas", "exit_pct": 18.3}
+
+
+def test_team_context_sensitivity_summary_exposes_brazil_delta_and_replay_scenarios() -> None:
+    summary = _team_context_sensitivity_summary(
+        {
+            "stage_probabilities": {"titulo": 5.1},
+            "team_context": {
+                "team_adjustments": [
+                    {
+                        "team": "Brasil",
+                        "rating_delta": -17.4,
+                        "correlation_adjustments": [
+                            {
+                                "correlation_group": "match_event:brasil:marrocos:2026-06-13",
+                                "rho": 0.7,
+                                "rating_delta": -17.4,
+                            }
+                        ],
+                    }
+                ]
+            },
+        }
+    )
+
+    assert summary["enabled"] is True
+    assert summary["brazil_rating_delta"] == -17.4
+    assert summary["requires_recalc"] is True
+    assert summary["recommended_scenarios"] == [
+        "current",
+        "rho_1_price_once",
+        "rho_0_full_sum",
+        "no_brazil_context",
+    ]
 
 
 def test_market_title_challenge_ignores_match_probability_distractors() -> None:

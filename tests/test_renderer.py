@@ -422,6 +422,17 @@ def test_render_linkedin_post_includes_monte_carlo_path_summary() -> None:
                     "label": "monte_carlo_model_blend_60_40",
                 }
             },
+            "team_context_sensitivity": {
+                "enabled": True,
+                "brazil_rating_delta": -17.4,
+                "requires_recalc": True,
+                "recommended_scenarios": [
+                    "current",
+                    "rho_1_price_once",
+                    "rho_0_full_sum",
+                    "no_brazil_context",
+                ],
+            },
         },
         )
 
@@ -437,6 +448,8 @@ def test_render_linkedin_post_includes_monte_carlo_path_summary() -> None:
     assert "- Gate do caminho: prior fraco de caminho; mínimo 10.000 simulações e 65.0% de cobertura." in post
     assert "Placares do caminho já incorporados: Grupo F (16 avos; líder Suécia): Holanda 2-2 Japão; Suécia 5-1 Tunísia." in post
     assert "Contexto por seleção: 4 sinais em 3 seleções" in post
+    assert "Sensibilidade do contexto: Brasil rating_delta -17.4" in post
+    assert "rho_1_price_once" in post
     assert "bets_prediction_markets" in post
     assert "injuries_cuts_news" in post
     assert "funil final combina 60% Monte Carlo e 40% consenso dos modelos" in post

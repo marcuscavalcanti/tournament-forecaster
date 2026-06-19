@@ -340,6 +340,15 @@ def _render_monte_carlo_summary(bundle: ReportBundle) -> list[str]:
             f"{int(team_context.get('teams_with_context_count') or 0)} seleções"
             + (f"; famílias: {families}." if families else ".")
         )
+    sensitivity = bundle.metadata.get("team_context_sensitivity") if isinstance(bundle.metadata, dict) else {}
+    if isinstance(sensitivity, dict) and sensitivity.get("enabled"):
+        scenarios = ", ".join(str(item) for item in sensitivity.get("recommended_scenarios", []) or [])
+        lines.append(
+            "- Sensibilidade do contexto: "
+            f"Brasil rating_delta {float(sensitivity.get('brazil_rating_delta', 0.0)):.1f}; "
+            "recalcular cenários"
+            + (f" {scenarios}." if scenarios else ".")
+        )
     blend = ((bundle.metadata or {}).get("numeric_chairman") or {}).get("stage_probability_blend") or {}
     if isinstance(blend, dict) and blend.get("enabled"):
         lines.append(
