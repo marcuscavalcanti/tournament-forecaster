@@ -13,7 +13,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import NormalDist
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from worldcup_brazil.agents import agent_effort_profiles, call_agent, call_all_agents, load_agent_specs_from_config
 from worldcup_brazil.bracket import (
@@ -7563,6 +7563,74 @@ def _parallel_opponent_briefing_for_prompt(result: dict[str, Any], estimates: li
     }
 
 
+_OPPONENT_ROOM_PHASE_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "16_avos": ("16 avos", "16avos", "r32", "round of 32"),
+    "oitavas": ("oitavas", "r16", "round of 16"),
+    "quartas": ("quartas", "quarter", "quartas de final"),
+    "semifinal": ("semifinal", "semi"),
+    "final": ("final",),
+}
+
+
+def _opponent_room_phase_key(text: str) -> str | None:
+    normalized = _normalize_text(text)
+    for phase_key, aliases in _OPPONENT_ROOM_PHASE_KEYWORDS.items():
+        if any(_normalize_text(alias) in normalized for alias in aliases):
+            return phase_key
+    return None
+
+
+def _iter_opponent_room_probability_maps(result: dict[str, Any]) -> Iterable[dict[str, Any]]:
+    for opinion in [
+        *(result.get("final_opinions") or []),
+        *(result.get("all_opinions") or []),
+    ]:
+        for attr in ("scenario_probabilities", "match_probabilities"):
+            payload = getattr(opinion, attr, None)
+            if isinstance(payload, dict):
+                yield payload
+    for turn in result.get("meeting_transcript", []) or []:
+        if not isinstance(turn, dict):
+            continue
+        for response in turn.get("responses", []) or []:
+            if not isinstance(response, dict):
+                continue
+            if bool(response.get("removed_from_main", False)):
+                continue
+            for field in ("scenario_probabilities", "match_probabilities"):
+                payload = response.get(field)
+                if isinstance(payload, dict):
+                    yield payload
+
+
+def _opponent_room_phase_coverage(result: dict[str, Any]) -> dict[str, int]:
+    opponents_by_phase: dict[str, set[str]] = {phase: set() for phase in _OPPONENT_ROOM_PHASE_KEYWORDS}
+    for probability_map in _iter_opponent_room_probability_maps(result):
+        for raw_key in probability_map:
+            key = str(raw_key or "").strip()
+            if not key:
+                continue
+            phase_key = _opponent_room_phase_key(key)
+            if not phase_key:
+                continue
+            opponent = key.split(":", 1)[1] if ":" in key else key
+            opponent = _normalize_text(opponent)
+            if opponent and opponent != _normalize_text(key):
+                opponents_by_phase[phase_key].add(opponent)
+    return {phase: len(opponents) for phase, opponents in opponents_by_phase.items()}
+
+
+def _opponent_room_has_sufficient_phase_coverage(
+    result: dict[str, Any],
+    *,
+    min_candidates_per_phase: int = 2,
+    min_covered_phases: int = 4,
+) -> bool:
+    coverage = _opponent_room_phase_coverage(result)
+    covered = sum(1 for count in coverage.values() if count >= min_candidates_per_phase)
+    return covered >= min_covered_phases
+
+
 def _side_room_latest_coverage_complete(transcript: list[dict[str, Any]]) -> bool:
     for turn in reversed(transcript):
         coverage = turn.get("coverage")
@@ -7656,7 +7724,7 @@ async def _run_parallel_opponent_debriefing(
     )
     degraded_usable = bool(degraded_decision.get("usable", False))
     usable_for_main_room = exit_status == "consensus" or degraded_usable
-    return {
+    result = {
         "enabled": True,
         "consensus": consensus,
         "final_opinions": final_opinions,
@@ -7672,6 +7740,16 @@ async def _run_parallel_opponent_debriefing(
         "degraded_would_be_usable": bool(degraded_decision.get("would_be_usable", False)),
         "degraded_decision": degraded_decision,
     }
+    phase_coverage = _opponent_room_phase_coverage(result)
+    phase_coverage_sufficient = _opponent_room_has_sufficient_phase_coverage(result)
+    result["phase_coverage"] = phase_coverage
+    result["phase_coverage_sufficient"] = phase_coverage_sufficient
+    if usable_for_main_room and not phase_coverage_sufficient:
+        result["phase_coverage_warning"] = (
+            "Sala lateral teve consenso, mas cobertura de adversários por fase ficou rasa; "
+            "caminho principal usa MC como base e sala como validação qualitativa."
+        )
+    return result
 
 
 def _agent_debate_prompt(
@@ -8698,6 +8776,9 @@ async def build_report_bundle(
                     monte_carlo_result=monte_carlo_result,
                 )
                 _apply_meeting_match_probabilities(knockout_estimates, opponent_opinions)
+                phase_warning = str(opponent_debriefing_result.get("phase_coverage_warning", "") or "")
+                if phase_warning:
+                    warnings.append(phase_warning)
             else:
                 exit_status = str(opponent_debriefing_result.get("exit_status", "unknown") or "unknown")
                 exit_warning = str(opponent_debriefing_result.get("exit_warning", "") or "")
@@ -9015,6 +9096,11 @@ async def build_report_bundle(
                 "exit_status": str(opponent_debriefing_result.get("exit_status", "") or ""),
                 "exit_warning": str(opponent_debriefing_result.get("exit_warning", "") or ""),
                 "usable_for_main_room": bool(opponent_debriefing_result.get("usable_for_main_room", False)),
+                "phase_coverage": dict(opponent_debriefing_result.get("phase_coverage", {}) or {}),
+                "phase_coverage_sufficient": bool(
+                    opponent_debriefing_result.get("phase_coverage_sufficient", True)
+                ),
+                "phase_coverage_warning": str(opponent_debriefing_result.get("phase_coverage_warning", "") or ""),
                 "degraded": bool(opponent_debriefing_result.get("degraded", False)),
                 "degraded_shadow_only": bool(opponent_debriefing_result.get("degraded_shadow_only", False)),
                 "degraded_would_be_usable": bool(opponent_debriefing_result.get("degraded_would_be_usable", False)),

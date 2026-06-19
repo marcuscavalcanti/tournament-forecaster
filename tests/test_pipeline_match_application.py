@@ -7,6 +7,8 @@ from worldcup_brazil.pipeline import (
     _apply_meeting_knockout_scenarios,
     _apply_meeting_match_probabilities,
     _market_title_challenge,
+    _opponent_room_has_sufficient_phase_coverage,
+    _opponent_room_phase_coverage,
     _stage_exit_distribution,
     _team_context_sensitivity_summary,
     _apply_monte_carlo_knockout_scenarios,
@@ -41,6 +43,33 @@ def test_apply_meeting_match_probabilities_rejects_group_win_pct_that_conflicts_
 
     assert estimate.brazil_pct == 59.0
     assert estimate.opponent_pct == 17.0
+
+
+def test_opponent_room_consensus_requires_phase_top_two_coverage() -> None:
+    result = {
+        "exit_status": "consensus",
+        "meeting_transcript": [
+            {
+                "round": 1,
+                "responses": [
+                    {
+                        "agent": "GPT 5.5",
+                        "scenario_probabilities": {"16 avos: Japão": 32.6},
+                    },
+                    {"agent": "Gemini Pro", "scenario_probabilities": {}},
+                ],
+            }
+        ],
+    }
+
+    assert _opponent_room_phase_coverage(result) == {
+        "16_avos": 1,
+        "oitavas": 0,
+        "quartas": 0,
+        "semifinal": 0,
+        "final": 0,
+    }
+    assert _opponent_room_has_sufficient_phase_coverage(result) is False
 
 
 def test_stage_confidence_intervals_envelope_monte_carlo_uncertainty_and_model_dispersion() -> None:

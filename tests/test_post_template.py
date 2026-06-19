@@ -231,6 +231,29 @@ def test_template_post_discloses_active_models_and_opponent_room_fallback() -> N
     assert "cruzamentos sem consenso lateral; usei Monte Carlo/bracket" in text
 
 
+def test_template_post_discloses_shallow_opponent_room_phase_coverage() -> None:
+    bundle = _bundle()
+    bundle.metadata["parallel_opponent_debriefing"] = {
+        "enabled": True,
+        "usable_for_main_room": True,
+        "exit_status": "consensus",
+        "phase_coverage_sufficient": False,
+        "phase_coverage": {
+            "16_avos": 1,
+            "oitavas": 0,
+            "quartas": 0,
+            "semifinal": 0,
+            "final": 0,
+        },
+    }
+
+    text = render_template_post(bundle, post_index=1, run_date=date(2026, 6, 11))
+
+    validate_template_post(text, bundle)
+    assert "sala lateral validou o mapa" in text
+    assert "ranking de adversários por fase segue ancorado no Monte Carlo" in text
+
+
 def test_round_stats_reports_valid_message_count_when_responses_were_removed() -> None:
     bundle = _bundle()
     bundle.model_participation = {

@@ -232,6 +232,12 @@ def _run_note(bundle: Any) -> str:
     opponent_room = metadata.get("parallel_opponent_debriefing") or {}
     if opponent_room.get("enabled") and not bool(opponent_room.get("usable_for_main_room", True)):
         notes.append("cruzamentos sem consenso lateral; usei Monte Carlo/bracket oficial")
+    if (
+        opponent_room.get("enabled")
+        and bool(opponent_room.get("usable_for_main_room", False))
+        and opponent_room.get("phase_coverage_sufficient") is False
+    ):
+        notes.append("sala lateral validou o mapa, mas o ranking de adversários por fase segue ancorado no Monte Carlo")
     market_challenge = metadata.get("market_title_challenge") or {}
     if isinstance(market_challenge, dict) and bool(market_challenge.get("triggered")):
         low = market_challenge.get("market_low_pct")
