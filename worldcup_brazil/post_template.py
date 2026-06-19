@@ -586,10 +586,32 @@ def _backstage_section(beats: list[str]) -> str:
 QUANTI_HINTS = ("rating", "odds", "bet", "mercado", "sofascore", "desempenho", "performance", "elo")
 
 
+def _numeric_decision_label(bundle: Any) -> str:
+    metadata = getattr(bundle, "metadata", {}) or {}
+    monte_carlo = metadata.get("monte_carlo") if isinstance(metadata.get("monte_carlo"), dict) else {}
+    mc_title = ((monte_carlo.get("stage_probabilities") or {}) if isinstance(monte_carlo, dict) else {}).get("titulo")
+    model_title = metadata.get("agent_title_consensus_pct")
+    blend = metadata.get("numeric_chairman", {}).get("stage_probability_blend", {}) if isinstance(metadata, dict) else {}
+    mc_weight = float(blend.get("monte_carlo_weight", 0.6) or 0.6)
+    model_weight = float(blend.get("model_weight", 0.4) or 0.4)
+    rule = f"{round(mc_weight * 100):.0f}% Monte Carlo, {round(model_weight * 100):.0f}% modelos"
+    if mc_title is None or model_title is None:
+        return f"🧮 regra numérica: {rule}"
+    try:
+        mc_value = float(mc_title)
+        model_value = float(model_title)
+    except (TypeError, ValueError):
+        return f"🧮 regra numérica: {rule}"
+    if abs(mc_value - model_value) <= 0.15:
+        return f"🧮 regra numérica: {rule}; hoje os modelos ratificaram o Monte Carlo"
+    return f"🧮 regra numérica: {rule}; hoje os modelos moveram o funil antes da publicação"
+
+
 def _build_round_stats(bundle: Any, *, slots: int = 3) -> str:
     """Números da rodada: pool ponderado, bullets densos, sem dado repetido."""
     candidates: list[tuple[float, str, str]] = []
     metadata = getattr(bundle, "metadata", {}) or {}
+    candidates.append((109, "regra_numerica", _numeric_decision_label(bundle)))
 
     influence = getattr(bundle, "model_influence_pct", {}) or {}
     valid_influence = {k: float(v) for k, v in influence.items() if v is not None}

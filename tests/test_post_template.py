@@ -278,6 +278,34 @@ def test_round_stats_reports_valid_message_count_when_responses_were_removed() -
     assert "quase não moveu (30,1%)" not in stats
 
 
+def test_post_says_models_ratified_mc_when_consensus_equals_mc() -> None:
+    bundle = _bundle()
+    bundle.stage_probabilities["titulo"] = 5.1
+    bundle.metadata["agent_title_consensus_pct"] = 5.1
+    bundle.metadata["monte_carlo"]["stage_probabilities"]["titulo"] = 5.1
+    bundle.metadata["numeric_chairman"] = {
+        "stage_probability_blend": {"monte_carlo_weight": 0.6, "model_weight": 0.4},
+    }
+
+    text = render_template_post(bundle, post_index=1, run_date=date(2026, 6, 11))
+
+    assert "os modelos ratificaram o Monte Carlo" in text
+
+
+def test_post_says_models_repriced_when_consensus_differs_from_mc() -> None:
+    bundle = _bundle()
+    bundle.stage_probabilities["titulo"] = 5.5
+    bundle.metadata["agent_title_consensus_pct"] = 6.2
+    bundle.metadata["monte_carlo"]["stage_probabilities"]["titulo"] = 5.1
+    bundle.metadata["numeric_chairman"] = {
+        "stage_probability_blend": {"monte_carlo_weight": 0.6, "model_weight": 0.4},
+    }
+
+    text = render_template_post(bundle, post_index=1, run_date=date(2026, 6, 11))
+
+    assert "os modelos moveram o funil" in text
+
+
 def test_round_stats_prioritize_discussion_profile_over_cost() -> None:
     bundle = _bundle()
     bundle.model_participation = {
