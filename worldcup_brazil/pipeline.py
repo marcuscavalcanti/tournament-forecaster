@@ -644,6 +644,14 @@ def _validation_issue_from_reason(
         recoverability = "source"
         markers = ("source_urls", "source_queries")
         repair_hint = "Pode reentrar apenas se trouxer source_urls HTTP ou source_queries específicas executadas agora."
+    elif "fora do escopo" in normalized or "futebol competitivo" in normalized:
+        matched_rule = "source_relevance_off_scope"
+        recoverability = "source"
+        markers = ("fora do escopo", "fontes", "tipogra", "camisa", "font")
+        repair_hint = (
+            "Repair direcionado: trocar fontes fora de escopo por odds, rankings, notícias de escalação/lesão, "
+            "resultados e previews esportivos verificáveis."
+        )
     elif "nao trouxe plano de fontes" in normalized or "não trouxe plano de fontes" in reason or "sem fonte auditavel" in normalized:
         matched_rule = "missing_auditable_sources"
         recoverability = "source"
@@ -713,7 +721,13 @@ def _reentry_policy_for_validation_issue(issue: dict[str, Any] | None) -> dict[s
             "eligible": True,
             "decision_reason": "erro de formato é recuperável por retry curto",
         }
-    if matched_rule in {"missing_auditable_sources", "planning_timeout", "legacy_reentry_candidate", "consecutive_invalid_votes"}:
+    if matched_rule in {
+        "missing_auditable_sources",
+        "planning_timeout",
+        "legacy_reentry_candidate",
+        "consecutive_invalid_votes",
+        "source_relevance_off_scope",
+    }:
         return {
             "eligible": True,
             "decision_reason": "falha recuperável pode reentrar somente se o probe trouxer fonte auditável",
@@ -758,6 +772,20 @@ def _primary_validation_issue(issues: list[dict[str, Any]] | None, reason: str =
             repair_hint="Pode reentrar apenas se o probe trouxer fonte auditável.",
         )
     return _validation_issue_from_reason(gate_name="legacy_reason", reason=reason)
+
+
+def _source_planning_issue_repair_class(issue: dict[str, Any] | None) -> str:
+    matched_rule = str((issue or {}).get("matched_rule", "") or "").strip().lower()
+    recoverability = str((issue or {}).get("recoverability", "") or "").strip().lower()
+    if matched_rule == "source_relevance_off_scope":
+        return "targeted_source_repair"
+    if recoverability == "format":
+        return "format_repair"
+    if recoverability == "policy_suspected":
+        return "semantic_policy_repair"
+    if matched_rule in {"missing_auditable_sources", "planning_timeout", "legacy_reentry_candidate"}:
+        return "source_repair"
+    return "none"
 
 
 def _reentry_timeout_for_issue(config: dict[str, Any], issue: dict[str, Any] | None, default_timeout: int) -> int:
@@ -1317,6 +1345,19 @@ def _source_planning_repair_prompt(
     readiness_report: dict[str, Any],
     attempt_index: int,
 ) -> str:
+    repair_classes = {
+        _source_planning_issue_repair_class((entry.get("validation_issues") or [{}])[0])
+        for entry in readiness_report.get("removed_agents", [])
+        if isinstance(entry, dict)
+    }
+    targeted_source_guidance = ""
+    if "targeted_source_repair" in repair_classes:
+        targeted_source_guidance = (
+            "\nREPARO DIRECIONADO DE ESCOPO DE FONTES: você foi removido porque interpretou 'fontes' "
+            "como fontes visuais/tipográficas ou trouxe material fora de futebol competitivo. Refaça apenas "
+            "o planejamento de fontes com odds, rankings, notícias de escalação/lesão, resultados e previews "
+            "esportivos verificáveis. Não estime de novo se não tiver fonte auditável.\n"
+        )
     return (
         _source_planning_prompt(config=config, generated_at=generated_at)
         + "\n\nRODADA DE REPARO OPERACIONAL / SELF-HEALING.\n"
@@ -1329,6 +1370,7 @@ def _source_planning_repair_prompt(
         "como verificáveis nesta rodada. Source_queries só contam quando representam busca realmente executada por você agora. "
         "Não invente URL, ranking, score ou método. Campos obrigatórios: self_identification, title_pct, summary, "
         "opening_argument, critique, adjustment, source_urls, source_queries.\n\n"
+        f"{targeted_source_guidance}"
         f"Tentativa de reparo: {attempt_index}\n"
         f"Diagnóstico anterior: {json.dumps(readiness_report, ensure_ascii=False)}\n"
     )

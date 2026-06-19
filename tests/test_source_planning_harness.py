@@ -12,6 +12,7 @@ from worldcup_brazil.pipeline import (
     _new_token_cost_ledger,
     _is_format_repairable_planning_reason,
     _sanitize_source_planning_opinions,
+    _source_planning_issue_repair_class,
     _source_planning_readiness_report,
     _validation_issue_from_reason,
     build_report_bundle,
@@ -268,6 +269,11 @@ def test_source_planning_readiness_rejects_jersey_font_sources_as_off_topic() ->
     assert report["quorum_met"] is False
     assert report["removed_agents"][0]["agent"] == "Perplexity Pro"
     assert "fora do escopo" in report["removed_agents"][0]["reason"]
+    assert report["removed_agents"][0]["matched_rule"] == "source_relevance_off_scope"
+    assert report["removed_agents"][0]["reentry_eligible"] is True
+    assert _source_planning_issue_repair_class(report["removed_agents"][0]["validation_issues"][0]) == (
+        "targeted_source_repair"
+    )
 
 
 def test_source_planning_readiness_rejects_off_topic_summary_even_with_extra_queries() -> None:
