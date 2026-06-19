@@ -2526,6 +2526,50 @@ def _stage_probabilities(title_pct: float, config: dict[str, Any]) -> dict[str, 
     return model_scaled
 
 
+def _stage_exit_distribution(stage_probabilities: dict[str, float]) -> dict[str, Any]:
+    """Derive the exit-stage distribution from reach probabilities.
+
+    The modal exit stage is a deterministic property of the funnel. It should not
+    be inferred from whichever model happened to phrase the last consensus
+    question.
+    """
+
+    ordered_keys = [
+        ("16_avos", "16 avos"),
+        ("oitavas", "oitavas"),
+        ("quartas", "quartas"),
+        ("semifinal", "semifinal"),
+        ("final", "final"),
+        ("titulo", "campeão"),
+    ]
+    available = [
+        (key, label, round(float(stage_probabilities[key]), 1))
+        for key, label in ordered_keys
+        if key in stage_probabilities
+    ]
+    if not available:
+        return {"exit_buckets": [], "modal_exit_stage": "", "modal_exit_pct": None}
+
+    buckets: list[dict[str, Any]] = []
+    first_key, first_label, first_reach = available[0]
+    if first_key != "titulo":
+        buckets.append({"stage": f"antes de {first_label}", "exit_pct": round(max(0.0, 100.0 - first_reach), 1)})
+    for index, (_key, label, reach) in enumerate(available):
+        if label == "campeão":
+            buckets.append({"stage": "campeão", "exit_pct": reach})
+            continue
+        next_reach = available[index + 1][2] if index + 1 < len(available) else 0.0
+        buckets.append({"stage": label, "exit_pct": round(max(0.0, reach - next_reach), 1)})
+
+    exit_only = [bucket for bucket in buckets if bucket["stage"] != "campeão"]
+    modal = max(exit_only or buckets, key=lambda bucket: float(bucket.get("exit_pct") or 0.0))
+    return {
+        "exit_buckets": buckets,
+        "modal_exit_stage": str(modal.get("stage", "")),
+        "modal_exit_pct": round(float(modal.get("exit_pct") or 0.0), 1),
+    }
+
+
 def _stage_probability_source(config: dict[str, Any]) -> str:
     if config.get("stage_probabilities"):
         return "configured_stage_probabilities"
@@ -2557,6 +2601,9 @@ def _normalized_ascii_text(value: Any) -> str:
 _MARKET_TITLE_PERCENT_RE = re.compile(r"(?<!\d)(\d{1,2}(?:[,.]\d+)?)\s*%")
 _MARKET_TITLE_RANGE_RE = re.compile(
     r"(?<!\d)(\d{1,2}(?:[,.]\d+)?)\s*[-–]\s*(\d{1,2}(?:[,.]\d+)?)\s*%"
+)
+_MARKET_TITLE_FRACTIONAL_ODDS_RE = re.compile(
+    r"(?<![\d/])(\d{1,2}(?:[,.]\d+)?)\s*/\s*1(?![\d/])"
 )
 _MARKET_TITLE_TERMS = (
     "mercado",
@@ -2602,7 +2649,7 @@ def _market_title_challenge_config(config: dict[str, Any]) -> dict[str, Any]:
         "min_pct": float(configured.get("min_pct", 1.0)),
         "max_pct": float(configured.get("max_pct", 25.0)),
         "max_evidence_items": int(configured.get("max_evidence_items", 4)),
-        "robust_min_candidates": int(configured.get("robust_min_candidates", 5)),
+        "robust_min_candidates": int(configured.get("robust_min_candidates", 3)),
         "robust_low_quantile": float(configured.get("robust_low_quantile", 0.20)),
         "robust_high_quantile": float(configured.get("robust_high_quantile", 0.80)),
     }
@@ -2614,10 +2661,6 @@ def _iter_market_title_texts(meeting_transcript: list[dict[str, Any]]) -> list[t
         if not isinstance(turn, dict):
             continue
         round_label = str(turn.get("round") or turn.get("round_index") or "?")
-        for key in ("question", "protagonist_question", "prompt"):
-            value = str(turn.get(key) or "").strip()
-            if value:
-                texts.append((f"rodada {round_label} pergunta", value))
         for response in turn.get("responses", []) or []:
             if not isinstance(response, dict):
                 continue
@@ -2694,6 +2737,23 @@ def _market_title_values_from_text(text: str, *, config: dict[str, Any]) -> list
                 if settings["min_pct"] <= value <= settings["max_pct"]:
                     values.append(round(value, 1))
             consumed_spans.append((range_start, range_end))
+        for odds_match in _MARKET_TITLE_FRACTIONAL_ODDS_RE.finditer(clause):
+            odds_start = clause_start + odds_match.start()
+            odds_end = clause_start + odds_match.end()
+            if _market_title_candidate_is_model_reference(raw_text, odds_start, odds_end):
+                continue
+            odds_prefix = _normalized_ascii_text(raw_text[clause_start:odds_start])
+            if not any(term in odds_prefix for term in _MARKET_TITLE_TERMS):
+                continue
+            try:
+                fractional = float(odds_match.group(1).replace(",", "."))
+            except ValueError:
+                continue
+            if fractional <= 0:
+                continue
+            implied_pct = 100.0 / (fractional + 1.0)
+            if settings["min_pct"] <= implied_pct <= settings["max_pct"]:
+                values.append(round(implied_pct, 1))
         for percent_match in _MARKET_TITLE_PERCENT_RE.finditer(clause):
             percent_start = clause_start + percent_match.start()
             percent_end = clause_start + percent_match.end()
@@ -2771,6 +2831,7 @@ def _market_title_challenge(
     evidence: list[dict[str, str]] = []
     for label, text in _iter_market_title_texts(meeting_transcript):
         values = _market_title_values_from_text(text, config=config)
+        values = [value for value in values if abs(float(value) - model_title_pct) >= 0.05]
         if not values:
             continue
         candidates.extend(values)
@@ -3049,6 +3110,18 @@ def _team_context_warning_messages(monte_carlo_result: dict[str, Any]) -> list[s
                 "Ajuste contextual pode estar subagrupado: "
                 f"{team} teve famílias reativas com âncora de calendário sem grupo multifamília{suffix}; "
                 "validar completed_group_matches e correlation_group antes de publicar."
+            )
+            continue
+        if reason == "team_context_model_match_shock_without_calendar_anchor":
+            source_family = str(warning.get("source_family", "") or "").strip() or "família não informada"
+            model_hint = str(warning.get("model_correlation_group_hint", "") or "").strip()
+            derived_event = str(warning.get("derived_match_event", "") or "").strip()
+            hint_text = f" com hint {model_hint}" if model_hint else ""
+            event_text = f" e evento derivado {derived_event}" if derived_event else ""
+            messages.append(
+                "Ajuste contextual sem âncora de calendário: "
+                f"{team} teve sinal {source_family}{hint_text}{event_text}; "
+                "validar completed_group_matches antes de publicar."
             )
             continue
         try:
@@ -8669,6 +8742,14 @@ async def build_report_bundle(
                 detail=market_title_warning,
                 extra=market_title_challenge,
             )
+    exit_stage_probabilities = (
+        dict(monte_carlo_result.get("stage_probabilities") or {})
+        if isinstance(monte_carlo_result, dict)
+        else {}
+    )
+    if not exit_stage_probabilities:
+        exit_stage_probabilities = dict(stage_probabilities)
+    stage_exit_distribution = _stage_exit_distribution(exit_stage_probabilities)
     stage_confidence_intervals = _stage_confidence_intervals(
         stage_probabilities,
         dispersion_pct=consensus.dispersion_pct,
@@ -8748,6 +8829,7 @@ async def build_report_bundle(
                 config=config,
                 stage_probabilities=stage_probabilities,
             ),
+            "stage_exit_distribution": stage_exit_distribution,
             "market_title_challenge": market_title_challenge,
             "parallel_opponent_debriefing": {
                 "enabled": bool(opponent_debriefing_result.get("enabled", False)),

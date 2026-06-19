@@ -532,6 +532,16 @@ def render_linkedin_post(bundle: ReportBundle) -> str:
         "a leitura direta dos modelos aparece em 'Palpites por modelo'."
         f"{_stage_ci(bundle, 'titulo')}"
     )
+    stage_exit_distribution = bundle.metadata.get("stage_exit_distribution", {})
+    if isinstance(stage_exit_distribution, dict):
+        modal_stage = str(stage_exit_distribution.get("modal_exit_stage", "") or "").strip()
+        modal_pct = stage_exit_distribution.get("modal_exit_pct")
+        if modal_stage and modal_pct is not None:
+            lines.append(
+                "Leitura determinística do funil: "
+                f"a saída mais comum é em {modal_stage} ({_fmt_pct(float(modal_pct))}), "
+                "calculada por diferença entre probabilidades de alcance, não por opinião da sala."
+            )
     lines.append("")
     lines.extend(_render_monte_carlo_summary(bundle))
     lines.extend(_render_model_predictions_no_opta(bundle))

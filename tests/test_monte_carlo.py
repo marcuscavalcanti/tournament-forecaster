@@ -716,6 +716,115 @@ def test_monte_carlo_keeps_recent_news_family_and_calendar_anchors_it() -> None:
     assert all(signal["correlation_group_source"] == "completed_match" for signal in brazil_adjustment["signals"])
 
 
+def test_monte_carlo_anchors_result_and_path_context_categories_to_completed_match() -> None:
+    config = _completed_match_anchor_config(iterations=2000)
+    config["monte_carlo"]["team_context_correlation_default_rho"] = 0.7
+    config["monte_carlo"]["team_context"] = {
+        "Brasil": [
+            {
+                "category": "performance",
+                "rating_delta": -6.0,
+                "confidence": 1.0,
+                "correlation_group": "brazil_morocco_performance",
+                "rationale": "Performance no Brasil 1-1 Marrocos.",
+                "source_url": "https://example.com/brazil-morocco-performance",
+            },
+            {
+                "category": "resultado_recente",
+                "rating_delta": -16.3,
+                "confidence": 1.0,
+                "correlation_group": "shock_c_bra_mar_2026_06_13",
+                "rationale": "Resultado recente Brasil 1-1 Marrocos em 2026-06-13.",
+                "source_url": "https://example.com/brazil-morocco-result",
+            },
+        ],
+        "Holanda": [
+            {
+                "category": "performance",
+                "rating_delta": -8.0,
+                "confidence": 1.0,
+                "correlation_group": "netherlands_japan_performance",
+                "rationale": "Performance no Holanda 2-2 Japão.",
+                "source_url": "https://example.com/netherlands-japan-performance",
+            },
+            {
+                "category": "caminho_16_avos",
+                "rating_delta": -4.8,
+                "confidence": 1.0,
+                "correlation_group": "shock_f_openers_2026_06_14_15",
+                "rationale": "Caminho de 16 avos reprecificado depois de Holanda 2-2 Japão em 2026-06-14.",
+                "source_url": "https://example.com/netherlands-japan-path",
+            },
+        ],
+    }
+
+    adjusted = run_brazil_monte_carlo(config)
+
+    brazil_adjustment = _team_context_adjustment(adjusted, "Brasil")
+    brazil_groups = {
+        item["correlation_group"]: item
+        for item in brazil_adjustment["correlation_adjustments"]
+    }
+    assert set(brazil_groups) == {"match_event:brasil:marrocos:2026-06-13"}
+    assert brazil_groups["match_event:brasil:marrocos:2026-06-13"]["member_families"] == [
+        "performance",
+        "recent_results",
+    ]
+    assert all(signal["correlation_group_source"] == "completed_match" for signal in brazil_adjustment["signals"])
+
+    netherlands_adjustment = _team_context_adjustment(adjusted, "Holanda")
+    netherlands_groups = {
+        item["correlation_group"]: item
+        for item in netherlands_adjustment["correlation_adjustments"]
+    }
+    assert set(netherlands_groups) == {"match_event:holanda:japao:2026-06-14"}
+    assert netherlands_groups["match_event:holanda:japao:2026-06-14"]["member_families"] == [
+        "path_context",
+        "performance",
+    ]
+    assert all(signal["correlation_group_source"] == "completed_match" for signal in netherlands_adjustment["signals"])
+
+
+def test_monte_carlo_warns_when_model_match_shock_lacks_calendar_anchor() -> None:
+    config = _completed_match_anchor_config(iterations=2000)
+    config["monte_carlo"]["team_ratings"]["Inglaterra"] = 1870
+    config["monte_carlo"]["team_context_correlation_default_rho"] = 0.7
+    config["monte_carlo"]["team_context"] = {
+        "Inglaterra": [
+            {
+                "category": "resultado_recente",
+                "rating_delta": 9.3,
+                "confidence": 1.0,
+                "correlation_group": "shock_eng_cro_2026_06_18",
+                "rationale": "Resultado recente Inglaterra 4-2 Croácia em 2026-06-18.",
+                "source_url": "https://example.com/england-croatia-result",
+            },
+        ]
+    }
+
+    adjusted = run_brazil_monte_carlo(config)
+
+    england_adjustment = _team_context_adjustment(adjusted, "Inglaterra")
+    assert england_adjustment["correlation_adjustments"] == [
+        {
+            "correlation_group": "recent_results",
+            "rho": 0.7,
+            "rating_delta": 9.3,
+            "dominant_family": "recent_results",
+            "dominant_delta": 9.3,
+            "residual_delta": 0.0,
+            "member_families": ["recent_results"],
+        }
+    ]
+    assert {
+        "team": "Inglaterra",
+        "reason": "team_context_model_match_shock_without_calendar_anchor",
+        "source_family": "recent_results",
+        "model_correlation_group_hint": "shock_eng_cro_2026_06_18",
+        "derived_match_event": "match_event:inglaterra:croacia:2026-06-18",
+    } in adjusted["team_context"]["warnings"]
+
+
 def test_monte_carlo_does_not_collapse_structural_context_into_completed_match_event() -> None:
     config = _completed_match_anchor_config(iterations=2000)
     config["monte_carlo"]["team_context_correlation_default_rho"] = 0.7

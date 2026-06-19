@@ -7,6 +7,7 @@ from worldcup_brazil.pipeline import (
     _apply_meeting_knockout_scenarios,
     _apply_meeting_match_probabilities,
     _market_title_challenge,
+    _stage_exit_distribution,
     _apply_monte_carlo_knockout_scenarios,
     _stage_confidence_intervals,
     _validate_report_coherence,
@@ -135,11 +136,64 @@ def test_market_title_challenge_flags_large_gap_without_changing_model_title() -
 
     assert challenge["triggered"] is True
     assert challenge["model_title_pct"] == 4.5
-    assert challenge["market_low_pct"] == 8.5
+    assert challenge["market_low_pct"] == 9.0
     assert challenge["market_high_pct"] == 11.0
-    assert challenge["market_mid_pct"] == 9.8
-    assert challenge["absolute_gap_pct"] == 5.3
+    assert challenge["market_mid_pct"] == 10.0
+    assert challenge["absolute_gap_pct"] == 5.5
     assert "mantem_funil_60_40" in challenge["decision"]
+
+
+def test_market_title_challenge_ignores_protagonist_questions_as_market_evidence() -> None:
+    transcript = [
+        {
+            "round": 1,
+            "question": "O mercado de título do Brasil estaria em 9%, mas o MC está em 5.1%.",
+            "responses": [
+                {
+                    "agent": "Opus 4.8",
+                    "answer": "Sem odds auditável nesta resposta; mantenho apenas o funil.",
+                    "removed_from_main": False,
+                }
+            ],
+        }
+    ]
+
+    challenge = _market_title_challenge(
+        {"titulo": 5.1},
+        transcript,
+        config={"market_title_challenge": {"enabled": True, "absolute_gap_pct": 3.0, "relative_gap_pct": 0.40}},
+    )
+
+    assert challenge["status"] == "no_market_signal"
+    assert challenge["market_low_pct"] is None
+
+
+def test_market_title_challenge_filters_model_title_leaking_into_market_band() -> None:
+    transcript = [
+        {
+            "round": 5,
+            "responses": [
+                {
+                    "agent": "Opus 4.8",
+                    "answer": (
+                        "Mantenho título em 5.1%. O mercado de título com Brasil derivando para "
+                        "8/1-10/1 implica faixa de 9% a 11% antes do overround."
+                    ),
+                    "removed_from_main": False,
+                }
+            ],
+        }
+    ]
+
+    challenge = _market_title_challenge(
+        {"titulo": 5.1},
+        transcript,
+        config={"market_title_challenge": {"enabled": True, "absolute_gap_pct": 3.0, "relative_gap_pct": 0.40}},
+    )
+
+    assert challenge["market_low_pct"] == 9.1
+    assert challenge["market_high_pct"] == 11.0
+    assert challenge["market_mid_pct"] == 10.1
 
 
 def test_market_title_challenge_ignores_small_gap_and_preserves_status() -> None:
@@ -165,6 +219,24 @@ def test_market_title_challenge_ignores_small_gap_and_preserves_status() -> None
     assert challenge["triggered"] is False
     assert challenge["status"] == "within_threshold"
     assert challenge["model_title_pct"] == 8.2
+
+
+def test_stage_exit_distribution_derives_modal_exit_from_reach_probabilities() -> None:
+    distribution = _stage_exit_distribution(
+        {
+            "16_avos": 98.3,
+            "oitavas": 59.9,
+            "quartas": 40.1,
+            "semifinal": 21.8,
+            "final": 10.9,
+            "titulo": 5.1,
+        }
+    )
+
+    assert distribution["modal_exit_stage"] == "16 avos"
+    assert distribution["modal_exit_pct"] == 38.4
+    assert distribution["exit_buckets"][1] == {"stage": "16 avos", "exit_pct": 38.4}
+    assert distribution["exit_buckets"][3] == {"stage": "quartas", "exit_pct": 18.3}
 
 
 def test_market_title_challenge_ignores_match_probability_distractors() -> None:
@@ -220,10 +292,10 @@ def test_market_title_challenge_rejects_model_probability_when_extracting_market
     )
 
     assert challenge["triggered"] is True
-    assert challenge["market_low_pct"] == 7.0
+    assert challenge["market_low_pct"] == 7.6
     assert challenge["market_high_pct"] == 9.0
-    assert challenge["market_mid_pct"] == 8.0
-    assert challenge["absolute_gap_pct"] == 3.7
+    assert challenge["market_mid_pct"] == 8.3
+    assert challenge["absolute_gap_pct"] == 4.0
 
 
 def test_market_title_challenge_uses_robust_market_band_when_model_value_leaks_from_debate() -> None:

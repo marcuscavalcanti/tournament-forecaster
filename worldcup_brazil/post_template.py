@@ -193,6 +193,25 @@ def _run_note(bundle: Any) -> str:
             "Mercado desafia o Hexa: "
             f"funil 60/40 {_pct(market_challenge.get('model_title_pct'))}; mercado {market}. Mantive funil"
         )
+    context_warning_teams: list[str] = []
+    for warning in getattr(bundle, "warnings", []) or []:
+        warning_text = str(warning or "")
+        if not (
+            "Ajuste contextual fora da faixa de revisão" in warning_text
+            or "Ajuste contextual pode estar subagrupado" in warning_text
+            or "team_context_model_match_shock_without_calendar_anchor" in warning_text
+        ):
+            continue
+        team_match = re.search(r":\s*([^:;]+?)\s+(?:teve|ficou|com|sem|gerou)", warning_text)
+        if not team_match:
+            team_match = re.search(r"\bpara\s+([^:;]+):", warning_text)
+        team = team_match.group(1).strip() if team_match else ""
+        if team and team not in context_warning_teams:
+            context_warning_teams.append(team)
+    if context_warning_teams:
+        teams = ", ".join(context_warning_teams[:3])
+        extra = " e outros" if len(context_warning_teams) > 3 else ""
+        notes.append(f"ajustes contextuais em revisão ({teams}{extra})")
     if not notes:
         return ""
     return "⚠️ Nota do run: " + "; ".join(notes) + ".\n\n"

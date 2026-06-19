@@ -273,3 +273,27 @@ def test_team_context_missing_calendar_warning_is_operator_visible_without_ratin
         "sem grupo multifamília (performance, ratings); validar completed_group_matches e correlation_group "
         "antes de publicar."
     ]
+
+
+def test_team_context_model_match_hint_without_calendar_anchor_is_operator_visible() -> None:
+    messages = _team_context_warning_messages(
+        {
+            "team_context": {
+                "warnings": [
+                    {
+                        "team": "Inglaterra",
+                        "reason": "team_context_model_match_shock_without_calendar_anchor",
+                        "source_family": "performance",
+                        "model_correlation_group_hint": "s4_england_md1",
+                        "derived_match_event": "match_event:inglaterra:argentina:undated-02-04",
+                    }
+                ]
+            }
+        }
+    )
+
+    assert messages == [
+        "Ajuste contextual sem âncora de calendário: Inglaterra teve sinal performance com hint "
+        "s4_england_md1 e evento derivado match_event:inglaterra:argentina:undated-02-04; "
+        "validar completed_group_matches antes de publicar."
+    ]

@@ -156,6 +156,28 @@ def _canonical_signal_family(category: str) -> str:
     normalized = _normalize(raw).replace("-", "_").replace("/", "_").replace(" ", "_")
     normalized = re.sub(r"_+", "_", normalized).strip("_")
 
+    if any(
+        marker in normalized
+        for marker in (
+            "resultado_recente",
+            "resultados_recentes",
+            "recent_result",
+            "recent_results",
+            "match_result",
+            "match_results",
+            "resultado_de_jogo",
+            "resultado_jogo",
+        )
+    ):
+        return "recent_results"
+    if (
+        "caminho_16_avos" in normalized
+        or "16_avos" in normalized
+        or "knockout_path" in normalized
+        or "path_context" in normalized
+        or "caminho_mata_mata" in normalized
+    ):
+        return "path_context"
     if normalized in {"recent_news", "noticias_recentes", "recent_updates"}:
         return "recent_news"
     if any(marker in normalized for marker in ("injur", "lesao", "lesoes", "corte", "cuts_news")):
@@ -225,6 +247,8 @@ EVENT_REACTIVE_SIGNAL_FAMILIES = {
     "recent_news",
     "specialized_press",
     "recent_friendlies",
+    "recent_results",
+    "path_context",
 }
 
 STRUCTURAL_SIGNAL_FAMILIES = {
@@ -232,6 +256,7 @@ STRUCTURAL_SIGNAL_FAMILIES = {
     "squad_depth",
     "tactical_cycle",
     "managerial_structure",
+    "market_value",
 }
 
 STRUCTURAL_CONTEXT_MARKERS = (
@@ -265,6 +290,7 @@ MATCH_EVENT_OPPONENT_ALIASES = {
     "espanha": ("espanha", "spain"),
     "alemanha": ("alemanha", "germany"),
     "inglaterra": ("inglaterra", "england"),
+    "croacia": ("croacia", "croácia", "croatia"),
 }
 
 
@@ -391,8 +417,6 @@ def _completed_match_anchor_group(
 
 
 def _derived_match_event_group(signal: dict[str, Any], *, team: str, source_family: str, explicit_group: Any = "") -> str | None:
-    if source_family not in EVENT_REACTIVE_SIGNAL_FAMILIES:
-        return None
     if _is_structural_context_signal(signal, source_family=source_family, explicit_group=explicit_group):
         return None
     text = _signal_text(signal, explicit_group=explicit_group)
@@ -407,7 +431,9 @@ def _derived_match_event_group(signal: dict[str, Any], *, team: str, source_fami
                 or signal.get("date")
                 or signal.get("played_at")
             )
-            date_token = _match_date_token(_normalize(explicit_date)) if explicit_date else ""
+            date_token = _match_date_token(_normalize(explicit_date)) if explicit_date else _match_date_token(text)
+            if date_token == "undated":
+                date_token = ""
             suffix = f":{date_token}" if date_token else ""
             return f"match_event:{team_key}:{opponent_key}{suffix}"
     return None
@@ -430,26 +456,13 @@ def _signal_correlation_group(
                 return normalized_raw, "structural"
         return source_family, "structural"
 
-    if source_family in EVENT_REACTIVE_SIGNAL_FAMILIES:
-        completed_anchor = _completed_match_anchor_group(
-            signal,
-            team=team,
-            completed_match_index=completed_match_index,
-        )
-        if completed_anchor:
-            return completed_anchor, "completed_match"
-        return source_family, "fallback_family"
-
-    for key in ("correlation_group", "shock_id", "event_id", "context_group"):
-        raw = signal.get(key)
-        derived = _derived_match_event_group(signal, team=team, source_family=source_family, explicit_group=raw)
-        if derived:
-            return derived, "explicit"
-        if raw:
-            return _normalize(raw), "explicit"
-    derived = _derived_match_event_group(signal, team=team, source_family=source_family)
-    if derived:
-        return derived, "explicit"
+    completed_anchor = _completed_match_anchor_group(
+        signal,
+        team=team,
+        completed_match_index=completed_match_index,
+    )
+    if completed_anchor:
+        return completed_anchor, "completed_match"
     return source_family, "fallback_family"
 
 
@@ -573,12 +586,21 @@ def _apply_team_context_adjustments(config: dict[str, Any], ratings: dict[str, f
         if category != source_family:
             rendered_signal["original_category"] = category
         raw_group_hint = _raw_correlation_group_hint(signal)
+        derived_match_hint = _derived_match_event_group(
+            signal,
+            team=team,
+            source_family=source_family,
+            explicit_group=raw_group_hint or "",
+        )
+        if raw_group_hint and _normalize(raw_group_hint) != correlation_group:
+            rendered_signal["model_correlation_group_hint"] = _normalize(raw_group_hint)
+        if derived_match_hint and derived_match_hint != correlation_group:
+            rendered_signal["model_match_event_hint"] = derived_match_hint
         if (
             correlation_group_source == "completed_match"
             and raw_group_hint
             and _normalize(raw_group_hint) != correlation_group
         ):
-            rendered_signal["model_correlation_group_hint"] = _normalize(raw_group_hint)
             rendered_signal["correlation_group_override_reason"] = "completed_match_overrode_model_hint"
         bucket["signals"].append(rendered_signal)
         source_families.add(source_family)
@@ -619,7 +641,7 @@ def _apply_team_context_adjustments(config: dict[str, Any], ratings: dict[str, f
         completed_anchor_signals = [
             signal for signal in bucket["signals"]
             if signal.get("correlation_group_source") == "completed_match"
-            and signal.get("category") in EVENT_REACTIVE_SIGNAL_FAMILIES
+            and signal.get("category") not in STRUCTURAL_SIGNAL_FAMILIES
         ]
         completed_anchor_families = {str(signal["category"]) for signal in completed_anchor_signals}
         if len(completed_anchor_families) > 1 and not completed_multi_family_groups:
@@ -633,7 +655,7 @@ def _apply_team_context_adjustments(config: dict[str, Any], ratings: dict[str, f
         fallback_reactive_families = {
             str(signal["category"])
             for signal in bucket["signals"]
-            if signal.get("category") in EVENT_REACTIVE_SIGNAL_FAMILIES
+            if signal.get("category") not in STRUCTURAL_SIGNAL_FAMILIES
             and signal.get("correlation_group_source") != "completed_match"
         }
         if len(fallback_reactive_families) > 1 and not completed_anchor_signals:
@@ -644,6 +666,21 @@ def _apply_team_context_adjustments(config: dict[str, Any], ratings: dict[str, f
                     "source_families": sorted(fallback_reactive_families),
                 }
             )
+        for signal in bucket["signals"]:
+            if (
+                signal.get("category") not in STRUCTURAL_SIGNAL_FAMILIES
+                and signal.get("correlation_group_source") != "completed_match"
+                and signal.get("model_match_event_hint")
+            ):
+                warnings.append(
+                    {
+                        "team": team,
+                        "reason": "team_context_model_match_shock_without_calendar_anchor",
+                        "source_family": str(signal["category"]),
+                        "model_correlation_group_hint": signal.get("model_correlation_group_hint"),
+                        "derived_match_event": signal.get("model_match_event_hint"),
+                    }
+                )
         bucket["rating_delta"] = sum(float(item["rating_delta"]) for item in correlation_adjustments)
         bounded_team_delta = max(-max_team_delta, min(max_team_delta, float(bucket["rating_delta"])))
         if abs(bounded_team_delta) > warning_delta:

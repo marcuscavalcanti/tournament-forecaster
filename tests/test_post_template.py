@@ -380,6 +380,21 @@ def test_template_post_includes_change_bullets_when_previous_bundle_is_available
     assert "Esse mapa muda a cada rodada" not in text
 
 
+def test_template_post_surfaces_team_context_warnings_in_run_note() -> None:
+    bundle = _bundle()
+    bundle.warnings = [
+        "Ajuste contextual fora da faixa de revisão: Suécia teve +46.5 pontos de rating, acima do limiar 40.0; validar se há dupla contagem ou reação excessiva antes de publicar.",
+        "Ajuste contextual pode estar subagrupado: Inglaterra teve sinal de resultado sem calendário concluído.",
+    ]
+
+    text = render_template_post(bundle, post_index=1, run_date=date(2026, 6, 11))
+
+    assert "⚠️ Nota do run:" in text
+    assert "ajustes contextuais em revisão" in text
+    assert "Suécia" in text
+    assert "Inglaterra" in text
+
+
 def test_validate_rejects_unresolved_placeholder_and_oversize() -> None:
     bundle = _bundle()
     good = render_template_post(bundle, post_index=1, run_date=date(2026, 6, 11))
