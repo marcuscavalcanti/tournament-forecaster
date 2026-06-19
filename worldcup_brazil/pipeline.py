@@ -2806,6 +2806,7 @@ def _market_title_challenge(
     meeting_transcript: list[dict[str, Any]],
     *,
     config: dict[str, Any],
+    source_texts: list[tuple[str, str]] | None = None,
 ) -> dict[str, Any]:
     settings = _market_title_challenge_config(config)
     model_title_pct = round(float(stage_probabilities.get("titulo", 0.0) or 0.0), 1)
@@ -2829,7 +2830,7 @@ def _market_title_challenge(
 
     candidates: list[float] = []
     evidence: list[dict[str, str]] = []
-    for label, text in _iter_market_title_texts(meeting_transcript):
+    for label, text in [*_iter_market_title_texts(meeting_transcript), *(source_texts or [])]:
         values = _market_title_values_from_text(text, config=config)
         values = [value for value in values if abs(float(value) - model_title_pct) >= 0.05]
         if not values:
@@ -2865,6 +2866,24 @@ def _market_title_challenge(
         "relative_gap_pct": relative_gap,
         "evidence": evidence,
     }
+
+
+def _market_title_source_texts_from_opinions(opinions: list[Any]) -> list[tuple[str, str]]:
+    texts: list[tuple[str, str]] = []
+    for opinion in opinions or []:
+        agent = str(getattr(opinion, "agent", "") or "modelo").strip() or "modelo"
+        chunks = [
+            str(getattr(opinion, "summary", "") or "").strip(),
+            str(getattr(opinion, "opening_argument", "") or "").strip(),
+            str(getattr(opinion, "critique", "") or "").strip(),
+            str(getattr(opinion, "adjustment", "") or "").strip(),
+            " ".join(str(item) for item in (getattr(opinion, "source_queries", []) or [])),
+            " ".join(str(item) for item in (getattr(opinion, "source_urls", []) or [])),
+        ]
+        text = " ".join(chunk for chunk in chunks if chunk)
+        if text:
+            texts.append((f"planejamento {agent}", text))
+    return texts
 
 
 def _market_title_challenge_warning(challenge: dict[str, Any]) -> str:
@@ -8731,6 +8750,7 @@ async def build_report_bundle(
         stage_probabilities,
         meeting_transcript,
         config=config,
+        source_texts=_market_title_source_texts_from_opinions(active_planning_opinions),
     )
     market_title_warning = _market_title_challenge_warning(market_title_challenge)
     if market_title_warning:

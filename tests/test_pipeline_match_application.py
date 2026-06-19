@@ -196,6 +196,65 @@ def test_market_title_challenge_filters_model_title_leaking_into_market_band() -
     assert challenge["market_mid_pct"] == 10.1
 
 
+def test_market_title_challenge_filters_exact_model_title_from_run_846_pattern() -> None:
+    transcript = [
+        {
+            "round": 2,
+            "responses": [
+                {
+                    "agent": "Opus 4.8",
+                    "answer": (
+                        "Aceito o título em ~5,1%. Além disso, o mercado fresco Squawka/Flashscore, "
+                        "18/jun: Brasil 8/1→10/1, implica título bruto ~7-9%, acima do MC; "
+                        "o sinal externo empurra o título para cima, não para baixo."
+                    ),
+                    "removed_from_main": False,
+                }
+            ],
+        },
+        {
+            "round": 6,
+            "responses": [
+                {
+                    "agent": "DeepSeek V4 Pro",
+                    "answer": (
+                        "Concordo com 5,1% do Modelo Principal; a divergência entre a chance de título "
+                        "implícita no mercado (~8-11%) e os 5,1% do Monte Carlo decorre do overround."
+                    ),
+                    "removed_from_main": False,
+                }
+            ],
+        },
+    ]
+
+    challenge = _market_title_challenge(
+        {"titulo": 5.1},
+        transcript,
+        config={"market_title_challenge": {"enabled": True, "absolute_gap_pct": 3.0, "relative_gap_pct": 0.40}},
+    )
+
+    assert challenge["market_low_pct"] > 5.1
+    assert challenge["market_mid_pct"] >= 7.0
+
+
+def test_market_title_challenge_uses_source_planning_texts_when_meeting_omits_market() -> None:
+    challenge = _market_title_challenge(
+        {"titulo": 5.1},
+        [{"round": 1, "responses": []}],
+        config={"market_title_challenge": {"enabled": True, "absolute_gap_pct": 3.0, "relative_gap_pct": 0.40}},
+        source_texts=[
+            (
+                "planejamento Opus 4.8",
+                "Mercado de título do Brasil: odds 8/1 a 10/1 nas casas, leitura perto de 9-11%.",
+            )
+        ],
+    )
+
+    assert challenge["triggered"] is True
+    assert challenge["market_low_pct"] >= 8.0
+    assert challenge["evidence"][0]["source"] == "planejamento Opus 4.8"
+
+
 def test_market_title_challenge_ignores_small_gap_and_preserves_status() -> None:
     transcript = [
         {
