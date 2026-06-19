@@ -76,6 +76,8 @@ def _source_count(opinion: AgentOpinion) -> int:
 
 
 def _consensus_weight(agent: str, opinion: AgentOpinion) -> float:
+    if not bool(getattr(opinion, "numeric_vote_usable", True)):
+        return 0.0
     if _looks_removed_or_unusable(opinion):
         return 0.0
     if opinion.used_fallback and _source_count(opinion) == 0:
@@ -111,6 +113,8 @@ class AgentOpinion:
     removed_from_main: bool = False
     removal_reason: str = ""
     validation_issues: list[dict] = None
+    numeric_vote_usable: bool = True
+    evidence_usable: bool = False
 
     def __post_init__(self) -> None:
         if self.source_urls is None:

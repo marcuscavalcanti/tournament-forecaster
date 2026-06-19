@@ -637,6 +637,36 @@ def test_post_repair_policy_suspected_does_not_mask_impossible_bracket() -> None
     )
 
 
+def test_removed_meeting_response_can_keep_sources_but_not_numeric_vote() -> None:
+    config = load_config(Path("config/worldcup_brazil.example.json"))
+    opinion = AgentOpinion(
+        agent="DeepSeek V4 Pro",
+        title_pct=5.1,
+        summary="Citou adversário impossível nas oitavas.",
+        answer="Oitavas: Japão seria o adversário mais provável, com mercado favorável ao Brasil.",
+        source_urls=["https://example.com/odds"],
+    )
+
+    sanitized = _sanitize_main_meeting_opinions(
+        [opinion],
+        baseline_title_pct=5.0,
+        config={**config, "require_auditable_source_urls_for_meeting_votes": True},
+    )
+
+    assert sanitized[0].removed_from_main is True
+    assert sanitized[0].numeric_vote_usable is False
+    assert sanitized[0].evidence_usable is True
+    consensus = build_consensus(
+        [
+            sanitized[0],
+            AgentOpinion(agent="Opus 4.8", title_pct=5.0, summary="válido"),
+            AgentOpinion(agent="GPT 5.5", title_pct=5.0, summary="válido"),
+        ],
+        agent_slots=["DeepSeek V4 Pro", "Opus 4.8", "GPT 5.5"],
+    )
+    assert consensus.title_pct == 5.0
+
+
 def test_meeting_coverage_requires_group_knockout_and_title_before_consensus_close() -> None:
     config = {
         "group_matches": [{"opponent": "Marrocos"}, {"opponent": "Haiti"}, {"opponent": "Escócia"}],

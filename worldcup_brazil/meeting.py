@@ -24,6 +24,8 @@ class MeetingResponse:
     match_probabilities: dict[str, float] = None
     scenario_probabilities: dict[str, float] = None
     validation_issues: list[dict[str, Any]] = None
+    numeric_vote_usable: bool = True
+    evidence_usable: bool = False
 
 
 def _support_score(
@@ -109,6 +111,8 @@ def _opinion_text(opinion: Any) -> str:
 
 
 def _counts_as_consensus_participant(opinion: Any) -> bool:
+    if not bool(getattr(opinion, "numeric_vote_usable", True)):
+        return False
     if bool(getattr(opinion, "removed_from_main", False)):
         return False
     used_fallback = bool(getattr(opinion, "used_fallback", False))
@@ -119,6 +123,8 @@ def _counts_as_consensus_participant(opinion: Any) -> bool:
 
 
 def _turn_response_counts_for_acceptance(response: dict[str, Any]) -> bool:
+    if not bool(response.get("numeric_vote_usable", True)):
+        return False
     if bool(response.get("removed_from_main", False)):
         return False
     if _looks_unusable(str(response.get("answer", ""))):
@@ -129,6 +135,8 @@ def _turn_response_counts_for_acceptance(response: dict[str, Any]) -> bool:
 
 
 def _meeting_response_counts_for_spread(response: MeetingResponse) -> bool:
+    if not response.numeric_vote_usable:
+        return False
     if response.removed_from_main:
         return False
     if _looks_unusable(response.answer):
@@ -308,6 +316,8 @@ def build_meeting_turn(
                 match_probabilities=dict(getattr(opinion, "match_probabilities", {}) or {}),
                 scenario_probabilities=dict(getattr(opinion, "scenario_probabilities", {}) or {}),
                 validation_issues=list(getattr(opinion, "validation_issues", []) or []),
+                numeric_vote_usable=bool(getattr(opinion, "numeric_vote_usable", True)),
+                evidence_usable=bool(getattr(opinion, "evidence_usable", False)),
             )
         )
 
@@ -340,6 +350,8 @@ def build_meeting_turn(
                 "removed_from_main": response.removed_from_main,
                 "removal_reason": response.removal_reason,
                 "validation_issues": response.validation_issues or [],
+                "numeric_vote_usable": response.numeric_vote_usable,
+                "evidence_usable": response.evidence_usable,
                 "leadership_bid": response.leadership_bid,
                 "proposed_next_question": response.proposed_next_question,
                 "leadership_rationale": response.leadership_rationale,

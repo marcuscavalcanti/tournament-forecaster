@@ -4527,6 +4527,12 @@ def _sanitize_main_meeting_opinions(
         primary_issue = terminal_issues[0] if terminal_issues else validation_issues[0]
         removal_reason = _issue_text_from_reason(str(primary_issue.get("offending_excerpt") or ""))
         matched_rule = str(primary_issue.get("matched_rule") or "")
+        sanitized_source_urls = [
+            url for url in (getattr(opinion, "source_urls", []) or []) if not _has_opta_marker(url)
+        ]
+        sanitized_source_queries = [
+            query for query in (getattr(opinion, "source_queries", []) or []) if not _has_opta_marker(query)
+        ]
         if matched_rule == "reserved_benchmark_opta":
             removal_reason = "tentar usar benchmark reservado"
         elif matched_rule == "impossible_bracket_opponent":
@@ -4553,12 +4559,8 @@ def _sanitize_main_meeting_opinions(
                 ),
                 critique="",
                 adjustment="",
-                source_urls=[
-                    url for url in (getattr(opinion, "source_urls", []) or []) if not _has_opta_marker(url)
-                ],
-                source_queries=[
-                    query for query in (getattr(opinion, "source_queries", []) or []) if not _has_opta_marker(query)
-                ],
+                source_urls=sanitized_source_urls,
+                source_queries=sanitized_source_queries,
                 match_probabilities={},
                 scenario_probabilities={},
                 agrees_with_protagonist=None,
@@ -4569,6 +4571,8 @@ def _sanitize_main_meeting_opinions(
                 removed_from_main=True,
                 removal_reason=removal_reason,
                 validation_issues=validation_issues,
+                numeric_vote_usable=False,
+                evidence_usable=bool(sanitized_source_urls or sanitized_source_queries),
             )
         )
     return sanitized
