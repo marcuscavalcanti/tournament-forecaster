@@ -16,6 +16,7 @@ from worldcup_brazil.pipeline import (
     _repair_invalid_meeting_responses,
     _run_model_meeting,
     _sanitize_main_meeting_opinions,
+    _should_force_exact_mc_challenger,
     load_config,
 )
 
@@ -1493,3 +1494,112 @@ def test_consensus_reached_requires_more_than_a_short_three_round_exchange() -> 
 
     assert consensus_reached(consensus, round_index=3, minimum_rounds=6, threshold_pct=2.0, last_turn=accepted_turn) is False
     assert consensus_reached(consensus, round_index=6, minimum_rounds=6, threshold_pct=2.0, last_turn=accepted_turn) is True
+
+
+def test_should_force_exact_monte_carlo_challenger_after_repeated_echo_consensus() -> None:
+    transcript = [
+        {"round": 1, "consensus_title_pct": 5.1, "consensus_spread_pct": 0.0},
+        {"round": 2, "consensus_title_pct": 5.1, "consensus_spread_pct": 0.0},
+    ]
+    config = {
+        "_monte_carlo_result": {"stage_probabilities": {"titulo": 5.1}},
+        "meeting_require_challenger_when_exact_mc_consensus": True,
+        "meeting_exact_mc_consensus_rounds_before_challenge": 2,
+    }
+
+    assert _should_force_exact_mc_challenger(transcript, config) is True
+
+
+def test_should_not_force_exact_monte_carlo_challenger_when_models_move_title() -> None:
+    transcript = [
+        {"round": 1, "consensus_title_pct": 5.1, "consensus_spread_pct": 0.0},
+        {"round": 2, "consensus_title_pct": 6.0, "consensus_spread_pct": 0.0},
+    ]
+    config = {
+        "_monte_carlo_result": {"stage_probabilities": {"titulo": 5.1}},
+        "meeting_require_challenger_when_exact_mc_consensus": True,
+        "meeting_exact_mc_consensus_rounds_before_challenge": 2,
+    }
+
+    assert _should_force_exact_mc_challenger(transcript, config) is False
+
+
+def test_model_meeting_forces_challenger_before_exiting_on_exact_monte_carlo_echo(monkeypatch) -> None:
+    config = {
+        "group_matches": [{"opponent": "Marrocos"}],
+        "knockout_matches": [{"phase": "16 avos", "opponent": "Japão"}],
+        "meeting_max_rounds": 3,
+        "meeting_min_rounds": 1,
+        "meeting_min_participants": 2,
+        "meeting_consensus_threshold_pct": 10.0,
+        "meeting_require_peer_acceptance": False,
+        "meeting_require_full_path_coverage": False,
+        "require_auditable_source_urls_for_meeting_votes": False,
+        "meeting_require_challenger_when_exact_mc_consensus": True,
+        "meeting_exact_mc_consensus_rounds_before_challenge": 1,
+        "_monte_carlo_result": {"stage_probabilities": {"titulo": 5.1}},
+    }
+    agent_specs = [
+        AgentSpec(
+            slot="GPT 5.5",
+            provider="openai",
+            model="gpt-5.5",
+            env_api_key="OPENAI_API_KEY",
+            endpoint="https://api.openai.com/v1/responses",
+        ),
+        AgentSpec(
+            slot="Perplexity Pro",
+            provider="openai-compatible",
+            model="sonar-pro",
+            env_api_key="PERPLEXITY_API_KEY",
+            endpoint="https://api.perplexity.ai/chat/completions",
+        ),
+    ]
+    planning_opinions = [
+        AgentOpinion(agent="GPT 5.5", title_pct=5.1, summary="Planejou fontes."),
+        AgentOpinion(agent="Perplexity Pro", title_pct=5.1, summary="Planejou fontes."),
+    ]
+
+    async def fake_call_agent(*args, **kwargs):
+        return AgentOpinion(
+            agent="GPT 5.5",
+            title_pct=5.1,
+            summary="Pergunta ecoa o MC.",
+            question="Concordam em manter exatamente 5,1% do Monte Carlo?",
+            answer="O Monte Carlo já resume o caminho; manteria 5,1%.",
+            source_queries=["Brazil title odds Monte Carlo"],
+            agrees_with_protagonist=True,
+        )
+
+    async def fake_call_all_agents(*args, **kwargs):
+        return [
+            AgentOpinion(
+                agent="Perplexity Pro",
+                title_pct=5.1,
+                summary="Aceito exatamente o MC.",
+                answer="Concordo integralmente com 5,1%; sem correção.",
+                source_queries=["Brazil title odds"],
+                agrees_with_protagonist=True,
+            )
+        ]
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_agent", fake_call_agent)
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+
+    _consensus, _opinions, transcript, _all_opinions = asyncio.run(
+        _run_model_meeting(
+            config=config,
+            planning_opinions=planning_opinions,
+            generated_at=datetime(2026, 6, 19, tzinfo=timezone.utc),
+            agent_specs=agent_specs,
+            baseline_title_pct=5.1,
+            allow_agent_fallback=True,
+            watchdog=None,
+        )
+    )
+
+    assert len(transcript) == 2
+    assert transcript[0]["exact_mc_challenge"]["required"] is True
+    assert transcript[0]["exact_mc_challenge"]["satisfied"] is False
+    assert transcript[1]["forced_exact_mc_challenge_question"] is True
+    assert "papel de challenger" in transcript[1]["question"]

@@ -5742,6 +5742,54 @@ def _numeric_chairman_metadata(
     }
 
 
+def _should_force_exact_mc_challenger(
+    meeting_transcript: list[dict[str, Any]],
+    config: dict[str, Any],
+    *,
+    challenge_already_satisfied: bool = False,
+) -> bool:
+    if challenge_already_satisfied:
+        return False
+    if not bool(config.get("meeting_require_challenger_when_exact_mc_consensus", True)):
+        return False
+    needed = max(1, int(config.get("meeting_exact_mc_consensus_rounds_before_challenge", 2)))
+    if len(meeting_transcript) < needed:
+        return False
+    monte_carlo_result = config.get("_monte_carlo_result")
+    if not isinstance(monte_carlo_result, dict):
+        return False
+    stages = monte_carlo_result.get("stage_probabilities") or {}
+    if "titulo" not in stages:
+        return False
+    mc_title = round(float(stages.get("titulo", 0.0) or 0.0), 1)
+    recent = meeting_transcript[-needed:]
+    def _turn_float(turn: dict[str, Any], key: str, default: float) -> float:
+        value = turn.get(key, default)
+        if value is None:
+            return default
+        return float(value)
+
+    return all(
+        round(_turn_float(turn, "consensus_title_pct", -999.0), 1) == mc_title
+        and _turn_float(turn, "consensus_spread_pct", 999.0) <= 0.2
+        for turn in recent
+    )
+
+
+def _exact_mc_challenger_prompt(config: dict[str, Any]) -> str:
+    mc_title = (
+        ((config.get("_monte_carlo_result") or {}).get("stage_probabilities") or {}).get("titulo")
+        if isinstance(config.get("_monte_carlo_result"), dict)
+        else None
+    )
+    title_text = f"{float(mc_title):.1f}%" if mc_title is not None else "o número do Monte Carlo"
+    return (
+        f"A sala está aceitando exatamente {title_text} do Monte Carlo. Antes de sair, faça papel de challenger: "
+        "qual premissa moveria o título pelo menos 1 p.p. para cima ou para baixo? Teste mercado, posição no Grupo C, "
+        "adversário 2F e team_context. Se nada mover, diga por quê com fonte e peça consenso explicitamente."
+    )
+
+
 async def _run_model_meeting(
     *,
     config: dict[str, Any],
@@ -5827,6 +5875,8 @@ async def _run_model_meeting(
     reentry_skip_announced: dict[str, str] = {}
     last_invalid_issues: dict[str, list[dict[str, Any]]] = {}
     forced_coverage_question: str | None = None
+    forced_exact_mc_challenge_question: str | None = None
+    exact_mc_challenge_satisfied = False
 
     if watchdog:
         watchdog.start("model_meeting", detail=f"starting dynamic meeting with protagonist {protagonist}")
@@ -6133,6 +6183,7 @@ async def _run_model_meeting(
                     detail=f"question_phase; round={round_index}; agent={protagonist}; elapsed_ms={elapsed_ms}",
                     extra={"phase": "question", "round": round_index, "agent": protagonist, "elapsed_ms": elapsed_ms},
                 )
+        exact_mc_challenge_question_active = False
         if forced_coverage_question:
             original_question = question
             question = forced_coverage_question
@@ -6152,6 +6203,28 @@ async def _run_model_meeting(
                     "model_room",
                     "coverage_followup",
                     detail="moderador substituiu a pauta por cobertura obrigatória faltante",
+                        extra={"round": round_index, "question": question, "original_question": original_question},
+                )
+        elif forced_exact_mc_challenge_question:
+            original_question = question
+            question = forced_exact_mc_challenge_question
+            forced_exact_mc_challenge_question = None
+            exact_mc_challenge_question_active = True
+            invalid_question_reason = None
+            if question_opinion is not None:
+                question_opinion = replace(
+                    question_opinion,
+                    question=question,
+                    answer=(
+                        "Moderador redirecionou a rodada para challenger anti-eco do Monte Carlo. "
+                        f"Pergunta original do protagonista: {original_question}"
+                    ),
+                )
+            if watchdog:
+                watchdog.event(
+                    "model_room",
+                    "exact_mc_challenge_question",
+                    detail="moderador substituiu a pauta por challenger porque a sala ecoou exatamente o MC",
                     extra={"round": round_index, "question": question, "original_question": original_question},
                 )
         question_was_fallback = (
@@ -6380,6 +6453,14 @@ async def _run_model_meeting(
         turn["coverage"] = _meeting_coverage_report([*meeting_transcript, turn], config)
         if last_round_consensus_valid:
             last_valid_coverage_complete = bool(turn.get("coverage", {}).get("complete", False))
+        if exact_mc_challenge_question_active:
+            exact_mc_challenge_satisfied = True
+            turn["forced_exact_mc_challenge_question"] = True
+            turn["exact_mc_challenge"] = {
+                "required": False,
+                "satisfied": True,
+                "reason": "rodada challenger executada antes da saída por consenso",
+            }
         meeting_transcript.append(turn)
         if progress_sink is not None:
             progress_sink["pending_round"] = None
@@ -6621,6 +6702,45 @@ async def _run_model_meeting(
             active_slots=active_slots,
             report_coherence_error=report_coherence_error,
         )
+        exact_mc_challenge_due = _should_force_exact_mc_challenger(
+            meeting_transcript,
+            config,
+            challenge_already_satisfied=exact_mc_challenge_satisfied,
+        )
+        if exact_mc_challenge_due:
+            forced_exact_mc_challenge_question = _exact_mc_challenger_prompt(config)
+            turn["exact_mc_challenge"] = {
+                "required": True,
+                "satisfied": False,
+                "reason": "consenso recente repetiu exatamente o título do Monte Carlo com dispersão nula",
+            }
+            fast_path_meta = turn.get("llm_council_fast_path")
+            if isinstance(fast_path_meta, dict):
+                blocked = list(fast_path_meta.get("blocked_reasons", []) or [])
+                if "exact_mc_challenge_required" not in blocked:
+                    blocked.append("exact_mc_challenge_required")
+                fast_path_meta["blocked_reasons"] = blocked
+                fast_path_meta["eligible"] = False
+                fast_path_meta["acted_on_decision"] = False
+            if watchdog:
+                watchdog.event(
+                    "model_room",
+                    "exact_mc_challenge",
+                    detail=(
+                        "consenso está ecoando exatamente o Monte Carlo; próxima rodada força challenger "
+                        "antes de permitir saída"
+                    ),
+                    extra={"round": round_index, "question": forced_exact_mc_challenge_question},
+                )
+        else:
+            turn.setdefault(
+                "exact_mc_challenge",
+                {
+                    "required": False,
+                    "satisfied": bool(exact_mc_challenge_satisfied),
+                    "reason": "",
+                },
+            )
         if bool(turn["llm_council_fast_path"].get("acted_on_decision", False)):
             exited_with_consensus = True
             object.__setattr__(consensus, "exit_status", "fast_path_consensus")
@@ -6647,7 +6767,7 @@ async def _run_model_meeting(
         else:
             stable_rounds = 0
         previous_consensus_title = float(consensus.title_pct)
-        if consensus_ready and coverage_ok:
+        if consensus_ready and coverage_ok and not exact_mc_challenge_due:
             await _ensure_blind_peer_review_for_turn(
                 turn,
                 mode="consensus_exit_candidate",
@@ -6681,7 +6801,7 @@ async def _run_model_meeting(
                 continue
             exited_with_consensus = True
             break
-        if stable_rounds >= stability_rounds_required:
+        if stable_rounds >= stability_rounds_required and not exact_mc_challenge_due:
             await _ensure_blind_peer_review_for_turn(
                 turn,
                 mode="stable_exit_candidate",
