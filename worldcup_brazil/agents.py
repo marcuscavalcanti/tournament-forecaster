@@ -1670,6 +1670,8 @@ def _agent_preflight_prompt(slot: str, *, contract: bool = False) -> str:
         "Use JSON estrito com: ok, message, self_identification{name,version}, title_pct, summary, "
         "source_urls, source_queries. Inclua ao menos uma source_url ou source_query não-Opta que você usaria "
         "para checar Brasil, Marrocos, odds/ratings/Sofascore/lesões e chaveamento 16 avos. "
+        "Aqui, 'source'/'fonte' significa fonte de informação esportiva verificável: URL HTTP ou consulta de busca; "
+        "não significa fonte tipográfica, camisa, uniforme, design, Instagram/Reels ou identidade visual. "
         "Dados da Opta não contam e não devem aparecer em source_urls/source_queries. "
         "title_pct deve ser número simples. "
         f"Slot configurado: {slot}."
@@ -1705,6 +1707,34 @@ def _preflight_contract_error(payload: dict[str, Any]) -> str:
     if not summary:
         return "contrato mínimo incompleto: summary/message ausente"
     return ""
+
+
+def is_recoverable_preflight_contract_failure(result: AgentPreflightResult) -> bool:
+    """Preflight contract misses are warnings; provider/runtime failures still exclude.
+
+    The full source-planning round has the real repair and validation machinery. A model
+    that answered the smoke call but omitted a field should not be removed before that
+    machinery can run; API/quota/timeouts remain hard failures.
+    """
+    if result.ok:
+        return False
+    return str(result.error or "").strip().lower().startswith("contrato mínimo incompleto:")
+
+
+def preflight_exclusion_slots(results: list[AgentPreflightResult]) -> list[str]:
+    return [
+        result.slot
+        for result in results
+        if not result.ok and not is_recoverable_preflight_contract_failure(result)
+    ]
+
+
+def preflight_warning_slots(results: list[AgentPreflightResult]) -> list[str]:
+    return [
+        result.slot
+        for result in results
+        if is_recoverable_preflight_contract_failure(result)
+    ]
 
 
 def run_agent_preflight(
@@ -1785,7 +1815,7 @@ def render_agent_preflight_stdout(results: list[AgentPreflightResult]) -> str:
     if not results:
         lines.append("[WARN] nenhum agente configurado para testar")
     for result in results:
-        status = "OK" if result.ok else "FAIL"
+        status = "OK" if result.ok else ("WARN" if is_recoverable_preflight_contract_failure(result) else "FAIL")
         identity = " / ".join(
             item
             for item in [
@@ -1804,10 +1834,15 @@ def render_agent_preflight_stdout(results: list[AgentPreflightResult]) -> str:
         if result.error:
             lines.append(f"      erro={result.error[:240]}")
     ok_count = sum(1 for result in results if result.ok)
+    warning_count = sum(1 for result in results if is_recoverable_preflight_contract_failure(result))
+    hard_fail_count = len(results) - ok_count - warning_count
     lines.extend(
         [
             border,
-            f"Resumo: {ok_count}/{len(results)} modelo(s) responderam ao smoke test.",
+            (
+                f"Resumo: {ok_count}/{len(results)} OK; "
+                f"{warning_count} aviso(s) recuperável(eis); {hard_fail_count} falha(s) dura(s)."
+            ),
             border,
             "",
         ]

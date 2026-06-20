@@ -1115,6 +1115,125 @@ def test_pre_meeting_repairs_policy_suspected_slot_even_above_quorum_floor(
     assert captured["reentry_slots"] == []
 
 
+def test_pre_meeting_repairs_off_scope_perplexity_sources_even_above_quorum_floor(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls = {"source_planning": 0, "repair": 0}
+    captured: dict[str, object] = {}
+
+    async def fake_call_all_agents(prompt, *, specs, **kwargs):
+        if "RODADA DE REPARO" in str(prompt):
+            calls["repair"] += 1
+            assert [spec.slot for spec in specs] == ["Perplexity Pro"]
+            assert "fontes visuais/tipográficas" in prompt
+            return [
+                AgentOpinion(
+                    agent="Perplexity Pro",
+                    title_pct=8.1,
+                    summary="Reparo: fontes esportivas verificáveis para odds, Elo, lesões e desempenho.",
+                    source_urls=["https://example.com/perplexity-odds"],
+                    source_queries=["Brazil World Cup 2026 odds Elo injuries Sofascore"],
+                )
+            ]
+        calls["source_planning"] += 1
+        return [
+            AgentOpinion(
+                agent="Opus 4.8",
+                title_pct=8.0,
+                summary="Plano com fonte verificável.",
+                source_urls=["https://example.com/opus"],
+            ),
+            AgentOpinion(
+                agent="GPT 5.5",
+                title_pct=8.0,
+                summary="Plano com fonte verificável.",
+                source_urls=["https://example.com/gpt"],
+            ),
+            AgentOpinion(
+                agent="Perplexity Pro",
+                title_pct=8.1,
+                summary=(
+                    "Proponho três caminhos de fontes visuais frescas para a numeração/tipografia "
+                    "do Brasil na Copa 2026."
+                ),
+                source_urls=[
+                    "https://www.instagram.com/reel/DV68NOON6FD/",
+                    "https://www.youtube.com/watch?v=MifeSdLTMQE",
+                ],
+                source_queries=["nova fonte selecao brasileira 2026 geometria numeros"],
+            ),
+            AgentOpinion(
+                agent="DeepSeek V4 Pro",
+                title_pct=8.2,
+                summary="Plano com fonte verificável.",
+                source_urls=["https://example.com/deepseek"],
+            ),
+            AgentOpinion(
+                agent="Gemini Pro",
+                title_pct=8.3,
+                summary="Plano com fonte verificável.",
+                source_urls=["https://example.com/gemini"],
+            ),
+        ]
+
+    async def fake_run_model_meeting(
+        *,
+        config,
+        planning_opinions,
+        generated_at,
+        agent_specs,
+        baseline_title_pct,
+        allow_agent_fallback,
+        watchdog,
+        token_cost_ledger=None,
+        reentry_candidate_specs=None,
+        **_kwargs,
+    ):
+        captured["active_slots"] = [spec.slot for spec in agent_specs]
+        captured["planning_agents"] = [opinion.agent for opinion in planning_opinions]
+        captured["perplexity_sources"] = [
+            getattr(opinion, "source_urls", [])
+            for opinion in planning_opinions
+            if opinion.agent == "Perplexity Pro"
+        ][0]
+        consensus = build_consensus(planning_opinions, agent_slots=[spec.slot for spec in agent_specs])
+        return consensus, planning_opinions, [], planning_opinions
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+    monkeypatch.setattr("worldcup_brazil.pipeline._run_model_meeting", fake_run_model_meeting)
+
+    asyncio.run(
+        build_report_bundle(
+            config={
+                "baseline_title_pct": 8.0,
+                "minimum_source_ready_agents": 3,
+                "source_planning_repair_attempts": 1,
+                "meeting_min_participants": 3,
+                "parallel_opponent_debriefing_enabled": False,
+                "monte_carlo": {"enabled": False},
+                "agents": [
+                    {"slot": "Opus 4.8", "provider": "anthropic", "model": "opus", "endpoint": "x"},
+                    {"slot": "GPT 5.5", "provider": "openai", "model": "gpt-5.5", "endpoint": "x"},
+                    {"slot": "Perplexity Pro", "provider": "openai-compatible", "model": "sonar", "endpoint": "x"},
+                    {"slot": "DeepSeek V4 Pro", "provider": "openai-compatible", "model": "deepseek", "endpoint": "x"},
+                    {"slot": "Gemini Pro", "provider": "google-gemini", "model": "gemini", "endpoint": "x"},
+                ],
+                "group_matches": [{"opponent": "Marrocos", "brazil_pct": 59.0}],
+                "knockout_matches": [],
+            },
+            source_memory=SourceMemory(tmp_path / "source_memory.json"),
+            generated_at=datetime(2026, 6, 18, 12, tzinfo=timezone.utc),
+            watchdog=RunWatchdog(path=tmp_path / "watchdog.jsonl", verbose=False),
+        )
+    )
+
+    assert calls == {"source_planning": 1, "repair": 1}
+    assert "Perplexity Pro" in captured["active_slots"]
+    assert "Perplexity Pro" in captured["planning_agents"]
+    assert captured["perplexity_sources"] == ["https://example.com/perplexity-odds"]
+
+
 def test_pre_meeting_admits_unresolved_policy_suspected_after_bounded_repair(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -14,6 +14,8 @@ except ImportError:  # pragma: no cover - plataforma sem fcntl
 
 from worldcup_brazil.agents import (
     load_agent_specs_from_config,
+    preflight_exclusion_slots,
+    preflight_warning_slots,
     render_agent_preflight_stdout,
     run_agent_preflights_sync,
 )
@@ -487,7 +489,10 @@ def _run(args: argparse.Namespace) -> int:
                         ]
                     },
                 )
-            failed_preflight_slots = [result.slot for result in preflight_results if not result.ok]
+            failed_preflight_slots = preflight_exclusion_slots(preflight_results)
+            warning_preflight_slots = preflight_warning_slots(preflight_results)
+            if warning_preflight_slots:
+                config["_preflight_warning_slots"] = warning_preflight_slots
             if (
                 failed_preflight_slots
                 and not args.strict_agents

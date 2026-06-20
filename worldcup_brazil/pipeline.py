@@ -77,7 +77,10 @@ def _agent_owned_fresh_search_contract() -> str:
         "Contrato único da sala: todos os modelos recebem as mesmas regras, objetivo e escopo. "
         "O mediador não faz busca externa, não escolhe fontes, não injeta evidência e não usa cache. "
         "Cada modelo decide suas próprias fontes, faz busca atualizada no próprio canal, nunca use cache, "
-        "e registra source_urls/source_queries. Regra explícita antes da busca: dados da Opta não contam "
+        "e registra source_urls/source_queries. Aqui 'fonte/source' significa fonte de informação esportiva "
+        "verificável (URL HTTP ou consulta de busca sobre odds, rankings, desempenho, elenco, lesões, resultados "
+        "e chaveamento); não significa fonte tipográfica, camisa, uniforme, design, Instagram/Reels ou identidade visual. "
+        "Regra explícita antes da busca: dados da Opta não contam "
         "no Modelo Principal; não inclua Opta em source_urls/source_queries, não use Opta como benchmark, "
         "fonte, ranking, projeção ou âncora. Se fonte falhar, troque por equivalente fresca; não invente dado."
     )
@@ -819,8 +822,12 @@ def _source_planning_relevance_issue(opinion: Any, source_items: list[str]) -> s
     )
     source_text = _normalize_text(" ".join(source_items))
     off_topic_markers = (
+        "fonte visual",
+        "fontes visuais",
         "fonte tipografica",
         "fontes tipograficas",
+        "tipografia",
+        "tipografica",
         "fonte personalizada",
         "fontes personalizadas",
         "jersey font",
