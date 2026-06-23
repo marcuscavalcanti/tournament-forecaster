@@ -41,6 +41,20 @@ def test_agent_source_harness_entrypoint_can_be_invoked_directly() -> None:
     assert "Diagnose agent source-planning quorum" in result.stdout
 
 
+def test_update_group_results_entrypoint_can_be_invoked_directly() -> None:
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, "scripts/update_group_results.py", "--help"],
+        cwd=root,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Validate and merge completed group results" in result.stdout
+
+
 def test_opponent_room_contract_validator_passes() -> None:
     root = Path(__file__).resolve().parents[1]
     result = subprocess.run(

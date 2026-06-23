@@ -1876,7 +1876,7 @@ def _brazil_path_relevant_groups(config: dict[str, Any]) -> set[str]:
 
 def _configured_group_fixtures(config: dict[str, Any]) -> list[dict[str, Any]]:
     fixtures: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str, str]] = set()
+    seen: set[tuple[str, tuple[str, str]]] = set()
     brazil_name = str(config.get("brazil_team_name") or "Brasil").strip() or "Brasil"
 
     def add(raw: dict[str, Any], *, default_team_a: str = "", default_group: str = "") -> None:
@@ -1886,12 +1886,7 @@ def _configured_group_fixtures(config: dict[str, Any]) -> list[dict[str, Any]]:
         group = str(raw.get("group") or default_group or "").strip().upper()
         if not team_a or not team_b or not raw_date:
             return
-        key = (
-            group,
-            _normalize_text(team_a),
-            _normalize_text(team_b),
-            str(raw_date).strip(),
-        )
+        key = (group, _group_fixture_pair_key(team_a, team_b))
         if key in seen:
             return
         seen.add(key)

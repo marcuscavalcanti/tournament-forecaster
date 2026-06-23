@@ -42,6 +42,24 @@ def test_missing_past_brazil_group_results_flags_stale_fixture_before_monte_carl
     assert missing == ["Brasil x Haiti (19/jun)"]
 
 
+def test_missing_past_brazil_group_results_dedupes_group_match_against_official_fixture() -> None:
+    config = {
+        "brazil_team_name": "Brasil",
+        "brazil_group": "C",
+        "group_fixtures": [
+            {"group": "C", "team_a": "Brasil", "team_b": "Haiti", "date": "2026-06-19"},
+        ],
+        "group_matches": [
+            {"opponent": "Haiti", "date": "19/jun"},
+        ],
+        "completed_group_matches": [],
+    }
+
+    missing = _missing_past_brazil_group_results(config, date(2026, 6, 23))
+
+    assert missing == ["Brasil x Haiti (2026-06-19)"]
+
+
 def test_missing_past_brazil_group_results_does_not_require_future_fixture() -> None:
     config = {
         "brazil_team_name": "Brasil",
