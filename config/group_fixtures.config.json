@@ -1,0 +1,91 @@
+{
+  "source_documents": [
+    "DirecTV 2026 World Cup Match Schedule PDF",
+    "FIFA World Cup 2026 match schedule"
+  ],
+  "fixtures": [
+    { "group": "A", "date": "2026-06-11", "team_a": "México", "team_b": "África do Sul", "venue": "Estadio Azteca; Mexico City, MEX" },
+    { "group": "A", "date": "2026-06-11", "team_a": "Coreia do Sul", "team_b": "Tchéquia", "venue": "Estadio Akron; Guadalajara, MEX" },
+    { "group": "A", "date": "2026-06-18", "team_a": "Tchéquia", "team_b": "África do Sul", "venue": "Mercedes-Benz Stadium; Atlanta, GA" },
+    { "group": "A", "date": "2026-06-18", "team_a": "México", "team_b": "Coreia do Sul", "venue": "Estadio Akron; Guadalajara, MEX" },
+    { "group": "A", "date": "2026-06-24", "team_a": "Tchéquia", "team_b": "México", "venue": "Estadio Azteca; Mexico City, MEX" },
+    { "group": "A", "date": "2026-06-24", "team_a": "África do Sul", "team_b": "Coreia do Sul", "venue": "Estadio BBVA Bancomer; Monterrey, MEX" },
+
+    { "group": "B", "date": "2026-06-12", "team_a": "Canadá", "team_b": "Bósnia e Herzegovina", "venue": "BMO Field; Toronto, CAN" },
+    { "group": "B", "date": "2026-06-13", "team_a": "Catar", "team_b": "Suíça", "venue": "Levi's Stadium; Santa Clara, CA" },
+    { "group": "B", "date": "2026-06-18", "team_a": "Suíça", "team_b": "Bósnia e Herzegovina", "venue": "SoFi Stadium; Inglewood, CA" },
+    { "group": "B", "date": "2026-06-18", "team_a": "Canadá", "team_b": "Catar", "venue": "BC Place; Vancouver, CAN" },
+    { "group": "B", "date": "2026-06-24", "team_a": "Suíça", "team_b": "Canadá", "venue": "BC Place; Vancouver, CAN" },
+    { "group": "B", "date": "2026-06-24", "team_a": "Bósnia e Herzegovina", "team_b": "Catar", "venue": "Lumen Field; Seattle, WA" },
+
+    { "group": "C", "date": "2026-06-13", "team_a": "Brasil", "team_b": "Marrocos", "venue": "MetLife Stadium; East Rutherford, NJ" },
+    { "group": "C", "date": "2026-06-13", "team_a": "Haiti", "team_b": "Escócia", "venue": "Gillette Stadium; Foxborough, MA" },
+    { "group": "C", "date": "2026-06-19", "team_a": "Escócia", "team_b": "Marrocos", "venue": "Gillette Stadium; Foxborough, MA" },
+    { "group": "C", "date": "2026-06-19", "team_a": "Brasil", "team_b": "Haiti", "venue": "Lincoln Financial Field; Philadelphia, PA" },
+    { "group": "C", "date": "2026-06-24", "team_a": "Escócia", "team_b": "Brasil", "venue": "Hard Rock Stadium; Miami, FL" },
+    { "group": "C", "date": "2026-06-24", "team_a": "Marrocos", "team_b": "Haiti", "venue": "Mercedes-Benz Stadium; Atlanta, GA" },
+
+    { "group": "D", "date": "2026-06-12", "team_a": "Estados Unidos", "team_b": "Paraguai", "venue": "SoFi Stadium; Inglewood, CA" },
+    { "group": "D", "date": "2026-06-14", "team_a": "Austrália", "team_b": "Turquia", "venue": "BC Place; Vancouver, CAN" },
+    { "group": "D", "date": "2026-06-19", "team_a": "Estados Unidos", "team_b": "Austrália", "venue": "Lumen Field; Seattle, WA" },
+    { "group": "D", "date": "2026-06-19", "team_a": "Turquia", "team_b": "Paraguai", "venue": "Levi's Stadium; Santa Clara, CA" },
+    { "group": "D", "date": "2026-06-25", "team_a": "Turquia", "team_b": "Estados Unidos", "venue": "SoFi Stadium; Inglewood, CA" },
+    { "group": "D", "date": "2026-06-25", "team_a": "Paraguai", "team_b": "Austrália", "venue": "Levi's Stadium; Santa Clara, CA" },
+
+    { "group": "E", "date": "2026-06-14", "team_a": "Alemanha", "team_b": "Curaçau", "venue": "NRG Stadium; Houston, TX" },
+    { "group": "E", "date": "2026-06-14", "team_a": "Costa do Marfim", "team_b": "Equador", "venue": "Lincoln Financial Field; Philadelphia, PA" },
+    { "group": "E", "date": "2026-06-20", "team_a": "Alemanha", "team_b": "Costa do Marfim", "venue": "BMO Field; Toronto, CAN" },
+    { "group": "E", "date": "2026-06-20", "team_a": "Equador", "team_b": "Curaçau", "venue": "Arrowhead Stadium; Kansas City, MO" },
+    { "group": "E", "date": "2026-06-25", "team_a": "Equador", "team_b": "Alemanha", "venue": "MetLife Stadium; East Rutherford, NJ" },
+    { "group": "E", "date": "2026-06-25", "team_a": "Curaçau", "team_b": "Costa do Marfim", "venue": "Lincoln Financial Field; Philadelphia, PA" },
+
+    { "group": "F", "date": "2026-06-14", "team_a": "Holanda", "team_b": "Japão", "venue": "AT&T Stadium; Arlington, TX" },
+    { "group": "F", "date": "2026-06-14", "team_a": "Suécia", "team_b": "Tunísia", "venue": "Estadio BBVA Bancomer; Monterrey, MEX" },
+    { "group": "F", "date": "2026-06-20", "team_a": "Holanda", "team_b": "Suécia", "venue": "NRG Stadium; Houston, TX" },
+    { "group": "F", "date": "2026-06-21", "team_a": "Tunísia", "team_b": "Japão", "venue": "Estadio BBVA Bancomer; Monterrey, MEX" },
+    { "group": "F", "date": "2026-06-25", "team_a": "Tunísia", "team_b": "Holanda", "venue": "Arrowhead Stadium; Kansas City, MO" },
+    { "group": "F", "date": "2026-06-25", "team_a": "Japão", "team_b": "Suécia", "venue": "AT&T Stadium; Arlington, TX" },
+
+    { "group": "G", "date": "2026-06-15", "team_a": "Bélgica", "team_b": "Egito", "venue": "Lumen Field; Seattle, WA" },
+    { "group": "G", "date": "2026-06-15", "team_a": "Irã", "team_b": "Nova Zelândia", "venue": "SoFi Stadium; Inglewood, CA" },
+    { "group": "G", "date": "2026-06-21", "team_a": "Bélgica", "team_b": "Irã", "venue": "SoFi Stadium; Inglewood, CA" },
+    { "group": "G", "date": "2026-06-21", "team_a": "Nova Zelândia", "team_b": "Egito", "venue": "BC Place; Vancouver, CAN" },
+    { "group": "G", "date": "2026-06-26", "team_a": "Nova Zelândia", "team_b": "Bélgica", "venue": "BC Place; Vancouver, CAN" },
+    { "group": "G", "date": "2026-06-26", "team_a": "Egito", "team_b": "Irã", "venue": "Lumen Field; Seattle, WA" },
+
+    { "group": "H", "date": "2026-06-15", "team_a": "Espanha", "team_b": "Cabo Verde", "venue": "Mercedes-Benz Stadium; Atlanta, GA" },
+    { "group": "H", "date": "2026-06-15", "team_a": "Arábia Saudita", "team_b": "Uruguai", "venue": "Hard Rock Stadium; Miami, FL" },
+    { "group": "H", "date": "2026-06-21", "team_a": "Espanha", "team_b": "Arábia Saudita", "venue": "Mercedes-Benz Stadium; Atlanta, GA" },
+    { "group": "H", "date": "2026-06-21", "team_a": "Uruguai", "team_b": "Cabo Verde", "venue": "Hard Rock Stadium; Miami, FL" },
+    { "group": "H", "date": "2026-06-26", "team_a": "Uruguai", "team_b": "Espanha", "venue": "Estadio Akron; Guadalajara, MEX" },
+    { "group": "H", "date": "2026-06-26", "team_a": "Cabo Verde", "team_b": "Arábia Saudita", "venue": "NRG Stadium; Houston, TX" },
+
+    { "group": "I", "date": "2026-06-16", "team_a": "França", "team_b": "Senegal", "venue": "MetLife Stadium; East Rutherford, NJ" },
+    { "group": "I", "date": "2026-06-16", "team_a": "Iraque", "team_b": "Noruega", "venue": "Gillette Stadium; Foxborough, MA" },
+    { "group": "I", "date": "2026-06-22", "team_a": "França", "team_b": "Iraque", "venue": "Lincoln Financial Field; Philadelphia, PA" },
+    { "group": "I", "date": "2026-06-22", "team_a": "Noruega", "team_b": "Senegal", "venue": "MetLife Stadium; East Rutherford, NJ" },
+    { "group": "I", "date": "2026-06-26", "team_a": "Noruega", "team_b": "França", "venue": "Gillette Stadium; Foxborough, MA" },
+    { "group": "I", "date": "2026-06-26", "team_a": "Senegal", "team_b": "Iraque", "venue": "BMO Field; Toronto, CAN" },
+
+    { "group": "J", "date": "2026-06-16", "team_a": "Argentina", "team_b": "Argélia", "venue": "Arrowhead Stadium; Kansas City, MO" },
+    { "group": "J", "date": "2026-06-17", "team_a": "Áustria", "team_b": "Jordânia", "venue": "Levi's Stadium; Santa Clara, CA" },
+    { "group": "J", "date": "2026-06-22", "team_a": "Argentina", "team_b": "Áustria", "venue": "AT&T Stadium; Arlington, TX" },
+    { "group": "J", "date": "2026-06-22", "team_a": "Jordânia", "team_b": "Argélia", "venue": "Levi's Stadium; Santa Clara, CA" },
+    { "group": "J", "date": "2026-06-27", "team_a": "Jordânia", "team_b": "Argentina", "venue": "AT&T Stadium; Arlington, TX" },
+    { "group": "J", "date": "2026-06-27", "team_a": "Argélia", "team_b": "Áustria", "venue": "Arrowhead Stadium; Kansas City, MO" },
+
+    { "group": "K", "date": "2026-06-17", "team_a": "Portugal", "team_b": "RD Congo", "venue": "NRG Stadium; Houston, TX" },
+    { "group": "K", "date": "2026-06-17", "team_a": "Uzbequistão", "team_b": "Colômbia", "venue": "Estadio Azteca; Mexico City, MEX" },
+    { "group": "K", "date": "2026-06-23", "team_a": "Portugal", "team_b": "Uzbequistão", "venue": "NRG Stadium; Houston, TX" },
+    { "group": "K", "date": "2026-06-23", "team_a": "Colômbia", "team_b": "RD Congo", "venue": "Estadio Akron; Guadalajara, MEX" },
+    { "group": "K", "date": "2026-06-27", "team_a": "Colômbia", "team_b": "Portugal", "venue": "Hard Rock Stadium; Miami, FL" },
+    { "group": "K", "date": "2026-06-27", "team_a": "RD Congo", "team_b": "Uzbequistão", "venue": "Mercedes-Benz Stadium; Atlanta, GA" },
+
+    { "group": "L", "date": "2026-06-17", "team_a": "Inglaterra", "team_b": "Croácia", "venue": "AT&T Stadium; Arlington, TX" },
+    { "group": "L", "date": "2026-06-17", "team_a": "Gana", "team_b": "Panamá", "venue": "BMO Field; Toronto, CAN" },
+    { "group": "L", "date": "2026-06-23", "team_a": "Inglaterra", "team_b": "Gana", "venue": "Gillette Stadium; Foxborough, MA" },
+    { "group": "L", "date": "2026-06-23", "team_a": "Panamá", "team_b": "Croácia", "venue": "BMO Field; Toronto, CAN" },
+    { "group": "L", "date": "2026-06-27", "team_a": "Panamá", "team_b": "Inglaterra", "venue": "MetLife Stadium; East Rutherford, NJ" },
+    { "group": "L", "date": "2026-06-27", "team_a": "Croácia", "team_b": "Gana", "venue": "Lincoln Financial Field; Philadelphia, PA" }
+  ]
+}

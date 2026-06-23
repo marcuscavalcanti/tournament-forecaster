@@ -1914,6 +1914,50 @@ def _configured_group_fixtures(config: dict[str, Any]) -> list[dict[str, Any]]:
     return fixtures
 
 
+def _group_fixture_pair_key(team_a: str, team_b: str) -> tuple[str, str]:
+    return tuple(sorted((_normalize_text(team_a), _normalize_text(team_b))))
+
+
+def _fixture_completeness_errors(config: dict[str, Any], relevant_groups: set[str]) -> list[str]:
+    raw_group_fixtures = config.get("group_fixtures") or []
+    fixtures = [fixture for fixture in raw_group_fixtures if isinstance(fixture, dict)]
+    if not fixtures:
+        if bool(config.get("require_complete_group_fixtures", False)):
+            return ["group_fixtures ausente; calendário completo é obrigatório para validar cruzamentos"]
+        return []
+
+    groups_config = config.get("groups_config") if isinstance(config.get("groups_config"), dict) else {}
+    groups = groups_config.get("groups") if isinstance(groups_config.get("groups"), dict) else {}
+    by_group: dict[str, set[tuple[str, str]]] = {}
+    for fixture in fixtures:
+        group = str(fixture.get("group") or "").strip().upper()
+        if not group:
+            continue
+        by_group.setdefault(group, set()).add(
+            _group_fixture_pair_key(str(fixture.get("team_a") or ""), str(fixture.get("team_b") or ""))
+        )
+
+    errors: list[str] = []
+    for group in sorted(relevant_groups):
+        teams = groups.get(group, [])
+        names = [str(team.get("name") or "").strip() for team in teams if isinstance(team, dict) and str(team.get("name") or "").strip()]
+        if len(names) != 4:
+            continue
+        expected = {
+            _group_fixture_pair_key(left, right)
+            for index, left in enumerate(names)
+            for right in names[index + 1 :]
+        }
+        actual = by_group.get(group, set())
+        missing = expected - actual
+        if missing:
+            rendered = ", ".join(f"{left} x {right}" for left, right in sorted(missing)[:3])
+            errors.append(
+                f"calendário de grupo incompleto em {group}: {len(actual)}/6 jogos configurados; faltam {rendered}"
+            )
+    return errors
+
+
 def _missing_past_brazil_group_results(config: dict[str, Any], as_of: date) -> list[str]:
     """Return configured path-relevant group fixtures already in the past without a canonical score."""
     brazil_name = str(config.get("brazil_team_name") or "Brasil").strip() or "Brasil"
@@ -1950,6 +1994,13 @@ def _validate_completed_group_results_fresh(
 ) -> None:
     if bool(config.get("skip_completed_group_results_freshness_gate", False)):
         return
+    relevant_groups = _brazil_path_relevant_groups(config)
+    fixture_errors = _fixture_completeness_errors(config, relevant_groups)
+    if fixture_errors:
+        detail = "Gate de calendário de grupos falhou: " + " | ".join(fixture_errors)
+        if watchdog:
+            watchdog.fail("completed_group_results", detail=detail)
+        raise ReportCoherenceError(detail)
     missing = _missing_past_brazil_group_results(config, generated_at.date())
     if not missing:
         return
@@ -3903,13 +3954,17 @@ def _compact_source_planning_scope(config: dict[str, Any]) -> dict[str, Any]:
     ]
 
     monte_carlo_summary = monte_carlo_compact_summary(config.get("_monte_carlo_result", {"enabled": False}))
+    group_fixtures = [fixture for fixture in (config.get("group_fixtures", []) or []) if isinstance(fixture, dict)]
+    fixture_groups = sorted(
+        {
+            str(fixture.get("group") or "").strip().upper()
+            for fixture in group_fixtures
+            if str(fixture.get("group") or "").strip()
+        }
+    )
     return {
         "group_matches": [_compact_group_match_label(match) for match in _default_group_matches(config)],
-        "group_fixtures": [
-            _compact_dict(fixture, ["group", "date", "team_a", "team_b", "venue"])
-            for fixture in (config.get("group_fixtures", []) or [])
-            if isinstance(fixture, dict)
-        ],
+        "group_fixtures": {"count": len(group_fixtures), "groups": fixture_groups},
         "completed_group_matches": list(config.get("completed_group_matches", []) or []),
         "knockout_matches": [_compact_knockout_match_label(match) for match in _default_knockout_matches(config)],
         "bracket_path": bracket_path,

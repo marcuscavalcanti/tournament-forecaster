@@ -5,6 +5,8 @@
   "group_summary": "Resumo do grupo recalculado pelo Monte Carlo condicionado aos placares realizados no ledger.",
   "groups_config_path": "groups.config.json",
   "bracket_config_path": "bracket.config.json",
+  "group_fixtures_config_path": "group_fixtures.config.json",
+  "require_complete_group_fixtures": true,
   "brazil_team_name": "Brasil",
   "brazil_group": "C",
   "brazil_expected_group_position": 1,

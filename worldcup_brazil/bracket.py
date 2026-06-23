@@ -47,6 +47,17 @@ def hydrate_canonical_configs(config: dict[str, Any], *, base_dir: Path) -> None
             config["bracket_config"] = bracket_config
             config["_bracket_config_path"] = str(bracket_path)
 
+    if "group_fixtures" not in config:
+        fixtures_path = Path(str(config.get("group_fixtures_config_path", "group_fixtures.config.json")))
+        if not fixtures_path.is_absolute():
+            fixtures_path = base_dir / fixtures_path
+        fixtures_config = _load_json_if_present(fixtures_path)
+        if fixtures_config is not None:
+            fixtures = fixtures_config.get("fixtures") if isinstance(fixtures_config, dict) else None
+            if isinstance(fixtures, list):
+                config["group_fixtures"] = fixtures
+                config["_group_fixtures_config_path"] = str(fixtures_path)
+
 
 def _groups(config: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     groups_config = config.get("groups_config")

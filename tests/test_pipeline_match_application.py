@@ -133,6 +133,62 @@ def test_completed_group_results_freshness_gate_ignores_irrelevant_group_fixture
     _validate_completed_group_results_fresh(config, datetime(2026, 6, 23, 12, tzinfo=timezone.utc))
 
 
+def test_completed_group_results_freshness_gate_requires_calendar_when_configured() -> None:
+    config = {
+        "brazil_team_name": "Brasil",
+        "brazil_group": "C",
+        "require_complete_group_fixtures": True,
+        "group_matches": [
+            {"opponent": "Escócia", "date": "24/jun"},
+        ],
+        "completed_group_matches": [],
+    }
+
+    try:
+        _validate_completed_group_results_fresh(config, datetime(2026, 6, 18, 12, tzinfo=timezone.utc))
+    except ReportCoherenceError as exc:
+        assert "group_fixtures ausente" in str(exc)
+    else:
+        raise AssertionError("expected ReportCoherenceError")
+
+
+def test_completed_group_results_freshness_gate_rejects_incomplete_relevant_calendar_group() -> None:
+    config = {
+        "brazil_team_name": "Brasil",
+        "brazil_group": "C",
+        "brazil_expected_group_position": 1,
+        "groups_config": {
+            "groups": {
+                "C": [{"name": "Brasil"}, {"name": "Marrocos"}, {"name": "Haiti"}, {"name": "Escócia"}],
+                "F": [{"name": "Holanda"}, {"name": "Japão"}, {"name": "Suécia"}, {"name": "Tunísia"}],
+            }
+        },
+        "bracket_config": {
+            "round_of_32": [
+                {"match_id": 76, "slots": ["1C", "2F"]},
+            ]
+        },
+        "group_fixtures": [
+            {"group": "C", "team_a": "Brasil", "team_b": "Marrocos", "date": "2026-06-13"},
+            {"group": "C", "team_a": "Brasil", "team_b": "Haiti", "date": "2026-06-19"},
+            {"group": "C", "team_a": "Brasil", "team_b": "Escócia", "date": "2026-06-24"},
+            {"group": "C", "team_a": "Marrocos", "team_b": "Haiti", "date": "2026-06-24"},
+            {"group": "C", "team_a": "Marrocos", "team_b": "Escócia", "date": "2026-06-19"},
+            {"group": "C", "team_a": "Haiti", "team_b": "Escócia", "date": "2026-06-13"},
+            {"group": "F", "team_a": "Holanda", "team_b": "Japão", "date": "2026-06-14"},
+        ],
+        "completed_group_matches": [],
+    }
+
+    try:
+        _validate_completed_group_results_fresh(config, datetime(2026, 6, 12, 12, tzinfo=timezone.utc))
+    except ReportCoherenceError as exc:
+        assert "calendário de grupo incompleto" in str(exc)
+        assert "F" in str(exc)
+    else:
+        raise AssertionError("expected ReportCoherenceError")
+
+
 def test_apply_meeting_match_probabilities_rejects_group_win_pct_that_conflicts_with_draw_pct() -> None:
     estimate = MatchEstimate(
         brazil="Brasil",
