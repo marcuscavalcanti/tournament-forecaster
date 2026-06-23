@@ -24,10 +24,10 @@ def _write_config(path: Path) -> None:
                 "groups_config": {
                     "groups": {
                         "C": [
-                            {"name": "Brasil"},
-                            {"name": "Marrocos"},
-                            {"name": "Haiti"},
-                            {"name": "Escócia"},
+                            {"name": "Brasil", "code": "BRA"},
+                            {"name": "Marrocos", "code": "MAR"},
+                            {"name": "Haiti", "code": "HAI"},
+                            {"name": "Escócia", "code": "SCO"},
                         ]
                     }
                 },
@@ -141,6 +141,58 @@ def test_update_group_results_apply_writes_canonical_fixture_order(tmp_path: Pat
     }
 
 
+def test_update_group_results_apply_creates_local_config_when_default_falls_back_to_example(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    requested = config_dir / "worldcup_brazil.json"
+    example = config_dir / "worldcup_brazil.example.json"
+    results = tmp_path / "results.json"
+    _write_config(example)
+    before_example = example.read_text(encoding="utf-8")
+    results.write_text(
+        json.dumps(
+            [
+                {
+                    "group": "C",
+                    "team_a": "Haiti",
+                    "score_a": 0,
+                    "team_b": "Brasil",
+                    "score_b": 3,
+                    "source": "fifa",
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/update_group_results.py",
+            "--config",
+            str(requested),
+            "--results",
+            str(results),
+            "--apply",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert requested.exists()
+    assert example.read_text(encoding="utf-8") == before_example
+    summary = json.loads(result.stdout)
+    assert summary["effective_config"] == str(example)
+    assert summary["write_config"] == str(requested)
+    completed = json.loads(requested.read_text(encoding="utf-8"))["completed_group_matches"]
+    assert completed[-1]["team_a"] == "Brasil"
+    assert completed[-1]["score_a"] == 3
+
+
 def test_update_group_results_rejects_result_that_does_not_match_fixture(tmp_path: Path) -> None:
     config = tmp_path / "config.json"
     results = tmp_path / "results.json"
@@ -163,6 +215,194 @@ def test_update_group_results_rejects_result_that_does_not_match_fixture(tmp_pat
 
     assert result.returncode == 2
     assert "não casa com group_fixtures" in result.stderr
+
+
+def test_update_group_results_extracts_completed_scores_from_fifa_html(tmp_path: Path) -> None:
+    config = tmp_path / "config.json"
+    html = tmp_path / "fifa.html"
+    _write_config(config)
+    html.write_text(
+        """
+        <html><body>
+        <script id="__NEXT_DATA__" type="application/json">
+        {
+          "props": {
+            "pageProps": {
+              "pageData": {
+                "content": [
+                  {
+                    "matches": [
+                      {
+                        "idMatch": "400000001",
+                        "seasonName": [{"locale": "en-GB", "description": "FIFA World Cup 2026™"}],
+                        "stageName": [{"locale": "en-GB", "description": "First Stage"}],
+                        "matchDate": "2026-06-19",
+                        "teamACountryCode": "BRA",
+                        "teamBCountryCode": "HAI",
+                        "teamAScore": 3,
+                        "teamBScore": 0,
+                        "resultType": 1
+                      },
+                      {
+                        "idMatch": "400000002",
+                        "seasonName": [{"locale": "en-GB", "description": "FIFA World Cup 2026™"}],
+                        "stageName": [{"locale": "en-GB", "description": "First Stage"}],
+                        "matchDate": "2026-06-24",
+                        "teamACountryCode": "BRA",
+                        "teamBCountryCode": "SCO",
+                        "teamAScore": null,
+                        "teamBScore": null,
+                        "resultType": 0
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+        </script>
+        </body></html>
+        """,
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/update_group_results.py",
+            "--config",
+            str(config),
+            "--fifa-html",
+            str(html),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    summary = json.loads(result.stdout)
+    assert summary["source_kind"] == "fifa"
+    assert summary["would_add"] == 1
+    assert summary["additions"][0]["team_a"] == "Brasil"
+    assert summary["additions"][0]["score_a"] == 3
+    assert summary["additions"][0]["team_b"] == "Haiti"
+    assert summary["additions"][0]["score_b"] == 0
+    assert summary["additions"][0]["source"] == "https://inside.fifa.com/data-centre/matches#400000001"
+
+
+def test_update_group_results_extracts_completed_scores_from_fifa_api_json(tmp_path: Path) -> None:
+    config = tmp_path / "config.json"
+    payload = tmp_path / "fifa-api.json"
+    _write_config(config)
+    payload.write_text(
+        json.dumps(
+            {
+                "Results": [
+                    {
+                        "IdMatch": "400000001",
+                        "IdCompetition": "17",
+                        "IdSeason": "285023",
+                        "StageName": [{"Locale": "en-GB", "Description": "First Stage"}],
+                        "Date": "2026-06-19T22:00:00Z",
+                        "Home": {"Abbreviation": "BRA", "Score": 3},
+                        "Away": {"Abbreviation": "HAI", "Score": 0},
+                        "HomeTeamScore": 3,
+                        "AwayTeamScore": 0,
+                        "ResultType": 1,
+                    },
+                    {
+                        "IdMatch": "400000002",
+                        "IdCompetition": "17",
+                        "IdSeason": "285023",
+                        "StageName": [{"Locale": "en-GB", "Description": "First Stage"}],
+                        "Date": "2026-06-24T22:00:00Z",
+                        "Home": {"Abbreviation": "BRA", "Score": None},
+                        "Away": {"Abbreviation": "SCO", "Score": None},
+                        "HomeTeamScore": None,
+                        "AwayTeamScore": None,
+                        "ResultType": 0,
+                    },
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/update_group_results.py",
+            "--config",
+            str(config),
+            "--fifa-api-json",
+            str(payload),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    summary = json.loads(result.stdout)
+    assert summary["source_kind"] == "fifa"
+    assert summary["would_add"] == 1
+    assert summary["additions"][0]["team_a"] == "Brasil"
+    assert summary["additions"][0]["score_a"] == 3
+    assert summary["additions"][0]["team_b"] == "Haiti"
+    assert summary["additions"][0]["score_b"] == 0
+    assert summary["additions"][0]["date"] == "2026-06-19"
+    assert summary["additions"][0]["source"] == "https://inside.fifa.com/data-centre/matches#400000001"
+
+
+def test_update_group_results_skips_fifa_live_score_until_result_is_final(tmp_path: Path) -> None:
+    config = tmp_path / "config.json"
+    payload = tmp_path / "fifa-api.json"
+    _write_config(config)
+    payload.write_text(
+        json.dumps(
+            {
+                "Results": [
+                    {
+                        "IdMatch": "400000001",
+                        "IdCompetition": "17",
+                        "IdSeason": "285023",
+                        "StageName": [{"Locale": "en-GB", "Description": "First Stage"}],
+                        "Date": "2026-06-24T22:00:00Z",
+                        "Home": {"Abbreviation": "BRA", "Score": 1},
+                        "Away": {"Abbreviation": "SCO", "Score": 0},
+                        "HomeTeamScore": 1,
+                        "AwayTeamScore": 0,
+                        "ResultType": 0,
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/update_group_results.py",
+            "--config",
+            str(config),
+            "--fifa-api-json",
+            str(payload),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "nenhum placar final" in result.stderr
 
 
 def test_update_group_results_replace_updates_existing_conflict(tmp_path: Path) -> None:
@@ -209,3 +449,51 @@ def test_update_group_results_replace_updates_existing_conflict(tmp_path: Path) 
     assert completed[0]["score_a"] == 2
     assert completed[0]["score_b"] == 1
     assert completed[0]["source"] == "correction"
+
+
+def test_update_group_results_does_not_conflict_when_existing_score_is_reversed_fixture_order(tmp_path: Path) -> None:
+    config = tmp_path / "config.json"
+    results = tmp_path / "results.json"
+    _write_config(config)
+    payload = json.loads(config.read_text(encoding="utf-8"))
+    payload["completed_group_matches"].append(
+        {
+            "group": "C",
+            "team_a": "Escócia",
+            "score_a": 1,
+            "team_b": "Haiti",
+            "score_b": 0,
+            "date": "2026-06-13",
+            "source": "manual-reversed",
+        }
+    )
+    config.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    results.write_text(
+        json.dumps(
+            [
+                {
+                    "group": "C",
+                    "team_a": "Haiti",
+                    "score_a": 0,
+                    "team_b": "Escócia",
+                    "score_b": 1,
+                    "source": "fifa-canonical",
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [sys.executable, "scripts/update_group_results.py", "--config", str(config), "--results", str(results)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    summary = json.loads(result.stdout)
+    assert summary["conflicts"] == []
+    assert summary["skipped_existing"] == 1

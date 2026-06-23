@@ -10,7 +10,9 @@ SOURCE_MEMORY ?= data/source_memory.json
 OUTPUT_DIR ?= outputs
 WATCHDOG_LOG ?= data/watchdog.jsonl
 CALIBRATION_INPUT ?= data/calibration_predictions.json
-RESULTS_INPUT ?= data/group_results_update.json
+RESULTS_SOURCE ?= fifa
+RESULTS_INPUT ?=
+FIFA_RESULTS_URL ?= https://api.fifa.com/api/v3/calendar/matches
 DEBATE_INPUT ?=
 DEBATE_OUTPUT ?=
 
@@ -30,7 +32,12 @@ ifneq ($(strip $(DEBATE_OUTPUT)),)
 DEBATE_ARGS += --output "$(DEBATE_OUTPUT)"
 endif
 
-UPDATE_RESULTS_ARGS := --config "$(CONFIG)" --results "$(RESULTS_INPUT)"
+UPDATE_RESULTS_ARGS := --config "$(CONFIG)"
+ifneq ($(strip $(RESULTS_INPUT)),)
+UPDATE_RESULTS_ARGS += --results "$(RESULTS_INPUT)"
+else ifeq ($(RESULTS_SOURCE),fifa)
+UPDATE_RESULTS_ARGS += --from-fifa --fifa-url "$(FIFA_RESULTS_URL)"
+endif
 ifeq ($(APPLY),1)
 UPDATE_RESULTS_ARGS += --apply
 endif
@@ -47,15 +54,17 @@ help:
 	@printf "  make diagrams   regenera os PNGs dos diagramas da engine\n"
 	@printf "  make calibration valida Brier/log loss/ECE usando CALIBRATION_INPUT\n"
 	@printf "  make profile    breakdown de tempo por etapa/rodada do último run no watchdog\n"
-	@printf "  make update-results valida/atualiza placares de grupo a partir de RESULTS_INPUT (APPLY=1 escreve)\n"
+	@printf "  make update-results busca placares oficiais da FIFA e atualiza com APPLY=1; RESULTS_INPUT mantém modo manual\n"
 	@printf "  make validate   roda testes, compileall e valida o JSON exemplo\n"
 
 daily:
 	@mkdir -p data "$(OUTPUT_DIR)"
+	$(MAKE) update-results APPLY=1
 	$(RUN_DAILY)
 
 force:
 	@mkdir -p data "$(OUTPUT_DIR)"
+	$(MAKE) update-results APPLY=1
 	$(RUN_DAILY) --force
 
 watch:
