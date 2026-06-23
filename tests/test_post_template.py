@@ -176,6 +176,26 @@ def test_template_post_uses_next_unplayed_game_and_ordinal() -> None:
     assert "derrota" not in text.split("O CAMINHO")[0]
 
 
+def test_template_post_does_not_close_group_before_featured_match_is_completed() -> None:
+    bundle = _bundle()
+    bundle.metadata["monte_carlo"]["group_state"] = {
+        "brazil_first_pct": 76.1,
+        "completed_results": [
+            {"score": "Brasil 1-1 Marrocos"},
+            {"score": "Escócia 1-0 Haiti"},
+        ],
+    }
+
+    text = render_template_post(bundle, post_index=9, run_date=date(2026, 6, 23))
+
+    validate_template_post(text, bundle)
+    assert "BRASIL x ESCÓCIA" in text
+    assert "ainda falta Brasil x Escócia" in text
+    assert "Brasil termina em 1º do grupo em 76%" in text
+    assert "fase de grupos encerrada" not in text
+    assert "Brasil terminou o grupo" not in text
+
+
 def test_template_post_derives_group_loss_from_win_and_draw_when_bundle_opponent_pct_is_stale() -> None:
     bundle = _bundle()
     haiti = bundle.group_matches[1]

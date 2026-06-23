@@ -10,7 +10,7 @@ import threading
 import unicodedata
 import urllib.parse
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from statistics import NormalDist
 from typing import Any, Callable, Iterable
@@ -1786,6 +1786,122 @@ class ReportCoherenceError(RuntimeError):
 
 class MeetingConsensusError(RuntimeError):
     """Raised when the meeting cannot produce a valid consensus (sterile room or ceiling without valid votes)."""
+
+
+_GROUP_DATE_MONTHS = {
+    "jan": 1,
+    "janeiro": 1,
+    "feb": 2,
+    "fev": 2,
+    "fevereiro": 2,
+    "mar": 3,
+    "marco": 3,
+    "março": 3,
+    "apr": 4,
+    "abr": 4,
+    "abril": 4,
+    "may": 5,
+    "mai": 5,
+    "maio": 5,
+    "jun": 6,
+    "junho": 6,
+    "jul": 7,
+    "julho": 7,
+    "aug": 8,
+    "ago": 8,
+    "agosto": 8,
+    "sep": 9,
+    "set": 9,
+    "setembro": 9,
+    "oct": 10,
+    "out": 10,
+    "outubro": 10,
+    "nov": 11,
+    "novembro": 11,
+    "dec": 12,
+    "dez": 12,
+    "dezembro": 12,
+}
+
+
+def _parse_group_fixture_date(raw: Any, *, year: int) -> date | None:
+    text = str(raw or "").strip().lower()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        try:
+            return date.fromisoformat(text)
+        except ValueError:
+            return None
+    match = re.fullmatch(r"(\d{1,2})\s*/\s*([a-zç]{3,9})", text)
+    if not match:
+        return None
+    month_token = _normalize_text(match.group(2))
+    month = _GROUP_DATE_MONTHS.get(month_token)
+    if month is None:
+        return None
+    try:
+        return date(year, month, int(match.group(1)))
+    except ValueError:
+        return None
+
+
+def _completed_match_mentions(item: Any, brazil_name: str, opponent: str) -> bool:
+    if not isinstance(item, dict):
+        return False
+    text_parts = [
+        item.get("score"),
+        item.get("team_a"),
+        item.get("team_b"),
+        item.get("home"),
+        item.get("away"),
+    ]
+    normalized = _normalize_text(" ".join(str(part or "") for part in text_parts))
+    return _normalize_text(brazil_name) in normalized and _normalize_text(opponent) in normalized
+
+
+def _missing_past_brazil_group_results(config: dict[str, Any], as_of: date) -> list[str]:
+    """Return configured Brazil group fixtures already in the past without a canonical score."""
+    brazil_name = str(config.get("brazil_team_name") or "Brasil").strip() or "Brasil"
+    completed = config.get("completed_group_matches") or config.get("group_results") or []
+    if not isinstance(completed, list):
+        completed = []
+
+    missing: list[str] = []
+    for match in config.get("group_matches") or []:
+        if not isinstance(match, dict):
+            continue
+        opponent = str(match.get("opponent") or match.get("team_b") or match.get("away") or "").strip()
+        if not opponent:
+            continue
+        raw_date = match.get("date") or match.get("match_date")
+        match_date = _parse_group_fixture_date(raw_date, year=as_of.year)
+        if match_date is None or match_date >= as_of:
+            continue
+        if any(_completed_match_mentions(item, brazil_name, opponent) for item in completed):
+            continue
+        date_label = str(raw_date or match_date.isoformat()).strip()
+        missing.append(f"{brazil_name} x {opponent} ({date_label})")
+    return missing
+
+
+def _validate_completed_group_results_fresh(
+    config: dict[str, Any],
+    generated_at: datetime,
+    watchdog: RunWatchdog | None = None,
+) -> None:
+    if bool(config.get("skip_completed_group_results_freshness_gate", False)):
+        return
+    missing = _missing_past_brazil_group_results(config, generated_at.date())
+    if not missing:
+        return
+    detail = (
+        "Gate de resultados de grupo falhou: jogo(s) do Brasil já no passado sem placar "
+        "em completed_group_matches: "
+        + "; ".join(missing)
+        + ". Atualize completed_group_matches antes de rodar Monte Carlo."
+    )
+    if watchdog:
+        watchdog.fail("completed_group_results", detail=detail)
+    raise ReportCoherenceError(detail)
 
 
 def _specs_after_preflight_exclusion(
@@ -8503,6 +8619,7 @@ async def build_report_bundle(
     _apply_runtime_env_overrides(config)
     generated_at = generated_at or datetime.now(timezone.utc)
     run_id = str(getattr(watchdog, "run_id", "") or config.get("run_id") or "").strip()
+    _validate_completed_group_results_fresh(config, generated_at, watchdog)
     baseline_title_pct = float(config.get("baseline_title_pct", 11.0))
     agent_specs = load_agent_specs_from_config(config)
     agent_specs = _specs_after_preflight_exclusion(agent_specs, config, watchdog)

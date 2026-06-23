@@ -137,6 +137,22 @@ def _completed_group_context(bundle: Any) -> str:
     return f"Com {' e '.join(scores[:2])}, "
 
 
+def _group_match_has_completed_score(bundle: Any, match: Any) -> bool:
+    opponent = _normalize_beat(getattr(match, "opponent", ""))
+    if not opponent:
+        return False
+    state = _group_state(bundle)
+    results = state.get("completed_results") or []
+    if not isinstance(results, list):
+        return False
+    for item in results:
+        score = str(item.get("score") or "") if isinstance(item, dict) else str(item or "")
+        normalized = _normalize_beat(score)
+        if "brasil" in normalized and opponent in normalized:
+            return True
+    return False
+
+
 def _group_loss_pct(match: Any) -> float | None:
     try:
         brazil_pct = float(getattr(match, "brazil_pct", 0.0) or 0.0)
@@ -1065,6 +1081,12 @@ def render_template_post(
         lead = f"{completed_context}depois" if completed_context else "Depois"
         rest_group_line = (
             f"{lead} vêm {listed}. Brasil termina em 1º do grupo em {first_place_pct} dos cenários."
+        )
+    elif featured_date is not None and featured_date >= run_date and not _group_match_has_completed_score(bundle, featured):
+        lead = f"{completed_context}ainda" if completed_context else "Ainda"
+        rest_group_line = (
+            f"{lead} falta Brasil x {getattr(featured, 'opponent', '')}. "
+            f"Brasil termina em 1º do grupo em {first_place_pct} dos cenários."
         )
     else:
         lead = f"{completed_context}fase" if completed_context else "Fase"

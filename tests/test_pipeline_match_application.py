@@ -1,3 +1,4 @@
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from worldcup_brazil.consensus import AgentOpinion
@@ -14,10 +15,63 @@ from worldcup_brazil.pipeline import (
     _apply_monte_carlo_knockout_scenarios,
     _stage_confidence_intervals,
     _validate_report_coherence,
+    _missing_past_brazil_group_results,
+    _validate_completed_group_results_fresh,
     _widen_ci_for_bracket_uncertainty,
     load_config,
 )
 from worldcup_brazil.probabilities import MatchEstimate
+
+
+def test_missing_past_brazil_group_results_flags_stale_fixture_before_monte_carlo() -> None:
+    config = {
+        "brazil_team_name": "Brasil",
+        "group_matches": [
+            {"opponent": "Marrocos", "date": "13/jun"},
+            {"opponent": "Haiti", "date": "19/jun"},
+            {"opponent": "Escócia", "date": "24/jun"},
+        ],
+        "completed_group_matches": [
+            {"team_a": "Brasil", "score_a": 1, "team_b": "Marrocos", "score_b": 1},
+            {"team_a": "Escócia", "score_a": 1, "team_b": "Haiti", "score_b": 0},
+        ],
+    }
+
+    missing = _missing_past_brazil_group_results(config, date(2026, 6, 23))
+
+    assert missing == ["Brasil x Haiti (19/jun)"]
+
+
+def test_missing_past_brazil_group_results_does_not_require_future_fixture() -> None:
+    config = {
+        "brazil_team_name": "Brasil",
+        "group_matches": [
+            {"opponent": "Escócia", "date": "24/jun"},
+        ],
+        "completed_group_matches": [],
+    }
+
+    assert _missing_past_brazil_group_results(config, date(2026, 6, 23)) == []
+
+
+def test_completed_group_results_freshness_gate_fails_before_stale_monte_carlo() -> None:
+    config = {
+        "brazil_team_name": "Brasil",
+        "group_matches": [
+            {"opponent": "Haiti", "date": "19/jun"},
+        ],
+        "completed_group_matches": [
+            {"team_a": "Brasil", "score_a": 1, "team_b": "Marrocos", "score_b": 1},
+        ],
+    }
+
+    try:
+        _validate_completed_group_results_fresh(config, datetime(2026, 6, 23, 12, tzinfo=timezone.utc))
+    except ReportCoherenceError as exc:
+        assert "Brasil x Haiti (19/jun)" in str(exc)
+        assert "Atualize completed_group_matches" in str(exc)
+    else:
+        raise AssertionError("expected ReportCoherenceError")
 
 
 def test_apply_meeting_match_probabilities_rejects_group_win_pct_that_conflicts_with_draw_pct() -> None:
