@@ -1844,8 +1844,11 @@ def _parse_group_fixture_date(raw: Any, *, year: int) -> date | None:
         return None
 
 
-def _completed_match_mentions(item: Any, brazil_name: str, opponent: str) -> bool:
+def _completed_match_mentions(item: Any, team_a: str, team_b: str, group: str = "") -> bool:
     if not isinstance(item, dict):
+        return False
+    item_group = str(item.get("group") or "").strip().upper()
+    if group and item_group and item_group != group:
         return False
     text_parts = [
         item.get("score"),
@@ -1855,31 +1858,88 @@ def _completed_match_mentions(item: Any, brazil_name: str, opponent: str) -> boo
         item.get("away"),
     ]
     normalized = _normalize_text(" ".join(str(part or "") for part in text_parts))
-    return _normalize_text(brazil_name) in normalized and _normalize_text(opponent) in normalized
+    return _normalize_text(team_a) in normalized and _normalize_text(team_b) in normalized
+
+
+def _brazil_path_relevant_groups(config: dict[str, Any]) -> set[str]:
+    groups = {str(config.get("brazil_group") or "C").strip().upper() or "C"}
+    try:
+        for entry in brazil_bracket_path(config):
+            for group in entry.get("allowed_opponent_groups", []) or []:
+                normalized = str(group or "").strip().upper()
+                if normalized:
+                    groups.add(normalized)
+    except Exception:
+        return groups
+    return groups
+
+
+def _configured_group_fixtures(config: dict[str, Any]) -> list[dict[str, Any]]:
+    fixtures: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    brazil_name = str(config.get("brazil_team_name") or "Brasil").strip() or "Brasil"
+
+    def add(raw: dict[str, Any], *, default_team_a: str = "", default_group: str = "") -> None:
+        team_a = str(raw.get("team_a") or raw.get("home") or raw.get("team1") or default_team_a).strip()
+        team_b = str(raw.get("team_b") or raw.get("away") or raw.get("team2") or raw.get("opponent") or "").strip()
+        raw_date = raw.get("date") or raw.get("match_date")
+        group = str(raw.get("group") or default_group or "").strip().upper()
+        if not team_a or not team_b or not raw_date:
+            return
+        key = (
+            group,
+            _normalize_text(team_a),
+            _normalize_text(team_b),
+            str(raw_date).strip(),
+        )
+        if key in seen:
+            return
+        seen.add(key)
+        fixtures.append(
+            {
+                "group": group,
+                "team_a": team_a,
+                "team_b": team_b,
+                "date": raw_date,
+                "source": raw.get("source") or raw.get("source_url"),
+            }
+        )
+
+    for raw in config.get("group_fixtures") or []:
+        if isinstance(raw, dict):
+            add(raw)
+    for raw in config.get("group_matches") or []:
+        if isinstance(raw, dict):
+            add(raw, default_team_a=brazil_name, default_group=str(config.get("brazil_group") or "C"))
+    return fixtures
 
 
 def _missing_past_brazil_group_results(config: dict[str, Any], as_of: date) -> list[str]:
-    """Return configured Brazil group fixtures already in the past without a canonical score."""
+    """Return configured path-relevant group fixtures already in the past without a canonical score."""
     brazil_name = str(config.get("brazil_team_name") or "Brasil").strip() or "Brasil"
     completed = config.get("completed_group_matches") or config.get("group_results") or []
     if not isinstance(completed, list):
         completed = []
+    relevant_groups = _brazil_path_relevant_groups(config)
 
     missing: list[str] = []
-    for match in config.get("group_matches") or []:
-        if not isinstance(match, dict):
+    for match in _configured_group_fixtures(config):
+        group = str(match.get("group") or "").strip().upper()
+        if group and relevant_groups and group not in relevant_groups:
             continue
-        opponent = str(match.get("opponent") or match.get("team_b") or match.get("away") or "").strip()
-        if not opponent:
+        team_a = str(match.get("team_a") or brazil_name).strip()
+        team_b = str(match.get("team_b") or "").strip()
+        if not team_a or not team_b:
             continue
-        raw_date = match.get("date") or match.get("match_date")
+        raw_date = match.get("date")
         match_date = _parse_group_fixture_date(raw_date, year=as_of.year)
         if match_date is None or match_date >= as_of:
             continue
-        if any(_completed_match_mentions(item, brazil_name, opponent) for item in completed):
+        if any(_completed_match_mentions(item, team_a, team_b, group) for item in completed):
             continue
         date_label = str(raw_date or match_date.isoformat()).strip()
-        missing.append(f"{brazil_name} x {opponent} ({date_label})")
+        match_label = f"{team_a} x {team_b} ({date_label})"
+        missing.append(f"{group}: {match_label}" if group and team_a != brazil_name else match_label)
     return missing
 
 
@@ -3730,6 +3790,7 @@ def _configured_matches_for_prompt(config: dict[str, Any]) -> dict[str, Any]:
     monte_carlo_summary = monte_carlo_compact_summary(config.get("_monte_carlo_result", {"enabled": False}))
     return {
         "group_matches": _default_group_matches(config),
+        "group_fixtures": list(config.get("group_fixtures", []) or []),
         "completed_group_matches": list(config.get("completed_group_matches", []) or []),
         "knockout_matches": _default_knockout_matches(config),
         "monte_carlo": monte_carlo_summary,
@@ -3844,6 +3905,11 @@ def _compact_source_planning_scope(config: dict[str, Any]) -> dict[str, Any]:
     monte_carlo_summary = monte_carlo_compact_summary(config.get("_monte_carlo_result", {"enabled": False}))
     return {
         "group_matches": [_compact_group_match_label(match) for match in _default_group_matches(config)],
+        "group_fixtures": [
+            _compact_dict(fixture, ["group", "date", "team_a", "team_b", "venue"])
+            for fixture in (config.get("group_fixtures", []) or [])
+            if isinstance(fixture, dict)
+        ],
         "completed_group_matches": list(config.get("completed_group_matches", []) or []),
         "knockout_matches": [_compact_knockout_match_label(match) for match in _default_knockout_matches(config)],
         "bracket_path": bracket_path,

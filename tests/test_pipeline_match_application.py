@@ -74,6 +74,65 @@ def test_completed_group_results_freshness_gate_fails_before_stale_monte_carlo()
         raise AssertionError("expected ReportCoherenceError")
 
 
+def test_completed_group_results_freshness_gate_checks_brazil_path_group_fixtures() -> None:
+    config = {
+        "brazil_team_name": "Brasil",
+        "brazil_group": "C",
+        "brazil_expected_group_position": 1,
+        "groups_config": {
+            "groups": {
+                "C": [{"name": "Brasil"}, {"name": "Haiti"}],
+                "F": [{"name": "Holanda"}, {"name": "Japão"}],
+            }
+        },
+        "bracket_config": {
+            "round_of_32": [
+                {"match_id": 76, "slots": ["1C", "2F"]},
+            ]
+        },
+        "group_fixtures": [
+            {"group": "C", "team_a": "Brasil", "team_b": "Haiti", "date": "2026-06-19"},
+            {"group": "F", "team_a": "Holanda", "team_b": "Japão", "date": "2026-06-22"},
+        ],
+        "completed_group_matches": [
+            {"group": "C", "team_a": "Brasil", "score_a": 3, "team_b": "Haiti", "score_b": 0},
+        ],
+    }
+
+    try:
+        _validate_completed_group_results_fresh(config, datetime(2026, 6, 23, 12, tzinfo=timezone.utc))
+    except ReportCoherenceError as exc:
+        assert "F: Holanda x Japão (2026-06-22)" in str(exc)
+    else:
+        raise AssertionError("expected ReportCoherenceError")
+
+
+def test_completed_group_results_freshness_gate_ignores_irrelevant_group_fixtures() -> None:
+    config = {
+        "brazil_team_name": "Brasil",
+        "brazil_group": "C",
+        "brazil_expected_group_position": 1,
+        "groups_config": {
+            "groups": {
+                "C": [{"name": "Brasil"}, {"name": "Haiti"}],
+                "F": [{"name": "Holanda"}, {"name": "Japão"}],
+                "L": [{"name": "Inglaterra"}, {"name": "Croácia"}],
+            }
+        },
+        "bracket_config": {
+            "round_of_32": [
+                {"match_id": 76, "slots": ["1C", "2F"]},
+            ]
+        },
+        "group_fixtures": [
+            {"group": "L", "team_a": "Inglaterra", "team_b": "Croácia", "date": "2026-06-22"},
+        ],
+        "completed_group_matches": [],
+    }
+
+    _validate_completed_group_results_fresh(config, datetime(2026, 6, 23, 12, tzinfo=timezone.utc))
+
+
 def test_apply_meeting_match_probabilities_rejects_group_win_pct_that_conflicts_with_draw_pct() -> None:
     estimate = MatchEstimate(
         brazil="Brasil",

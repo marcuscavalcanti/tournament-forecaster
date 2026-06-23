@@ -128,6 +128,8 @@ O bloco `knockout_matches` aceita múltiplos cenários por fase. O renderer agru
 
 Os arquivos `config/groups.config.json` e `config/bracket.config.json` são o contrato canônico de grupos e cruzamentos oficiais. Antes do Monte Carlo completo, o pipeline já usa esses arquivos para derivar o caminho possível do Brasil pela posição configurada no grupo (`brazil_group`, `brazil_expected_group_position`) e anotar cada fase com `bracket_match_id`, slot do Brasil, slots adversários e candidatos permitidos. Exemplo: com Brasil em `1C`, o `16 avos` é `1C x 2F`; portanto os modelos podem debater Holanda, Japão, Suécia ou Tunísia como candidatos do slot `2F`, mas não Canadá ou Suíça nessa fase.
 
+`completed_group_matches` é o ledger de placares já ocorridos; `group_fixtures` é o calendário SSoT dos jogos de grupo. Antes de rodar o Monte Carlo, o pipeline falha se houver fixture de grupo relevante ao caminho do Brasil com data anterior ao run e sem placar correspondente em `completed_group_matches`. Sem `group_fixtures`, o fallback só consegue validar os três jogos do Brasil em `group_matches`; para proteger cruzamentos contra grupos desatualizados, mantenha `group_fixtures` completo para os grupos que alimentam o caminho do Brasil.
+
 Na reunião, `scenario_probabilities` é a chance de aquele confronto acontecer, enquanto `match_probabilities` é a chance do Brasil passar/vencer caso o confronto aconteça. O moderador só valida o escopo do bracket: ele não escolhe o adversário por mérito, apenas rejeita país impossível para a fase.
 
 ## Monte Carlo de chave
