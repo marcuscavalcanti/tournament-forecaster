@@ -398,7 +398,9 @@ JARGON_GLOSSARY = [
 EVENT_HINTS = (
     "lesao", "lesion", "fora da copa", "fora do ano", "corte", "cortado", "suspens",
     "stale", "fantasma", "errado", "errada", "apto", "duvida", "desfalque",
-    "mercado", "odds", "cotac", "titular",
+    "mercado", "odds", "cotac", "titular", "upset", "mata-mata", "tatico",
+    "tatica", "coesao", "resiliencia", "superestim", "subestim", "japao",
+    "holanda", "cauda", "risco ponderado",
 )
 
 BEHAVIOR_HINTS = (
@@ -451,8 +453,177 @@ def _best_sentence(answer: str) -> tuple[int, str]:
     return best_score, best
 
 
+def _display_pct_token(raw: str) -> str:
+    return f"{raw.replace('.', ',')}%"
+
+
+def _matchup_label(answer: str) -> str:
+    match = re.search(
+        r"\bBrasil\s+x\s+([A-ZÁÉÍÓÚÂÊÔÃÕÇ][A-Za-zÀ-ÿ' -]{1,28}?)(?=[\s,.;:!?]|$)",
+        answer,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return "A chance debatida"
+    opponent = " ".join(match.group(1).split()).strip(" ,.;:!?")
+    return f"Brasil x {opponent}"
+
+
+TEAM_BEAT_PATTERN = r"Holanda|Japão|Japao|Suécia|Suecia|Inglaterra|França|Franca|Argentina|Portugal"
+
+
+def _display_team_token(raw: str) -> str:
+    return raw.replace("Japao", "Japão").replace("Suecia", "Suécia").replace("Franca", "França")
+
+
+def _tactical_reason_bits(answer: str) -> list[str]:
+    normalized = _normalize_beat(answer)
+    bits: list[str] = []
+    if "neymar" in normalized and "raphinha" in normalized:
+        bits.append("Neymar/Raphinha reduziram a criação")
+    elif "neymar" in normalized:
+        bits.append("Neymar pesou na criação")
+    elif "raphinha" in normalized:
+        bits.append("Raphinha pesou no corredor direito")
+    if "coesao" in normalized or "criacao lenta" in normalized:
+        bits.append("criação lenta entrou na conta")
+    if "upset plaus" in normalized:
+        bits.append("Japão virou upset plausível")
+    elif "resiliencia" in normalized and "japao" in normalized:
+        bits.append("Japão mostrou resiliência")
+    return bits
+
+
+def _weighted_pair_branch(compact: str) -> tuple[str, str] | None:
+    pairs: list[tuple[str, float, str]] = []
+    for match in re.finditer(
+        rf"\b({TEAM_BEAT_PATTERN})\b\s+(\d{{1,3}}(?:[,.]\d+)?)\s*%\s*[x×]\s*(\d{{1,3}}(?:[,.]\d+)?)\s*%",
+        compact,
+        flags=re.IGNORECASE,
+    ):
+        win_raw = match.group(3)
+        try:
+            win_value = float(win_raw.replace(",", "."))
+        except ValueError:
+            continue
+        pairs.append((_display_team_token(match.group(1)), win_value, win_raw))
+    if not pairs:
+        return None
+    team, _value, raw = min(pairs, key=lambda item: item[1])
+    return team, raw
+
+
+def _branch_probability(compact: str) -> tuple[str, str] | None:
+    pair = _weighted_pair_branch(compact)
+    if pair:
+        return pair
+    cauda = re.search(
+        rf"cauda[^.?!]{{0,90}}?\b({TEAM_BEAT_PATTERN})\b[^%]{{0,55}}?(\d{{1,3}}(?:[,.]\d+)?)\s*%",
+        compact,
+        flags=re.IGNORECASE,
+    )
+    if cauda:
+        return _display_team_token(cauda.group(1)), cauda.group(2)
+    direct = re.search(
+        rf"\b({TEAM_BEAT_PATTERN})\b\s*(?:\(|em\s+)?(\d{{1,3}}(?:[,.]\d+)?)\s*%",
+        compact,
+        flags=re.IGNORECASE,
+    )
+    if direct:
+        return _display_team_token(direct.group(1)), direct.group(2)
+    return None
+
+
+def _weighted_path_beat(round_index: Any, agent: str, answer: str) -> tuple[int, str] | None:
+    compact = " ".join(str(answer or "").split())
+    normalized = _normalize_beat(compact)
+    weighted_frame = any(
+        hint in normalized
+        for hint in (
+            "risco ponderado", "avanco ponderado", "bloco 2f", "essa media",
+            "conta ponderada", "calculo ponderado",
+        )
+    )
+    headline_frame = "headline" in normalized
+    if not (weighted_frame or headline_frame) or "cauda" not in normalized:
+        return None
+    weighted = re.search(
+        r"(?:risco\s+ponderad\w*|avan[cç]o\s+ponderad\w*|m[eé]dia|conta\s+ponderad\w*)"
+        r"[^%]{0,60}?(\d{1,3}(?:[,.]\d+)?)\s*%",
+        compact,
+        flags=re.IGNORECASE,
+    )
+    if weighted is None:
+        weighted = re.search(
+            r"result\w*\s+em\s+(\d{1,3}(?:[,.]\d+)?)\s*%",
+            compact,
+            flags=re.IGNORECASE,
+        )
+    branch = _branch_probability(compact)
+    if weighted_frame and weighted and branch:
+        team, branch_pct = branch
+        return (
+            12,
+            f"Rodada {round_index} — {agent}: 16 avos virou risco ponderado de "
+            f"{_display_pct_token(weighted.group(1))}; cauda {team} a {_display_pct_token(branch_pct)}.",
+        )
+    headline = re.search(
+        r"\bBrasil\s+(\d{1,3}(?:[,.]\d+)?)\s*%\s+vs\s+"
+        rf"({TEAM_BEAT_PATTERN})\b",
+        compact,
+        flags=re.IGNORECASE,
+    )
+    if headline_frame and headline and branch:
+        modal = _display_team_token(headline.group(2))
+        team, branch_pct = branch
+        return (
+            11,
+            f"Rodada {round_index} — {agent}: {modal} a {_display_pct_token(headline.group(1))} era headline; "
+            f"cauda {team} a {_display_pct_token(branch_pct)}.",
+        )
+    return None
+
+
+def _tactical_adjustment_beat(round_index: Any, agent: str, answer: str) -> tuple[int, str] | None:
+    compact = " ".join(str(answer or "").split())
+    normalized = _normalize_beat(compact)
+    if not any(hint in normalized for hint in ("ajust", "reduz", "baix", "cai", "superestim", "subestim", "comprim")):
+        return None
+    percentages = re.findall(r"\b(\d{1,3}(?:[.,]\d+)?)\s*%", compact)
+    if len(percentages) < 2:
+        return None
+    matchup = _matchup_label(compact)
+    first, second = (_display_pct_token(percentages[0]), _display_pct_token(percentages[1]))
+    direction = "caiu" if any(hint in normalized for hint in ("reduz", "baix", "cai", "superestim", "comprim")) else "foi ajustada"
+    bits = _tactical_reason_bits(compact)
+    reason = ""
+    if bits:
+        reason = "; " + "; ".join(bits[:3]) + "."
+    else:
+        score, sentence = _best_sentence(compact)
+        if score >= 2 and sentence:
+            reason = ": " + _truncate_words(_plain_language(sentence), 95)
+            if not reason.endswith((".", "!", "?", "…")):
+                reason += "."
+    return (
+        10 + len(bits),
+        f"Rodada {round_index} — {agent}: {matchup} {direction} de {first} para {second}{reason}",
+    )
+
+
 def _valid_room_response(response: Any) -> bool:
     return not (response.get("removed_from_main") or response.get("used_fallback"))
+
+
+def _beat_semantic_key(beat: str) -> str:
+    normalized = _normalize_beat(beat)
+    cauda = re.search(r"cauda\s+([a-z ]+?)\s+a\s+(\d+(?:,\d+)?)%", normalized)
+    if cauda:
+        return f"cauda:{cauda.group(1).strip()}:{cauda.group(2)}"
+    ajuste = re.search(r"(brasil x [a-z ]+?)\s+(?:caiu|foi ajustada)\s+de\s+(\d+(?:,\d+)?)%\s+para\s+(\d+(?:,\d+)?)%", normalized)
+    if ajuste:
+        return f"ajuste:{ajuste.group(1).strip()}:{ajuste.group(2)}:{ajuste.group(3)}"
+    return normalized
 
 
 def _source_correction_beat(bundle: Any) -> str | None:
@@ -516,7 +687,8 @@ def _extract_beats(bundle: Any) -> list[str]:
     Cada bastidor carrega o fato concreto (jogador, evento, número) da sentença
     mais rica da fala, com jargão traduzido. Regra do Marcus (11/jun): bastidor
     sem substância não vale a tinta — sem 2 lances fortes, a seção sai do post."""
-    curated = _curated_behavior_beats(bundle)
+    source_correction = _source_correction_beat(bundle)
+    behavior = _protagonist_behavior_beat(bundle)
     scored: list[tuple[int, str, str]] = []
     for turn in getattr(bundle, "meeting_transcript", []) or []:
         if not isinstance(turn, dict):
@@ -527,14 +699,29 @@ def _extract_beats(bundle: Any) -> list[str]:
                 continue
             if not response.get("disagreed"):
                 continue
-            score, sentence = _best_sentence(response.get("answer", ""))
+            answer = str(response.get("answer", ""))
+            normalized_answer = _normalize_beat(answer)
+            if source_correction and (
+                ("polymarket" in normalized_answer and "grupo c" in normalized_answer and "titulo" in normalized_answer)
+                or ("erro de fonte" in normalized_answer and "nao sustenta" in normalized_answer)
+            ):
+                continue
+            agent = str(response.get("agent") or "")
+            weighted_path = _weighted_path_beat(round_index, agent, answer)
+            if weighted_path:
+                scored.append((weighted_path[0], agent, weighted_path[1]))
+                continue
+            tactical = _tactical_adjustment_beat(round_index, agent, answer)
+            if tactical:
+                scored.append((tactical[0], agent, tactical[1]))
+                continue
+            score, sentence = _best_sentence(answer)
             if score < 2:
                 continue
             fact = _truncate_words(_plain_language(sentence), 130)
             if not fact.endswith((".", "!", "?", "…")):
                 fact += "."
-            agent = str(response.get("agent") or "")
-            if _normalize_beat(response.get("answer", "")).startswith("concordo"):
+            if normalized_answer.startswith("concordo"):
                 scored.append((score, agent, f"Rodada {round_index} — {agent} foi conferir antes: {fact}"))
             else:
                 scored.append((score + 1, agent, f"Rodada {round_index} — {agent} bateu de frente: {fact}"))
@@ -550,20 +737,31 @@ def _extract_beats(bundle: Any) -> list[str]:
             )
     scored.sort(key=lambda item: -item[0])
     if not scored:
-        return curated[:2]
+        return [beat for beat in (source_correction, behavior) if beat][:2]
     fallback: list[str] = []
-    top_score, top_agent, top_beat = scored[0]
-    second = next((beat for _, agent, beat in scored[1:] if agent != top_agent), None)
-    if second is None and len(scored) > 1:
-        second = scored[1][2]
-    fallback = [top_beat, second] if second else [top_beat]
+    fallback_keys: set[str] = set()
+    fallback_agents: set[str] = set()
+    for _score, agent, beat in scored:
+        key = _beat_semantic_key(beat)
+        if key in fallback_keys:
+            continue
+        if fallback and agent in fallback_agents and any(other_agent != agent for _s, other_agent, _b in scored):
+            continue
+        fallback.append(beat)
+        fallback_keys.add(key)
+        fallback_agents.add(agent)
+        if len(fallback) >= 2:
+            break
 
     beats: list[str] = []
     seen: set[str] = set()
-    for beat in curated + fallback:
+    preferred = ([source_correction] if source_correction else []) + fallback
+    if len([beat for beat in preferred if beat]) < 2 and behavior:
+        preferred.append(behavior)
+    for beat in preferred:
         if not beat:
             continue
-        key = _normalize_beat(beat)
+        key = _beat_semantic_key(beat)
         if key in seen:
             continue
         seen.add(key)

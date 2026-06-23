@@ -374,6 +374,119 @@ def test_backstage_prefers_source_correction_and_protagonist_behavior() -> None:
     assert "convergência auditável" not in backstage
 
 
+def test_backstage_prefers_tactical_probability_adjustments_over_meeting_choreography() -> None:
+    bundle = _bundle()
+    bundle.model_participation = {
+        "total_messages": 24,
+        "total_rounds": 6,
+        "protagonist_counts": {"Opus 4.8": 3, "GPT 5.5": 2, "DeepSeek V4 Pro": 1},
+        "last_consensus_protagonist": "Opus 4.8",
+    }
+    bundle.meeting_transcript = [
+        {
+            "round": 6,
+            "responses": [
+                {
+                    "agent": "GPT 5.5",
+                    "answer": (
+                        "Concordo que 66.9% está superestimado no cenário Brasil x Japão. "
+                        "O ajuste que proponho é reduzir para 63.5%. "
+                        "A razão é simples: a ausência de Neymar já tira criação central e bola parada; "
+                        "a lesão de Raphinha adiciona risco no corredor direito; o 3-0 contra o Haiti "
+                        "teve placar confortável, mas relatos de jogo apontaram falta de coesão e criação lenta; "
+                        "e o Japão mostrou resiliência real no 2-2 contra a Holanda. "
+                        "Isso não transforma o Japão em favorito, mas comprime a margem brasileira em mata-mata."
+                    ),
+                    "disagreed": True,
+                    "removed_from_main": False,
+                    "used_fallback": False,
+                },
+                {
+                    "agent": "DeepSeek V4 Pro",
+                    "answer": (
+                        "Discordo do ajuste agressivo abaixo de 60%. O Brasil ainda tem superioridade de elenco, "
+                        "mais caminhos individuais de gol e controle territorial esperado; minha leitura é que "
+                        "Japão é adversário de upset plausível, não adversário parelho."
+                    ),
+                    "disagreed": True,
+                    "removed_from_main": False,
+                    "used_fallback": False,
+                },
+            ],
+        }
+    ]
+
+    text = render_template_post(bundle, post_index=2, run_date=date(2026, 6, 20))
+
+    backstage = text.split("DOIS BASTIDORES DA REUNIÃO DE HOJE:\n\n", 1)[1].split("📊", 1)[0]
+    assert "Brasil x Japão caiu de 66,9% para 63,5%" in backstage
+    assert "Neymar" in backstage
+    assert "Raphinha" in backstage
+    assert "upset plausível" in backstage
+    assert "virou protagonista" not in backstage
+
+
+def test_backstage_describes_weighted_path_risk_without_turning_branch_probability_into_adjustment() -> None:
+    bundle = _bundle()
+    bundle.model_participation = {
+        "total_messages": 24,
+        "total_rounds": 6,
+        "protagonist_counts": {"Opus 4.8": 3, "Gemini Pro": 2},
+        "last_consensus_protagonist": "Opus 4.8",
+    }
+    bundle.meeting_transcript = [
+        {
+            "round": 3,
+            "responses": [
+                {
+                    "agent": "Gemini Pro",
+                    "answer": (
+                        "Concordo com o cálculo ponderado das 16-avos: Japão 32,5% x 66,9%, "
+                        "Holanda 31,7% x 46,6% e Suécia 28,8% x 70,0% resultam em 60,9%. "
+                        "O risco de cauda é a Holanda: quase a mesma chance de cenário do Japão, "
+                        "mas com Brasil abaixo de 50% no confronto. "
+                        "A performance contra o Haiti (3-0) demonstra que a coesão ofensiva foi parcialmente "
+                        "reajustada, invalidando o pânico por ausência de Neymar."
+                    ),
+                    "disagreed": True,
+                    "removed_from_main": False,
+                    "used_fallback": False,
+                },
+                {
+                    "agent": "Opus 4.8",
+                    "answer": (
+                        "CONCORDO com o protagonista. O headline Brasil 66,9% vs Japão é menos informativo "
+                        "que essa média, e o ramo Holanda (46,6%, quase mesma probabilidade de cenário que "
+                        "o Japão) é a cauda correta a monitorar."
+                    ),
+                    "disagreed": True,
+                    "removed_from_main": False,
+                    "used_fallback": False,
+                },
+                {
+                    "agent": "DeepSeek V4 Pro",
+                    "answer": (
+                        "Discordo de tratar Japão como adversário parelho. Abaixo de 60% seria agressivo demais: "
+                        "Japão é upset plausível, mas o Brasil ainda tem vantagem de elenco e controle territorial."
+                    ),
+                    "disagreed": True,
+                    "removed_from_main": False,
+                    "used_fallback": False,
+                },
+            ],
+        }
+    ]
+
+    text = render_template_post(bundle, post_index=2, run_date=date(2026, 6, 20))
+
+    backstage = text.split("DOIS BASTIDORES DA REUNIÃO DE HOJE:\n\n", 1)[1].split("📊", 1)[0]
+    assert "risco ponderado de 60,9%" in backstage
+    assert "Holanda a 46,6%" in backstage
+    assert "Japão a 32,5%" not in backstage
+    assert "de 60,9% para 46,6%" not in backstage
+    assert "virou protagonista" not in backstage
+
+
 def test_backstage_does_not_truncate_after_numeric_date_fragment() -> None:
     bundle = _bundle()
     bundle.model_participation = {
