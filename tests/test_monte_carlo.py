@@ -303,6 +303,7 @@ def test_monte_carlo_downstream_round_uses_winner_of_official_neighbor_match() -
 def test_monte_carlo_uses_same_team_context_signal_families_for_candidate_opponents() -> None:
     baseline = run_brazil_monte_carlo(_mc_config(iterations=5000))
     adjusted_config = _mc_config(iterations=5000)
+    adjusted_config["monte_carlo"]["team_context_evidence_regression_enabled"] = False
     adjusted_config["monte_carlo"]["probability_pct_to_rating_points"] = 10.0
     adjusted_config["monte_carlo"]["team_context"] = {
         "Suécia": [
@@ -900,6 +901,7 @@ def test_monte_carlo_does_not_create_match_event_from_reactive_text_without_comp
 def test_monte_carlo_keeps_cross_family_sum_when_correlation_rho_is_zero() -> None:
     config = _mc_config(iterations=2000)
     config["monte_carlo"]["team_context_correlation_default_rho"] = 0.0
+    config["monte_carlo"]["team_context_evidence_regression_enabled"] = False
     config["monte_carlo"]["team_context"] = {
         "Brasil": [
             {
@@ -1217,3 +1219,150 @@ def test_monte_carlo_output_is_bit_identical_after_hot_loop_memoization() -> Non
 
     assert _hash(result_off) == "c14d860cce5a79576dbdd1c54f9d80f7d5b6a57be3e9c7e5a4bd90951e2dce20"
     assert _hash(result_on) == "9d6af7f799a18d6d05be0de7dea5b23e22a8cc0e7d435de02ec7be9ff57087e8"
+
+
+def _evidence_config(team_context: dict) -> dict:
+    config = _mc_config(iterations=1500)
+    config["monte_carlo"]["team_ratings"].update({"Argentina": 1820})
+    config["monte_carlo"]["team_context"] = team_context
+    return config
+
+
+def _expected_regression(capped: float, n: int, *, prior: float = 2.0, warning: float = 40.0) -> float:
+    if abs(capped) <= warning:
+        return capped
+    factor = n / (n + prior)
+    return (1.0 if capped >= 0 else -1.0) * (warning + (abs(capped) - warning) * factor)
+
+
+def test_extreme_single_source_delta_regressed_by_exact_factor() -> None:
+    # Argentina +123-style blow-up: one extreme rating signal from a single source.
+    config = _evidence_config(
+        {
+            "Argentina": [
+                {
+                    "category": "ratings",
+                    "rating_delta": 120.0,
+                    "confidence": 1.0,
+                    "correlation_group": "arg_single",
+                    "source_url": "https://example.com/arg",
+                }
+            ]
+        }
+    )
+    reg = _team_context_adjustment(run_brazil_monte_carlo(config), "Argentina")["evidence_regression"]
+    assert reg["distinct_sources"] == 1
+    assert reg["independent_evidence"] == 1
+    assert abs(reg["capped_delta"]) > 40.0
+    # exact n/(n+2) factor -- catches a silent no-op AND a hardcoded constant factor
+    assert abs(reg["regressed_delta"] - _expected_regression(reg["capped_delta"], 1)) < 0.2
+    assert abs(reg["regressed_delta"]) < abs(reg["capped_delta"])  # genuinely pulled in
+
+
+def test_corroborated_delta_uses_n_factor_not_noop() -> None:
+    signals = [
+        {
+            "category": cat,
+            "rating_delta": 25.0,
+            "confidence": 1.0,
+            "correlation_group": f"g{i}",
+            "source_url": f"https://example.com/s{i}",
+        }
+        for i, cat in enumerate(
+            ["ratings", "performance", "bets_prediction_markets", "recent_news", "specialized_press"]
+        )
+    ]
+    reg = _team_context_adjustment(
+        run_brazil_monte_carlo(_evidence_config({"Suécia": signals})), "Suécia"
+    )["evidence_regression"]
+    assert reg["independent_evidence"] == 5
+    # exact n=5 factor; fails if the feature silently no-ops (regressed would equal capped)
+    assert abs(reg["regressed_delta"] - _expected_regression(reg["capped_delta"], 5)) < 0.2
+    assert _expected_regression(reg["capped_delta"], 5) > _expected_regression(reg["capped_delta"], 1)
+
+
+def test_split_group_labels_cannot_dodge_regression() -> None:
+    # Structural families honour the model's free-text correlation_group verbatim, so the
+    # model could mint many group ids from one shock. The source cap must defeat that.
+    one = [
+        {
+            "category": "squad_depth",
+            "rating_delta": 90.0,
+            "confidence": 1.0,
+            "correlation_group": "struct",
+            "source_url": "https://example.com/x",
+        }
+    ]
+    split = [
+        {
+            "category": "squad_depth",
+            "rating_delta": 10.0,
+            "confidence": 1.0,
+            "correlation_group": f"struct_{i}",
+            "source_url": "https://example.com/x",
+        }
+        for i in range(9)
+    ]
+    a = _team_context_adjustment(run_brazil_monte_carlo(_evidence_config({"Argentina": one})), "Argentina")["evidence_regression"]
+    b = _team_context_adjustment(run_brazil_monte_carlo(_evidence_config({"Argentina": split})), "Argentina")["evidence_regression"]
+    assert b["distinct_sources"] == 1
+    assert b["independent_evidence"] == 1  # capped by the single real source, not 9 minted labels
+    assert abs(a["regressed_delta"] - b["regressed_delta"]) < 0.6  # relabelling buys nothing
+
+
+def test_cap_applied_before_regression() -> None:
+    # raw above the 180 cap must be capped FIRST, then regressed (not regress-then-clamp).
+    signals = [
+        {
+            "category": cat,
+            "rating_delta": 120.0,
+            "confidence": 1.0,
+            "correlation_group": f"g{i}",
+            "source_url": f"https://example.com/s{i}",
+        }
+        for i, cat in enumerate(["ratings", "performance", "bets_prediction_markets"])
+    ]
+    reg = _team_context_adjustment(
+        run_brazil_monte_carlo(_evidence_config({"Argentina": signals})), "Argentina"
+    )["evidence_regression"]
+    assert reg["capped_delta"] == 180.0  # clamped before regression
+    assert abs(reg["regressed_delta"] - _expected_regression(180.0, reg["independent_evidence"])) < 0.5
+    assert abs(reg["regressed_delta"]) < 180.0  # regression survives the cap (old code clipped to 180)
+
+
+def test_regression_engages_under_production_rho() -> None:
+    config = _evidence_config(
+        {
+            "Argentina": [
+                {"category": "ratings", "rating_delta": 60.0, "confidence": 1.0,
+                 "correlation_group": "g", "source_url": "https://example.com/a"},
+                {"category": "performance", "rating_delta": 60.0, "confidence": 1.0,
+                 "correlation_group": "g", "source_url": "https://example.com/b"},
+            ]
+        }
+    )
+    config["monte_carlo"]["team_context_correlation_default_rho"] = 0.7  # production regime
+    reg = _team_context_adjustment(run_brazil_monte_carlo(config), "Argentina")["evidence_regression"]
+    # material_delta=1.0 means rho shrinking a group does not flip it below the count threshold
+    if abs(reg["capped_delta"]) > 40.0:
+        assert reg["independent_evidence"] >= 1
+        assert abs(reg["regressed_delta"]) < abs(reg["capped_delta"])
+
+
+def test_small_single_source_delta_below_threshold_untouched() -> None:
+    config = _evidence_config(
+        {
+            "Tunísia": [
+                {
+                    "category": "ratings",
+                    "rating_delta": 15.0,
+                    "confidence": 1.0,
+                    "correlation_group": "mini",
+                    "source_url": "https://example.com/mini",
+                }
+            ]
+        }
+    )
+    reg = _team_context_adjustment(run_brazil_monte_carlo(config), "Tunísia")["evidence_regression"]
+    assert abs(reg["capped_delta"]) <= 40.0
+    assert reg["raw_delta"] == reg["regressed_delta"]  # below warning -> untouched

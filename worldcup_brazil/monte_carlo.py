@@ -681,7 +681,47 @@ def _apply_team_context_adjustments(config: dict[str, Any], ratings: dict[str, f
                         "derived_match_event": signal.get("model_match_event_hint"),
                     }
                 )
-        bucket["rating_delta"] = sum(float(item["rating_delta"]) for item in correlation_adjustments)
+        raw_team_delta = sum(float(item["rating_delta"]) for item in correlation_adjustments)
+        # Evidence-weighted regression. The cap is applied FIRST so the evidence-weighting
+        # operates on the bounded magnitude instead of being erased by the clamp on true
+        # blow-ups. Independent evidence is min(material correlation groups, distinct verified
+        # sources): a single shock relabelled into many group ids cannot inflate the count past
+        # the number of real sources behind it, and sub-threshold groups from one source cannot
+        # bypass it either. Only the excess above warning_delta is shrunk, by a Bayesian factor
+        # n/(n+prior). Deterministic, zero added latency.
+        evidence_regression_enabled = bool(mc_config.get("team_context_evidence_regression_enabled", True))
+        evidence_prior = float(mc_config.get("team_context_evidence_regression_prior", 2.0))
+        evidence_material_delta = float(mc_config.get("team_context_evidence_material_delta", 1.0))
+        capped_raw_delta = max(-max_team_delta, min(max_team_delta, raw_team_delta))
+        material_groups = sum(
+            1
+            for item in correlation_adjustments
+            if abs(float(item["rating_delta"])) >= evidence_material_delta
+        )
+        distinct_sources = len(
+            {
+                str(signal.get("source") or signal.get("source_url") or "").strip()
+                for signal in bucket["signals"]
+            }
+            - {""}
+        )
+        independent_evidence = min(material_groups, distinct_sources)
+        regressed_team_delta = capped_raw_delta
+        if evidence_regression_enabled and abs(capped_raw_delta) > warning_delta:
+            factor = independent_evidence / (independent_evidence + evidence_prior)
+            excess = abs(capped_raw_delta) - warning_delta
+            sign = 1.0 if capped_raw_delta >= 0 else -1.0
+            regressed_team_delta = sign * (warning_delta + excess * factor)
+        bucket["evidence_regression"] = {
+            "raw_delta": round(raw_team_delta, 1),
+            "capped_delta": round(capped_raw_delta, 1),
+            "regressed_delta": round(regressed_team_delta, 1),
+            "independent_evidence": independent_evidence,
+            "material_groups": material_groups,
+            "distinct_sources": distinct_sources,
+            "prior": evidence_prior,
+        }
+        bucket["rating_delta"] = regressed_team_delta
         bounded_team_delta = max(-max_team_delta, min(max_team_delta, float(bucket["rating_delta"])))
         if abs(bounded_team_delta) > warning_delta:
             warnings.append(
@@ -697,6 +737,7 @@ def _apply_team_context_adjustments(config: dict[str, Any], ratings: dict[str, f
             {
                 "team": team,
                 "rating_delta": round(bounded_team_delta, 1),
+                "evidence_regression": bucket["evidence_regression"],
                 "source_families": sorted(bucket["source_families"]),
                 "family_adjustments": family_adjustments,
                 "correlation_adjustments": correlation_adjustments,
