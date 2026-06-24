@@ -1746,6 +1746,58 @@ def recommend_rho_against_market(
     }
 
 
+def recommend_base_rating_against_market(
+    title_by_rating: dict[float, float],
+    market_pct: float | None,
+    *,
+    current_rating: float,
+    peer_max_rating: float,
+    tolerance_pct: float = 1.0,
+    plausible_margin: float = 40.0,
+) -> dict[str, Any]:
+    """Diagnose whether the team's SEED base rating (not the market) explains the title gap.
+
+    `title_by_rating` maps each tried base rating to the resulting title %. Finds the rating
+    whose simulated title matches the market, but only calls the seed `seed_plausibly_low` if
+    that rating stays within the peer top cluster (`peer_max_rating + plausible_margin`). It
+    never recommends matching the market with an implausible rating: the model is meant to be
+    allowed to disagree with the market, so an implausible implied rating is reported as a
+    `market_disagreement`, not a fix. Offline diagnostic; no auto-fit."""
+    usable = {
+        round(float(rating), 0): float(title)
+        for rating, title in (title_by_rating or {}).items()
+        if title is not None
+    }
+    if not usable or market_pct is None or float(market_pct) <= 0.0:
+        return {"verdict": "insufficient_data", "recommended_rating": None}
+    market = float(market_pct)
+    implied_rating = min(usable, key=lambda rating: abs(usable[rating] - market))
+    implied_title = usable[implied_rating]
+    current_title = usable.get(round(float(current_rating), 0))
+    plausible_ceiling = peer_max_rating + plausible_margin
+    if current_title is not None and abs(current_title - market) <= tolerance_pct:
+        # the seed itself already lands at the market -- no change needed
+        verdict = "seed_aligns_with_market"
+    elif implied_rating <= plausible_ceiling:
+        # bumping the seed toward the implied rating is defensible -- but verify it independently
+        verdict = "seed_plausibly_low"
+    else:
+        # matching the market would need an implausible rating -> a genuine model/market split
+        verdict = "market_disagreement"
+    return {
+        "verdict": verdict,
+        "current_rating": round(float(current_rating), 0),
+        "current_title_pct": (round(current_title, 1) if current_title is not None else None),
+        "market_implied_rating": round(implied_rating, 0),
+        "market_implied_title_pct": round(implied_title, 1),
+        "market_pct": round(market, 1),
+        "peer_max_rating": round(float(peer_max_rating), 0),
+        "plausible_ceiling": round(plausible_ceiling, 0),
+        "rating_gap": round(implied_rating - float(current_rating), 0),
+        "note": "verify any bump against real Elo / results, never just the market",
+    }
+
+
 def run_brazil_monte_carlo(config: dict[str, Any]) -> dict[str, Any]:
     mc_config = _mc_config(config)
     if not bool(mc_config.get("enabled", False)):

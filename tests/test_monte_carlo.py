@@ -5,6 +5,7 @@ import pytest
 from worldcup_brazil.monte_carlo import (
     _stage_uncertainty_intervals,
     monte_carlo_compact_summary,
+    recommend_base_rating_against_market,
     recommend_rho_against_market,
     run_brazil_monte_carlo,
     widen_ci_for_monte_carlo_path_uncertainty,
@@ -1457,3 +1458,60 @@ def test_calibrate_rho_team_delta_matches_engine_exactly() -> None:
     recomputed = calibrate_rho._team_delta_at_rho(adjustment, 0.7, settings)
     assert adjustment["evidence_regression"]["distinct_sources"] == 1
     assert round(recomputed, 1) == round(adjustment["rating_delta"], 1)  # exact, source throttle intact
+
+
+def test_base_rating_recommender_flags_a_plausibly_low_seed() -> None:
+    sweep = {1750: 2.0, 1800: 3.0, 1850: 3.8, 1900: 5.5, 1950: 7.4}
+    rec = recommend_base_rating_against_market(
+        sweep, market_pct=7.4, current_rating=1850, peer_max_rating=1920
+    )
+    assert rec["verdict"] == "seed_plausibly_low"   # 1950 implied, within the 1960 ceiling
+    assert rec["market_implied_rating"] == 1950
+    assert rec["rating_gap"] == 100
+
+
+def test_base_rating_recommender_calls_implausible_implied_rating_a_market_disagreement() -> None:
+    sweep = {1850: 3.8, 2000: 5.0, 2100: 6.0, 2200: 7.4}
+    rec = recommend_base_rating_against_market(
+        sweep, market_pct=7.4, current_rating=1850, peer_max_rating=1920
+    )
+    assert rec["verdict"] == "market_disagreement"  # matching 7.4 needs 2200 >> peer cluster
+    assert rec["market_implied_rating"] == 2200     # reported, never recommended as a fix
+
+
+def test_base_rating_recommender_seed_already_aligned() -> None:
+    rec = recommend_base_rating_against_market(
+        {1850: 7.3, 1900: 8.0}, market_pct=7.4, current_rating=1850, peer_max_rating=1920
+    )
+    assert rec["verdict"] == "seed_aligns_with_market"
+
+
+def test_base_rating_recommender_insufficient_data() -> None:
+    assert recommend_base_rating_against_market({}, 7.4, current_rating=1850, peer_max_rating=1920)[
+        "verdict"
+    ] == "insufficient_data"
+    assert recommend_base_rating_against_market(
+        {1850: 3.8}, None, current_rating=1850, peer_max_rating=1920
+    )["verdict"] == "insufficient_data"
+
+
+def test_base_rating_recommender_missing_seed_is_not_a_fake_alignment() -> None:
+    # current_rating 1850 is absent from the sweep and the implied 2200 is implausible:
+    # a missing seed must NOT short-circuit to seed_aligns (the adversarial H4 bug).
+    rec = recommend_base_rating_against_market(
+        {1900: 5.0, 2200: 7.4}, market_pct=7.4, current_rating=1850, peer_max_rating=1920
+    )
+    assert rec["current_title_pct"] is None
+    assert rec["verdict"] == "market_disagreement"
+
+
+def test_base_rating_recommender_ceiling_is_inclusive_both_directions() -> None:
+    at_ceiling = recommend_base_rating_against_market(
+        {1850: 3.8, 1960: 7.4}, market_pct=7.4, current_rating=1850, peer_max_rating=1920
+    )
+    assert at_ceiling["market_implied_rating"] == 1960
+    assert at_ceiling["verdict"] == "seed_plausibly_low"  # implied == ceiling (1960) is inclusive
+    over_ceiling = recommend_base_rating_against_market(
+        {1850: 3.8, 1961: 7.4}, market_pct=7.4, current_rating=1850, peer_max_rating=1920
+    )
+    assert over_ceiling["verdict"] == "market_disagreement"  # one Elo over flips the verdict
