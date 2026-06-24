@@ -7,6 +7,7 @@ from worldcup_brazil.pipeline import (
     _apply_agent_team_context_to_monte_carlo_config,
     _apply_meeting_knockout_scenarios,
     _apply_meeting_match_probabilities,
+    _devig_outright_title_probabilities,
     _market_title_challenge,
     _opponent_room_has_sufficient_phase_coverage,
     _opponent_room_phase_coverage,
@@ -1258,3 +1259,94 @@ def test_validate_report_coherence_rejects_knockout_scenario_pct_echo_in_match_p
         assert "scenario_pct" in str(exc)
     else:
         raise AssertionError("expected ReportCoherenceError")
+
+
+def _devig_field(brazil_odds: float, bookmaker: str = "BookA", source: str = "https://book/a") -> list:
+    field = {
+        "Brasil": brazil_odds, "Argentina": 4.0, "França": 5.0, "Espanha": 6.0,
+        "Inglaterra": 7.0, "Alemanha": 8.0, "Holanda": 10.0, "Portugal": 12.0,
+    }
+    entries = []
+    for i, (team, odds) in enumerate(field.items()):
+        entry = {"team": team, "decimal_odds": odds, "bookmaker": bookmaker}
+        if i == 0:
+            entry["source_url"] = source
+        entries.append(entry)
+    return entries
+
+
+def _expected_devig(brazil_odds: float) -> float:
+    grosses = [1.0 / o for o in (brazil_odds, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0, 12.0)]
+    return round((1.0 / brazil_odds) / sum(grosses) * 100.0, 1)
+
+
+def test_devig_outright_odds_removes_overround_to_exact_value() -> None:
+    probs, evidence = _devig_outright_title_probabilities(_devig_field(6.0))
+    assert probs == [_expected_devig(6.0)]               # exact de-vig, NOT raw 1/odds
+    assert _expected_devig(6.0) < round(100.0 / 6.0, 1)  # overround removed: below the gross 16.7%
+    assert evidence[0]["source_url"] == "https://book/a"
+
+
+def test_devig_rejects_partial_field_with_implausible_overround() -> None:
+    # 4-team field overrounds to ~0.68 (<1): de-vig would INFLATE Brazil, so it must be rejected.
+    partial = [
+        {"team": "Brasil", "decimal_odds": 6.0, "bookmaker": "BookA"},
+        {"team": "Argentina", "decimal_odds": 5.0, "bookmaker": "BookA"},
+        {"team": "França", "decimal_odds": 6.0, "bookmaker": "BookA"},
+        {"team": "Espanha", "decimal_odds": 7.0, "bookmaker": "BookA"},
+    ]
+    assert _devig_outright_title_probabilities(partial) == ([], [])
+    # a lone quote is the degenerate partial field
+    assert _devig_outright_title_probabilities(
+        [{"team": "Brasil", "decimal_odds": 6.0, "bookmaker": "BookA"}]
+    ) == ([], [])
+
+
+def test_market_challenge_pins_devigged_value_as_real_anchor() -> None:
+    config = {
+        "market_title_challenge": {"enabled": True, "absolute_gap_pct": 3.0, "relative_gap_pct": 0.40},
+        "market_outright_odds": _devig_field(6.0),
+    }
+    challenge = _market_title_challenge({"titulo": 3.5}, [], config=config)
+    assert challenge["market_source"] == "devigged_odds"
+    assert challenge["market_low_pct"] == _expected_devig(6.0)   # band IS the de-vig value, exact
+    assert challenge["market_high_pct"] == _expected_devig(6.0)
+    assert challenge["triggered"] is True
+    assert challenge["evidence"][0]["source"].startswith("odds ")
+
+
+def test_real_odds_anchor_is_not_contaminated_by_debate_prose() -> None:
+    # A real de-vig anchor must not pool a scraped debate percentage into its band.
+    transcript = [
+        {
+            "round": 2,
+            "responses": [
+                {
+                    "agent": "Opus 4.8",
+                    "answer": "No mercado outright da betfair o titulo do Brasil esta cotado em 22%. Fonte https://betfair.com",
+                    "removed_from_main": False,
+                }
+            ],
+        }
+    ]
+    config = {
+        "market_title_challenge": {"enabled": True, "absolute_gap_pct": 3.0, "relative_gap_pct": 0.40},
+        "market_outright_odds": _devig_field(6.0),
+    }
+    challenge = _market_title_challenge({"titulo": 3.5}, transcript, config=config)
+    assert challenge["market_source"] == "devigged_odds"
+    assert challenge["market_high_pct"] == _expected_devig(6.0)  # the 22% prose is excluded
+    assert challenge["market_candidate_count"] == 1             # only the de-vig anchor counts
+
+
+def test_market_challenge_without_odds_stays_no_market_signal() -> None:
+    challenge = _market_title_challenge(
+        {"titulo": 3.5}, [], config={"market_title_challenge": {"enabled": True}}
+    )
+    assert challenge["status"] == "no_market_signal"  # no odds + no debate -> honest silence
+
+
+def test_devig_band_spans_multiple_bookmakers_with_exact_values() -> None:
+    odds = _devig_field(6.0, bookmaker="BookA") + _devig_field(10.0, bookmaker="BookB")
+    probs, _ = _devig_outright_title_probabilities(odds)
+    assert probs == [_expected_devig(6.0), _expected_devig(10.0)]  # one exact de-vig per book

@@ -28,6 +28,9 @@
     "robust_low_quantile": 0.2,
     "robust_high_quantile": 0.8
   },
+  "market_outright_odds": [],
+  "market_outright_min_overround": 1.02,
+  "market_outright_max_overround": 1.40,
   "stage_probability_blend": {
     "enabled": true,
     "monte_carlo_weight": 0.6,

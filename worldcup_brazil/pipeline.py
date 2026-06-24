@@ -3133,6 +3133,66 @@ def _market_title_band_from_candidates(candidates: list[float], settings: dict[s
     return round(min(candidates), 1), round(max(candidates), 1), "min_max"
 
 
+def _devig_outright_title_probabilities(
+    odds_entries: list[dict[str, Any]] | None,
+    *,
+    team_name: str = "Brasil",
+    min_overround: float = 1.02,
+    max_overround: float = 1.40,
+) -> tuple[list[float], list[dict[str, str]]]:
+    """De-vig outright title odds into a market-implied probability for `team_name`.
+
+    Each entry is {team, decimal_odds, bookmaker, source_url}. Per bookmaker the full
+    field is normalised by its overround (proportional de-vig), so the result is a real
+    market-implied probability, not a percentage scraped from debate prose. A book is only
+    used if its overround lands in a plausible [min_overround, max_overround] band; a partial
+    field (overround < 1) would otherwise inflate the de-vig, and American/fractional odds
+    mistaken for decimal fall out of band. Returns one de-vigged probability per accepted
+    bookmaker, plus evidence."""
+    by_book: dict[str, dict[str, Any]] = {}
+    for entry in odds_entries or []:
+        if not isinstance(entry, dict):
+            continue
+        team = str(entry.get("team") or "").strip()
+        book = str(entry.get("bookmaker") or entry.get("book") or "default").strip() or "default"
+        try:
+            decimal_odds = float(entry.get("decimal_odds") or entry.get("odds") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if not team or decimal_odds <= 1.0:
+            continue
+        slot = by_book.setdefault(book, {"odds": {}, "source": ""})
+        slot["odds"][team] = decimal_odds
+        if not slot["source"]:
+            slot["source"] = str(entry.get("source_url") or entry.get("source") or "")
+    probabilities: list[float] = []
+    evidence: list[dict[str, str]] = []
+    for book, slot in sorted(by_book.items()):
+        odds = slot["odds"]
+        if team_name not in odds:
+            continue
+        gross = {team: 1.0 / value for team, value in odds.items()}
+        overround = sum(gross.values())
+        # A real, reasonably complete book overrounds to ~105-130%. Reject anything outside the
+        # plausible band: partial fields (overround < 1) inflate the de-vig, and American/
+        # fractional odds mistaken for decimal, or duplicate-corrupted fields, fall out of band.
+        if not (min_overround <= overround <= max_overround):
+            continue
+        devigged = round(gross[team_name] / overround * 100.0, 1)
+        probabilities.append(devigged)
+        evidence.append(
+            {
+                "source": f"odds {book}",
+                "snippet": (
+                    f"{team_name} de-vig {devigged}% em {book} "
+                    f"(overround {round(overround * 100)}%, {len(odds)} times)"
+                ),
+                "source_url": str(slot["source"]),
+            }
+        )
+    return probabilities, evidence
+
+
 def _market_title_challenge(
     stage_probabilities: dict[str, float],
     meeting_transcript: list[dict[str, Any]],
@@ -3164,6 +3224,19 @@ def _market_title_challenge(
     weak_candidates: list[float] = []
     evidence: list[dict[str, str]] = []
     weak_evidence: list[dict[str, str]] = []
+    # Real de-vigged outright odds are the strongest anchor: they enter as structured
+    # candidates ahead of any percentage scraped from debate prose.
+    devig_probs, devig_evidence = _devig_outright_title_probabilities(
+        config.get("market_outright_odds"),
+        team_name=str(config.get("brazil_team_name") or "Brasil"),
+        min_overround=float(config.get("market_outright_min_overround", 1.02)),
+        max_overround=float(config.get("market_outright_max_overround", 1.40)),
+    )
+    has_devig = bool(devig_probs)
+    for prob in devig_probs:
+        if abs(prob - model_title_pct) >= 0.05:
+            candidates.append(prob)
+    evidence.extend(devig_evidence[: settings["max_evidence_items"]])
     for label, text in [*_iter_market_title_texts(meeting_transcript), *(source_texts or [])]:
         values = _market_title_values_from_text(text, config=config)
         values = [value for value in values if abs(float(value) - model_title_pct) >= 0.05]
@@ -3171,7 +3244,9 @@ def _market_title_challenge(
             continue
         snippet = re.sub(r"\s+", " ", str(text or "").strip())
         item = {"source": label, "snippet": snippet[:260]}
-        if _market_title_text_has_structured_evidence(text):
+        # When a real de-vigged odds anchor exists it is authoritative: debate-prose
+        # percentages stay informational (weak) and never pool into the market band.
+        if _market_title_text_has_structured_evidence(text) and not has_devig:
             candidates.extend(values)
             if len(evidence) < settings["max_evidence_items"]:
                 evidence.append(item)
@@ -3209,6 +3284,7 @@ def _market_title_challenge(
         "market_mid_pct": market_mid,
         "market_band_method": band_method,
         "market_candidate_count": len(candidates),
+        "market_source": "devigged_odds" if has_devig else "structured_text",
         "absolute_gap_pct": absolute_gap,
         "relative_gap_pct": relative_gap,
         "evidence": evidence,
