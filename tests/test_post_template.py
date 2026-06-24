@@ -104,7 +104,7 @@ def test_template_post_fills_all_placeholders_within_limit() -> None:
     assert "Próximo post: véspera/dia de Brasil x Haiti (19/jun), com o mapa recalculado." in text
     assert "Próximo post: véspera/dia de Brasil x Marrocos (13/jun)" not in text
     assert "#Hexa #WorldCup #CopaDoMundo" in text
-    assert "Galera do bolão: 59 / 24 / 17." in text
+    assert "Galera do bolão" not in text
 
 
 def test_template_post_uses_monte_carlo_group_state_instead_of_static_summary() -> None:
@@ -231,7 +231,7 @@ def test_template_post_derives_group_loss_from_win_and_draw_when_bundle_opponent
     assert text.startswith("⚽ 19/jun · Brasil x Haiti · 92/8/0 · Hexa: 8,6%")
     assert "BRASIL x HAITI — 92% vitória | 8% empate" in text
     assert "8% derrota" not in text.split("O CAMINHO")[0]
-    assert "Galera do bolão: 92 / 8 / 0." in text
+    assert "Galera do bolão" not in text
 
 
 def test_template_post_discloses_active_models_and_opponent_room_fallback() -> None:

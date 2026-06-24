@@ -57,8 +57,6 @@ https://www.linkedin.com/posts/marcuscavalcanti_copacomachismo-brasil-brazil-sha
 
 Próximo post: véspera/dia de Brasil x {next_post_game}, com o mapa recalculado.
 
-Galera do bolão: {palpite_bolao}. Usem com moderação.
-
 #CopaComAchismo #Brasil #Brazil #WorldCup2026 #Futebol #Football #Soccer #Hexa #WorldCup #CopaDoMundo
 """
 
@@ -1209,13 +1207,6 @@ def render_template_post(
     stage = dict(getattr(bundle, "stage_probabilities", {}) or {})
     backstage = _backstage_section(_extract_beats(bundle))
 
-    bolao = [win]
-    if draw_value:
-        bolao.append(_pct_int(draw_value))
-    if loss_value is not None:
-        bolao.append(_pct_int(loss_value))
-    palpite = " / ".join(value.rstrip("%") for value in bolao)
-
     title_pct_text = _pct(stage.get("titulo"))
     round_header = (
         f"⚽ {_short_date(getattr(featured, 'match_date', ''))} · Brasil x {getattr(featured, 'opponent', '')} · "
@@ -1242,7 +1233,6 @@ def render_template_post(
         change_section=_change_section(bundle, previous_bundle),
         backstage_section=backstage,
         next_post_game=_post_game_label(next_post_match),
-        palpite_bolao=palpite,
     )
 
     text = re.sub(r"(?<=\S)  +(?=\S)", " ", text)
