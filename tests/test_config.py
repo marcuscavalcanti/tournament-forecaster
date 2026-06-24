@@ -75,6 +75,12 @@ def test_example_config_uses_three_agent_source_quorum_and_repair_attempts() -> 
     assert config["completed_group_matches"][0]["team_a"] == "Brasil"
     assert config["completed_group_matches"][0]["score_a"] == 1
     assert config["completed_group_matches"][0]["score_b"] == 1
+    perplexity = next(agent for agent in config["agents"] if agent["slot"] == "Perplexity Pro")
+    role_budgets = perplexity["max_output_tokens_by_role"]
+    assert role_budgets["preflight"] <= 1200
+    assert role_budgets["meeting_response"] <= 1800
+    assert role_budgets["agent_reentry_probe"] <= 2200
+    assert role_budgets["meeting_response"] < perplexity["max_output_tokens"]
 
 
 def test_load_config_watchdog_payload_exposes_safe_operational_config() -> None:

@@ -338,7 +338,7 @@ def test_market_title_challenge_flags_large_gap_without_changing_model_title() -
             "responses": [
                 {
                     "agent": "Opus 4.8",
-                    "answer": "Mercado/sportsbooks para campeão Brasil ficam entre 9% e 11%, então é divergência real.",
+                    "answer": "Mercado/sportsbooks para campeão Brasil em odds 10/1 indicam cerca de 9% a 11%, então é divergência real.",
                     "removed_from_main": False,
                 }
             ],
@@ -354,10 +354,39 @@ def test_market_title_challenge_flags_large_gap_without_changing_model_title() -
     assert challenge["triggered"] is True
     assert challenge["model_title_pct"] == 4.5
     assert challenge["market_low_pct"] == 9.0
-    assert challenge["market_high_pct"] == 11.0
-    assert challenge["market_mid_pct"] == 10.0
-    assert challenge["absolute_gap_pct"] == 5.5
+    assert challenge["market_high_pct"] == 10.2
+    assert challenge["market_mid_pct"] == 9.6
+    assert challenge["absolute_gap_pct"] == 5.1
     assert "mantem_funil_60_40" in challenge["decision"]
+
+
+def test_market_title_challenge_treats_unstructured_debate_market_claim_as_weak_signal() -> None:
+    transcript = [
+        {
+            "round": 2,
+            "responses": [
+                {
+                    "agent": "Opus 4.8",
+                    "answer": (
+                        "Na minha leitura, o mercado de título do Brasil estaria entre 7,4% "
+                        "e 10,8%, mas não trago odds bruta, casa, URL ou data nesta resposta."
+                    ),
+                    "removed_from_main": False,
+                }
+            ],
+        }
+    ]
+
+    challenge = _market_title_challenge(
+        {"titulo": 3.8},
+        transcript,
+        config={"market_title_challenge": {"enabled": True, "absolute_gap_pct": 3.0, "relative_gap_pct": 0.40}},
+    )
+
+    assert challenge["triggered"] is False
+    assert challenge["status"] == "debate_claim_only"
+    assert challenge["market_low_pct"] is None
+    assert challenge["debate_claim_candidate_count"] == 2
 
 
 def test_market_title_challenge_ignores_protagonist_questions_as_market_evidence() -> None:
@@ -479,7 +508,7 @@ def test_market_title_challenge_ignores_small_gap_and_preserves_status() -> None
             "responses": [
                 {
                     "agent": "DeepSeek V4 Pro",
-                    "answer": "Mercado de titulo do Brasil esta em 8.9%, muito perto do MC em 8.2%.",
+                    "answer": "Mercado de titulo do Brasil em odds 10/1 esta perto de 9.1%, muito perto do MC em 8.2%.",
                     "removed_from_main": False,
                 }
             ],
@@ -556,7 +585,7 @@ def test_market_title_challenge_ignores_match_probability_distractors() -> None:
                 {
                     "agent": "Perplexity Pro",
                     "answer": (
-                        "Mercado de título do Brasil está em 8.5%; no jogo contra Haiti, "
+                        "Mercado de título do Brasil em odds 10/1 indica 9.1%; no jogo contra Haiti, "
                         "empate aparece em 17% e vitória brasileira em 76%."
                     ),
                     "removed_from_main": False,
@@ -571,8 +600,8 @@ def test_market_title_challenge_ignores_match_probability_distractors() -> None:
         config={"market_title_challenge": {"enabled": True, "absolute_gap_pct": 3.0, "relative_gap_pct": 0.40}},
     )
 
-    assert challenge["market_low_pct"] == 8.5
-    assert challenge["market_high_pct"] == 8.5
+    assert challenge["market_low_pct"] == 9.1
+    assert challenge["market_high_pct"] == 9.1
     assert "17" not in str(challenge["market_high_pct"])
 
 

@@ -569,6 +569,20 @@ def test_fixed_quanti_quali_detector_accepts_fractional_market_odds() -> None:
     assert _has_fixed_quanti_quali_allocation(text) is False
 
 
+def test_fixed_quanti_quali_detector_accepts_real_run_compliance_and_mc_output_text() -> None:
+    deepseek_excerpt = (
+        "3,8%. Nenhum ajuste é necessário. Não há discordância qualitativa ou quantitativa; "
+        "os outputs do MC continuam como 55% Brasil e 25% empate."
+    )
+    opus_excerpt = (
+        "Não reconstruo decomposição fixa de p.p. (alocação quanti/quali) — uso só os outputs "
+        "do MC: 3,8% título, 62% grupo."
+    )
+
+    assert _has_fixed_quanti_quali_allocation(deepseek_excerpt) is False
+    assert _has_fixed_quanti_quali_allocation(opus_excerpt) is False
+
+
 def test_fixed_quanti_quali_detector_rejects_slash_allocation_even_with_nearby_odds() -> None:
     text = (
         "Uso quota fixa 70/30 entre quantitativo e qualitativo, ancorada nas odds 8/1 "

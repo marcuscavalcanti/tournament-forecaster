@@ -219,6 +219,15 @@
       "model": "sonar-pro",
       "env_api_key": "PERPLEXITY_API_KEY",
       "endpoint": "https://api.perplexity.ai/chat/completions",
+      "max_output_tokens_by_role": {
+        "preflight": 1200,
+        "source_planning": 3500,
+        "source_planning_repair": 2000,
+        "format_repair": 1200,
+        "protagonist_question": 1200,
+        "meeting_response": 1500,
+        "agent_reentry_probe": 1800
+      },
       "max_output_tokens": 6000
     },
     {

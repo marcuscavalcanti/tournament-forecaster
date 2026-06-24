@@ -120,33 +120,117 @@ def _first_place_pct(bundle: Any) -> str:
     return "—"
 
 
-def _completed_group_context(bundle: Any) -> str:
+def _completed_group_context(bundle: Any, *, before_date: date | None = None) -> str:
+    scores = _completed_group_scores(bundle, before_date=before_date)
+    if not scores:
+        return ""
+    if len(scores) == 1:
+        return f"Com {scores[0]}, "
+    return f"Com {_join_pt(scores)}, "
+
+
+def _completed_group_scores(bundle: Any, *, before_date: date | None = None) -> list[str]:
+    metadata = getattr(bundle, "metadata", {}) or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    completed_matches = metadata.get("completed_group_matches") or []
+    if isinstance(completed_matches, list) and completed_matches:
+        return _scores_from_completed_group_matches(bundle, completed_matches, before_date=before_date)
+
     state = _group_state(bundle)
     results = state.get("completed_results") or []
     if not isinstance(results, list):
-        return ""
+        return []
     scores = [
         str(item.get("score") or "").strip()
         for item in results
         if isinstance(item, dict) and str(item.get("score") or "").strip()
     ]
-    if not scores:
+    return scores
+
+
+def _scores_from_completed_group_matches(
+    bundle: Any,
+    completed_matches: list[Any],
+    *,
+    before_date: date | None = None,
+) -> list[str]:
+    group_matches = list(getattr(bundle, "group_matches", []) or [])
+    group_teams = {"brasil"}
+    group_teams.update(_normalize_beat(getattr(match, "opponent", "")) for match in group_matches)
+    state = _group_state(bundle)
+    brazil_group = str(state.get("brazil_group") or "").strip()
+    for item in completed_matches:
+        if not isinstance(item, dict):
+            continue
+        if "brasil" in {
+            _normalize_beat(item.get("team_a", "")),
+            _normalize_beat(item.get("team_b", "")),
+        }:
+            brazil_group = brazil_group or str(item.get("group") or "").strip()
+            break
+
+    dated_scores: list[tuple[date, int, str]] = []
+    undated_scores: list[tuple[int, str]] = []
+    year = _bundle_year(bundle)
+    for index, item in enumerate(completed_matches):
+        if not isinstance(item, dict):
+            continue
+        item_group = str(item.get("group") or "").strip()
+        if brazil_group and item_group and item_group != brazil_group:
+            continue
+        team_a = str(item.get("team_a") or "").strip()
+        team_b = str(item.get("team_b") or "").strip()
+        if group_teams and not ({_normalize_beat(team_a), _normalize_beat(team_b)} <= group_teams):
+            continue
+        score = _completed_match_score(item)
+        if not score:
+            continue
+        played_at = _parse_completed_match_date(item.get("date"), year=year)
+        if before_date is not None and played_at is not None and played_at >= before_date:
+            continue
+        if played_at is None:
+            undated_scores.append((index, score))
+        else:
+            dated_scores.append((played_at, index, score))
+    ordered = [score for _played_at, _index, score in sorted(dated_scores)] + [
+        score for _index, score in sorted(undated_scores)
+    ]
+    deduped: list[str] = []
+    for score in ordered:
+        if score not in deduped:
+            deduped.append(score)
+    return deduped
+
+
+def _completed_match_score(item: dict[str, Any]) -> str:
+    score = str(item.get("score") or "").strip()
+    if score:
+        return score
+    team_a = str(item.get("team_a") or "").strip()
+    team_b = str(item.get("team_b") or "").strip()
+    if not team_a or not team_b:
         return ""
-    if len(scores) == 1:
-        return f"Com {scores[0]}, "
-    return f"Com {' e '.join(scores[:2])}, "
+    try:
+        score_a = int(item.get("score_a"))
+        score_b = int(item.get("score_b"))
+    except (TypeError, ValueError):
+        return ""
+    return f"{team_a} {score_a}-{score_b} {team_b}"
+
+
+def _parse_completed_match_date(raw: Any, *, year: int) -> date | None:
+    text = str(raw or "").strip()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        return date.fromisoformat(text)
+    return _parse_group_date(text, year=year)
 
 
 def _group_match_has_completed_score(bundle: Any, match: Any) -> bool:
     opponent = _normalize_beat(getattr(match, "opponent", ""))
     if not opponent:
         return False
-    state = _group_state(bundle)
-    results = state.get("completed_results") or []
-    if not isinstance(results, list):
-        return False
-    for item in results:
-        score = str(item.get("score") or "") if isinstance(item, dict) else str(item or "")
+    for score in _completed_group_scores(bundle):
         normalized = _normalize_beat(score)
         if "brasil" in normalized and opponent in normalized:
             return True
@@ -1073,7 +1157,7 @@ def render_template_post(
     remaining = [m for m, d in dated if m is not featured and d is not None and d > (featured_date or run_date)]
     next_post_match = remaining[0] if remaining else featured
     first_place_pct = _first_place_pct(bundle)
-    completed_context = _completed_group_context(bundle)
+    completed_context = _completed_group_context(bundle, before_date=featured_date)
     if remaining:
         listed = " e ".join(
             f"{getattr(m, 'opponent', '')} ({_pct_int(getattr(m, 'brazil_pct', None))} de vitória)" for m in remaining

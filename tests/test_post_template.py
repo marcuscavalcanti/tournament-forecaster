@@ -196,6 +196,30 @@ def test_template_post_does_not_close_group_before_featured_match_is_completed()
     assert "Brasil terminou o grupo" not in text
 
 
+def test_template_post_derives_group_context_from_completed_group_matches_before_next_brazil_game() -> None:
+    bundle = _bundle()
+    bundle.metadata["completed_group_matches"] = [
+        {"group": "C", "date": "2026-06-13", "team_a": "Brasil", "score_a": 1, "team_b": "Marrocos", "score_b": 1},
+        {"group": "C", "date": "2026-06-13", "team_a": "Escócia", "score_a": 1, "team_b": "Haiti", "score_b": 0},
+        {"group": "C", "date": "2026-06-19", "team_a": "Escócia", "score_a": 0, "team_b": "Marrocos", "score_b": 1},
+        {"group": "C", "date": "2026-06-19", "team_a": "Brasil", "score_a": 3, "team_b": "Haiti", "score_b": 0},
+    ]
+    bundle.metadata["monte_carlo"]["group_state"] = {
+        "brazil_first_pct": 69.6,
+    }
+
+    text = render_template_post(bundle, post_index=3, run_date=date(2026, 6, 23))
+
+    validate_template_post(text, bundle)
+    group_context = text.split("BRASIL x ESCÓCIA", 1)[1].split("O CAMINHO", 1)[0]
+    assert "Brasil 1-1 Marrocos" in group_context
+    assert "Brasil 3-0 Haiti" in group_context
+    assert "Escócia 1-0 Haiti" in group_context
+    assert "Escócia 0-1 Marrocos" in group_context
+    assert "rodada 1" not in group_context.lower()
+    assert "Brasil termina em 1º do grupo em 70%" in group_context
+
+
 def test_template_post_derives_group_loss_from_win_and_draw_when_bundle_opponent_pct_is_stale() -> None:
     bundle = _bundle()
     haiti = bundle.group_matches[1]

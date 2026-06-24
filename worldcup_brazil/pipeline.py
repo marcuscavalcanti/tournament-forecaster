@@ -144,6 +144,8 @@ def _has_fixed_allocation_negation_or_compliance_language(text: str) -> bool:
     patterns = (
         r"\b(?:sem|nao|non)\W+(?:usar|uso|usei|utilizar|utilizei|aplicar|apliquei)"
         r"(?:\W+\w+){0,8}\W+(?:alocacao\W+fixa|percentual\W+fixo|peso\W+fixo|quanti/quali)",
+        r"\b(?:nao|non)\W+(?:reconstru\w*|recriar|calcular|decompor|declara\w*|declaro)"
+        r"(?:\W+\w+){0,8}\W+(?:decomposicao\W+fixa|alocacao\W+fixa|percentual\W+fixo|peso\W+fixo|quanti/quali)",
         r"\b(?:substitu\w*|dispens\w*|evit\w*|troc\w*|retir\w*|exclu\w*|remov\w*)"
         r"(?:\W+\w+){0,8}\W+(?:alocacao\W+fixa|percentual\W+fixo|peso\W+fixo|quanti/quali)",
         r"\b(?:sem|nao\W+ha|nao\W+uso|nao\W+usei)\W+"
@@ -405,6 +407,12 @@ def _has_fixed_quanti_quali_allocation(text: str) -> bool:
         re.search(r"(quanti|quantitativ|quali|qualitativ|contexto)", normalized[match.end() : match.end() + 60])
         for match in allocation_slash_pairs
     )
+    if (
+        _has_fixed_allocation_negation_or_compliance_language(normalized)
+        and not direct_quant_qual_percent
+        and not slash_quant_qual
+    ):
+        return False
     return has_method_marker or direct_quant_qual_percent or slash_quant_qual
 
 
@@ -2902,6 +2910,7 @@ _MARKET_TITLE_RANGE_RE = re.compile(
 _MARKET_TITLE_FRACTIONAL_ODDS_RE = re.compile(
     r"(?<![\d/])(\d{1,2}(?:[,.]\d+)?)\s*/\s*1(?![\d/])"
 )
+_MARKET_TITLE_AMERICAN_ODDS_RE = re.compile(r"(?<![\w.+-])\+(\d{3,4})(?![\w.-])")
 _MARKET_TITLE_TERMS = (
     "mercado",
     "market",
@@ -2933,6 +2942,22 @@ _MODEL_TITLE_DENY_TERMS = (
     "simulation",
     "modelo",
     "model",
+)
+_MARKET_TITLE_SOURCE_TERMS = (
+    "http://",
+    "https://",
+    "oddschecker",
+    "squawka",
+    "flashscore",
+    "yahoo",
+    "fox sports",
+    "sky bet",
+    "draftkings",
+    "fanduel",
+    "bet365",
+    "betfair",
+    "sportsbook",
+    "bookmaker",
 )
 
 
@@ -2987,6 +3012,16 @@ def _market_title_candidate_is_model_reference(raw_text: str, start: int, end: i
     suffix_stop = min(suffix_stop_candidates) if suffix_stop_candidates else len(suffix)
     attached_suffix = _normalized_ascii_text(suffix[:suffix_stop])
     return any(term in attached_suffix for term in _MODEL_TITLE_DENY_TERMS)
+
+
+def _market_title_text_has_structured_evidence(text: str) -> bool:
+    raw_text = str(text or "")
+    normalized = _normalized_ascii_text(raw_text)
+    if _MARKET_TITLE_FRACTIONAL_ODDS_RE.search(raw_text):
+        return True
+    if _MARKET_TITLE_AMERICAN_ODDS_RE.search(raw_text):
+        return True
+    return any(term in normalized for term in _MARKET_TITLE_SOURCE_TERMS)
 
 
 def _market_title_values_from_text(text: str, *, config: dict[str, Any]) -> list[float]:
@@ -3126,18 +3161,33 @@ def _market_title_challenge(
         return base
 
     candidates: list[float] = []
+    weak_candidates: list[float] = []
     evidence: list[dict[str, str]] = []
+    weak_evidence: list[dict[str, str]] = []
     for label, text in [*_iter_market_title_texts(meeting_transcript), *(source_texts or [])]:
         values = _market_title_values_from_text(text, config=config)
         values = [value for value in values if abs(float(value) - model_title_pct) >= 0.05]
         if not values:
             continue
-        candidates.extend(values)
-        if len(evidence) < settings["max_evidence_items"]:
-            snippet = re.sub(r"\s+", " ", str(text or "").strip())
-            evidence.append({"source": label, "snippet": snippet[:260]})
+        snippet = re.sub(r"\s+", " ", str(text or "").strip())
+        item = {"source": label, "snippet": snippet[:260]}
+        if _market_title_text_has_structured_evidence(text):
+            candidates.extend(values)
+            if len(evidence) < settings["max_evidence_items"]:
+                evidence.append(item)
+        else:
+            weak_candidates.extend(values)
+            if len(weak_evidence) < settings["max_evidence_items"]:
+                weak_evidence.append(item)
 
     if not candidates:
+        if weak_candidates:
+            return {
+                **base,
+                "status": "debate_claim_only",
+                "evidence": weak_evidence,
+                "debate_claim_candidate_count": len(weak_candidates),
+            }
         base["evidence"] = evidence
         return base
 

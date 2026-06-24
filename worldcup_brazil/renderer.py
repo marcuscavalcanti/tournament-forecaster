@@ -14,10 +14,50 @@ def _fmt_pct(value: float) -> str:
     return f"{value:.1f}%"
 
 
-def _fmt_response_title(value: float | int | str | None) -> str:
+def _invalid_title_number(
+    *,
+    title_pct_source: object = None,
+    used_fallback: object = False,
+    removed_from_main: object = False,
+) -> bool:
+    source = str(title_pct_source or "").strip().lower()
+    return source == "fallback" or bool(used_fallback) or bool(removed_from_main)
+
+
+def _fmt_response_title(
+    value: float | int | str | None,
+    *,
+    title_pct_source: object = None,
+    used_fallback: object = False,
+    removed_from_main: object = False,
+) -> str:
+    if _invalid_title_number(
+        title_pct_source=title_pct_source,
+        used_fallback=used_fallback,
+        removed_from_main=removed_from_main,
+    ):
+        return "sem número válido"
     if value is None:
         return "sem número próprio"
     return _fmt_pct(float(value))
+
+
+def _fmt_prediction_title(prediction: dict) -> str:
+    return _fmt_response_title(
+        prediction.get("title_pct"),
+        title_pct_source=prediction.get("title_pct_source"),
+        used_fallback=prediction.get("used_fallback"),
+        removed_from_main=prediction.get("removed_from_main"),
+    )
+
+
+def _fmt_chat_response_title(response: dict) -> str:
+    return _fmt_response_title(
+        response.get("title_pct"),
+        title_pct_source=response.get("title_pct_source"),
+        used_fallback=response.get("used_fallback"),
+        removed_from_main=response.get("removed_from_main"),
+    )
 
 
 def _fmt_ci(low: float | None, high: float | None) -> str | None:
@@ -242,8 +282,7 @@ def _render_model_predictions_no_opta(bundle: ReportBundle) -> list[str]:
     ]
     for agent, prediction in bundle.model_predictions_no_opta.items():
         fallback = " | fallback" if prediction.get("used_fallback") else ""
-        raw_title_pct = prediction.get("title_pct")
-        title_text = _fmt_response_title(raw_title_pct)
+        title_text = _fmt_prediction_title(prediction)
         source = str(prediction.get("title_pct_source") or "").strip()
         source_note = f" [{source}]" if source and source != "explicit" else ""
         lines.append(
@@ -590,7 +629,7 @@ def render_linkedin_post(bundle: ReportBundle) -> str:
                 for response in turn.get("responses", []):
                     lines.append(f"[Rodada {turn['round']}] {response['agent']}: {_post_chat_text(response['answer'])}")
                     lines.append(
-                        f"  Status: {_response_status(response)} | título: {_fmt_response_title(response.get('title_pct'))} | "
+                        f"  Status: {_response_status(response)} | título: {_fmt_chat_response_title(response)} | "
                         f"aceitação: {response['support_score']:.2f}"
                     )
                 lines.append(
@@ -820,7 +859,7 @@ def render_audit_report(bundle: ReportBundle) -> str:
                 lines.append(f"[{response['agent']}]")
                 lines.append(f"Status: {_response_status(response)}")
                 lines.append(
-                    f"Título: {_fmt_response_title(response.get('title_pct'))}; "
+                    f"Título: {_fmt_chat_response_title(response)}; "
                     f"aceitação: {response['support_score']:.2f}"
                 )
                 lines.append(f"Mensagem: {_compact_chat_text(response['answer'])}")

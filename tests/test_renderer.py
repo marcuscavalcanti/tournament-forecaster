@@ -301,6 +301,61 @@ def test_render_reports_handle_meeting_response_without_own_title_number() -> No
     assert "Título: sem número próprio" in audit
 
 
+def test_render_reports_mark_fallback_or_removed_title_pct_as_invalid_not_numeric() -> None:
+    bundle = ReportBundle(
+        generated_at_iso="2026-06-23T12:00:00+00:00",
+        group_matches=[],
+        knockout_matches=[],
+        stage_probabilities={"quartas": 30.0, "semifinal": 15.0, "final": 8.0, "titulo": 5.0},
+        final_rationale="Racional.",
+        sources=[],
+        agent_summaries={},
+        warnings=[],
+        custom_hashtag="#CopaComAchismo",
+        model_predictions_no_opta={
+            "Perplexity Pro": {
+                "title_pct": 11.0,
+                "title_pct_source": "fallback",
+                "summary": "Fallback operacional não trouxe número auditável.",
+                "used_fallback": True,
+                "removed_from_main": True,
+            }
+        },
+        meeting_transcript=[
+            {
+                "round": 1,
+                "protagonist": "GPT 5.5",
+                "question": "Concordam?",
+                "responses": [
+                    {
+                        "agent": "Perplexity Pro",
+                        "answer": "Fallback operacional.",
+                        "title_pct": 11.0,
+                        "title_pct_source": "fallback",
+                        "support_score": 0.0,
+                        "accepted": False,
+                        "used_fallback": True,
+                        "removed_from_main": True,
+                    }
+                ],
+                "next_protagonist": "GPT 5.5",
+                "consensus_title_pct": 5.0,
+                "consensus_spread_pct": 0.0,
+            }
+        ],
+    )
+
+    post = render_linkedin_post(bundle)
+    audit = render_audit_report(bundle)
+
+    assert "- Perplexity Pro: título sem número válido [fallback] | fallback." in post
+    assert "Status: fallback | título: sem número válido | aceitação: 0.00" in post
+    assert "Título: sem número válido; aceitação: 0.00" in audit
+    assert "título 11.0%" not in post
+    assert "título: 11.0%" not in post
+    assert "Título: 11.0%" not in audit
+
+
 def test_render_group_block_uses_completed_result_ledger() -> None:
     bundle = ReportBundle(
         generated_at_iso="2026-06-15T12:00:00+00:00",
