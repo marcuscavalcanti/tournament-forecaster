@@ -5,6 +5,7 @@ import pytest
 from worldcup_brazil.monte_carlo import (
     _stage_uncertainty_intervals,
     monte_carlo_compact_summary,
+    recommend_rho_against_market,
     run_brazil_monte_carlo,
     widen_ci_for_monte_carlo_path_uncertainty,
 )
@@ -1366,3 +1367,93 @@ def test_small_single_source_delta_below_threshold_untouched() -> None:
     reg = _team_context_adjustment(run_brazil_monte_carlo(config), "Tunísia")["evidence_regression"]
     assert abs(reg["capped_delta"]) <= 40.0
     assert reg["raw_delta"] == reg["regressed_delta"]  # below warning -> untouched
+
+
+def test_rho_recommender_aligns_when_a_plausible_rho_reaches_market() -> None:
+    sweep = {0.0: 3.0, 0.5: 4.5, 0.7: 5.5, 0.85: 7.5, 0.95: 9.0}
+    rec = recommend_rho_against_market(sweep, market_pct=7.4)
+    assert rec["verdict"] == "rho_aligns_with_market"
+    assert rec["recommended_rho"] == 0.85          # 7.5 is closest to 7.4
+    assert rec["current_title_pct"] == 5.5         # at the current 0.7
+
+
+def test_rho_recommender_flags_structural_residual_when_max_shrink_cannot_reach_market() -> None:
+    sweep = {0.0: 2.0, 0.5: 3.0, 0.7: 3.5, 0.85: 4.0, 0.95: 5.0}
+    rec = recommend_rho_against_market(sweep, market_pct=7.4)
+    assert rec["verdict"] == "structural_residual"  # even rho=0.95 (5.0) is far below 7.4
+    assert rec["recommended_rho"] == 0.95           # closest available, but gap remains
+    assert rec["residual_gap_pct"] == 2.4
+
+
+def test_rho_recommender_does_not_overfit_outside_the_plausible_band() -> None:
+    # rho=1.2 would hit the market, but it is implausible -> must NOT be recommended.
+    sweep = {0.7: 3.0, 0.95: 5.0, 1.2: 7.4}
+    rec = recommend_rho_against_market(sweep, market_pct=7.4)
+    assert rec["recommended_rho"] == 0.95           # restricted to the plausible band
+    assert rec["verdict"] == "structural_residual"  # the honest answer, not a forced rho=1.2
+
+
+def test_rho_recommender_partial_when_model_overshoots_market_across_band() -> None:
+    sweep = {0.5: 7.0, 0.7: 8.0, 0.85: 9.0, 0.95: 10.0}
+    rec = recommend_rho_against_market(sweep, market_pct=5.0)
+    assert rec["verdict"] == "rho_partially_closes_gap"
+    assert rec["recommended_rho"] == 0.5            # closest, but still 2.0 above market
+
+
+def test_rho_recommender_insufficient_data() -> None:
+    assert recommend_rho_against_market({}, 7.4)["verdict"] == "insufficient_data"
+    assert recommend_rho_against_market({0.7: 3.5}, None)["verdict"] == "insufficient_data"
+
+
+def test_rho_recommender_flags_inert_rho_instead_of_a_fake_alignment() -> None:
+    flat = {0.0: 3.8, 0.5: 3.8, 0.7: 3.8, 0.85: 3.8, 0.95: 3.8}
+    rec = recommend_rho_against_market(flat, market_pct=7.4)
+    assert rec["title_rho_sensitivity_pct"] == 0.0
+    assert rec["verdict"] == "rho_inert"        # not a fake "aligns at 0.5"
+    assert rec["recommended_rho"] == 0.7         # keep current, do not invent a lever
+
+
+def test_rho_recommender_never_recommends_outside_an_empty_plausible_band() -> None:
+    rec = recommend_rho_against_market({0.2: 3.0, 1.5: 7.4}, market_pct=7.4)
+    assert rec["verdict"] == "no_plausible_rho"
+    assert rec["recommended_rho"] is None        # never falls back to the implausible 1.5
+
+
+def test_rho_recommender_uses_reachable_max_for_structural_verdict() -> None:
+    # non-monotonic sweep where one rho overshoots market: NOT structural (a rho gets close).
+    rec = recommend_rho_against_market({0.5: 2.0, 0.7: 9.0, 0.85: 2.5, 0.95: 3.0}, market_pct=7.0)
+    assert rec["verdict"] == "rho_partially_closes_gap"  # min() would wrongly call this structural
+    assert rec["recommended_rho"] == 0.7
+
+
+def test_calibrate_rho_team_delta_matches_engine_exactly() -> None:
+    # The script must reproduce _apply_team_context_adjustments, including the source throttle.
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("calibrate_rho", "scripts/calibrate_rho.py")
+    calibrate_rho = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(calibrate_rho)
+    from worldcup_brazil.monte_carlo import _apply_team_context_adjustments
+
+    config = _mc_config(iterations=1)
+    config["monte_carlo"]["team_ratings"]["Argentina"] = 1820
+    config["monte_carlo"]["team_context_correlation_default_rho"] = 0.7
+    # 5 material structural groups behind ONE source (the adversarial 53-point divergence case)
+    config["monte_carlo"]["team_context"] = {
+        "Argentina": [
+            {
+                "category": "squad_depth",
+                "rating_delta": 30.0,
+                "confidence": 1.0,
+                "correlation_group": f"struct_{i}",
+                "source_url": "https://one-source/x",
+            }
+            for i in range(5)
+        ]
+    }
+    result = _apply_team_context_adjustments(config, dict(config["monte_carlo"]["team_ratings"]))
+    adjustment = next(a for a in result["team_adjustments"] if a["team"] == "Argentina")
+    settings = calibrate_rho._engine_settings(config["monte_carlo"])
+    recomputed = calibrate_rho._team_delta_at_rho(adjustment, 0.7, settings)
+    assert adjustment["evidence_regression"]["distinct_sources"] == 1
+    assert round(recomputed, 1) == round(adjustment["rating_delta"], 1)  # exact, source throttle intact

@@ -42,7 +42,7 @@ ifeq ($(APPLY),1)
 UPDATE_RESULTS_ARGS += --apply
 endif
 
-.PHONY: help daily force watch doctor diagrams calibration profile validate debate update-results
+.PHONY: help daily force watch doctor diagrams calibration profile validate debate update-results calibrate-rho
 
 help:
 	@printf "Comandos principais:\n"
@@ -92,6 +92,9 @@ profile:
 
 update-results:
 	$(PYTHON) scripts/update_group_results.py $(UPDATE_RESULTS_ARGS)
+
+calibrate-rho:
+	$(PYTHON) scripts/calibrate_rho.py $(CALIBRATE_ARGS)
 
 validate:
 	$(PYTEST) -q

@@ -1676,6 +1676,76 @@ def _check_simulation_integrity(diagnostics: dict[str, Any], *, iterations: int)
         )
 
 
+def recommend_rho_against_market(
+    title_by_rho: dict[float, float],
+    market_pct: float | None,
+    *,
+    plausible_min: float = 0.5,
+    plausible_max: float = 0.95,
+    tolerance_pct: float = 1.0,
+    current_rho: float = 0.7,
+) -> dict[str, Any]:
+    """Pick the within-group correlation rho whose simulated title best matches the market.
+
+    `title_by_rho` maps each tried rho to the resulting title %. rho is restricted to a
+    plausible [plausible_min, plausible_max] band so it is never overfit to absorb base-rating
+    error: if even the most-shrinking plausible rho cannot reach the market, the verdict is
+    `structural_residual` (the gap is base rating / MC structure, not correlation), not a forced
+    rho. Offline diagnostic; no per-run cost."""
+    usable = {
+        round(float(rho), 3): float(title)
+        for rho, title in (title_by_rho or {}).items()
+        if title is not None
+    }
+    if not usable or market_pct is None or float(market_pct) <= 0.0:
+        return {
+            "verdict": "insufficient_data",
+            "recommended_rho": None,
+            "market_pct": (round(float(market_pct), 1) if market_pct else None),
+        }
+    market = float(market_pct)
+    rho_sensitivity = round(max(usable.values()) - min(usable.values()), 1)
+    current_title = usable.get(round(float(current_rho), 3))
+    base = {
+        "current_rho": round(float(current_rho), 2),
+        "current_title_pct": (round(current_title, 1) if current_title is not None else None),
+        "market_pct": round(market, 1),
+        # How much the title moves across the whole rho sweep. Near zero means rho is inert
+        # for this signal profile (the gap, if any, is base rating, not correlation).
+        "title_rho_sensitivity_pct": rho_sensitivity,
+        "plausible_range": [plausible_min, plausible_max],
+    }
+    plausible = {rho: title for rho, title in usable.items() if plausible_min <= rho <= plausible_max}
+    if not plausible:
+        # No swept rho is plausible -> never fall back to recommending an implausible one.
+        return {**base, "verdict": "no_plausible_rho", "recommended_rho": None}
+    best_rho = min(plausible, key=lambda rho: abs(plausible[rho] - market))
+    best_title = plausible[best_rho]
+    residual_gap = round(abs(best_title - market), 1)
+    reachable_max = max(plausible.values())  # title rises with rho for a net-penalised team
+    if rho_sensitivity < tolerance_pct:
+        # The whole sweep barely moves the title: rho is not the lever here. Do not pretend a
+        # particular rho "aligns" -- keep the current rho and call it inert.
+        verdict = "rho_inert"
+        recommended = round(float(current_rho), 2)
+    elif residual_gap <= tolerance_pct:
+        verdict = "rho_aligns_with_market"
+        recommended = round(best_rho, 2)
+    elif reachable_max < market - tolerance_pct:
+        verdict = "structural_residual"  # max plausible shrink still under market -> base rating
+        recommended = round(best_rho, 2)
+    else:
+        verdict = "rho_partially_closes_gap"
+        recommended = round(best_rho, 2)
+    return {
+        **base,
+        "verdict": verdict,
+        "recommended_rho": recommended,
+        "recommended_title_pct": round(best_title, 1),
+        "residual_gap_pct": residual_gap,
+    }
+
+
 def run_brazil_monte_carlo(config: dict[str, Any]) -> dict[str, Any]:
     mc_config = _mc_config(config)
     if not bool(mc_config.get("enabled", False)):
