@@ -10,6 +10,7 @@ SOURCE_MEMORY ?= data/source_memory.json
 OUTPUT_DIR ?= outputs
 WATCHDOG_LOG ?= data/watchdog.jsonl
 CALIBRATION_INPUT ?= data/calibration_predictions.json
+CALIBRATION_MIN_RESOLVED ?= 1
 RESULTS_SOURCE ?= fifa
 RESULTS_INPUT ?=
 FIFA_RESULTS_URL ?= https://api.fifa.com/api/v3/calendar/matches
@@ -105,7 +106,7 @@ diagrams:
 	$(PYTHON_WITH_PILLOW) scripts/generate_framework_diagram_pngs.py
 
 calibration:
-	$(PYTHON) scripts/validate_calibration.py --input "$(CALIBRATION_INPUT)"
+	$(PYTHON) scripts/validate_calibration.py --input "$(CALIBRATION_INPUT)" --min-resolved "$(CALIBRATION_MIN_RESOLVED)"
 
 profile:
 	$(PYTHON) scripts/profile_run.py --watchdog-log "$(WATCHDOG_LOG)" $(PROFILE_ARGS)
