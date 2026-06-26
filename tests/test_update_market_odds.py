@@ -88,16 +88,38 @@ def test_update_market_odds_applies_valid_deviggable_api_payload(tmp_path: Path)
     assert {"team": "Holanda", "decimal_odds": 10.0, "bookmaker": "Book A", "source_url": str(odds_path)} in odds
 
 
-def test_update_market_odds_rejects_partial_book_that_cannot_be_devigged(tmp_path: Path) -> None:
+def test_update_market_odds_partial_book_is_safe_skip_unless_required(tmp_path: Path) -> None:
+    # A non-de-vigable field (partial book) is best-effort enrichment: it must NOT abort the
+    # pipeline unless --require is set. Regression for the bug where the updater returned 2 even
+    # without --require, so `make daily`/`force` aborted whenever no de-vigable odds were found.
     config_path = _config_path(tmp_path)
     odds_path = tmp_path / "partial-odds.json"
     odds_path.write_text(json.dumps(_odds_payload(partial=True)), encoding="utf-8")
+    base = ["--config", str(config_path), "--odds-json", str(odds_path), "--apply"]
 
-    rc = market_odds.main(["--config", str(config_path), "--odds-json", str(odds_path), "--apply"])
+    assert market_odds.main(base) == 0
+    assert market_odds.main(base + ["--require"]) == 2
+    assert json.loads(config_path.read_text(encoding="utf-8"))["market_outright_odds"] == []
 
-    assert rc == 2
-    updated = json.loads(config_path.read_text(encoding="utf-8"))
-    assert updated["market_outright_odds"] == []
+
+def test_update_market_odds_api_failure_is_safe_skip_unless_required(tmp_path: Path, monkeypatch) -> None:
+    # Key present but the fetch raises (429 quota / 5xx / network): best-effort must skip (rc 0),
+    # never abort the daily post pipeline. Only --require (MARKET_ODDS_REQUIRED=1) makes a fetch
+    # failure fatal. Without this, `make daily` couples post generation to The Odds API uptime.
+    import urllib.error
+
+    config_path = _config_path(tmp_path)
+    monkeypatch.setenv("THE_ODDS_API_KEY", "dummy")
+
+    def _boom(url: str):
+        raise urllib.error.URLError("simulated odds API outage")
+
+    monkeypatch.setattr(market_odds, "_odds_api_text_from_url", _boom)
+    base = ["--config", str(config_path), "--from-the-odds-api", "--apply"]
+
+    assert market_odds.main(base) == 0
+    assert market_odds.main(base + ["--require"]) == 2
+    assert json.loads(config_path.read_text(encoding="utf-8"))["market_outright_odds"] == []
 
 
 def test_update_market_odds_without_api_key_is_optional_unless_required(tmp_path: Path, monkeypatch) -> None:

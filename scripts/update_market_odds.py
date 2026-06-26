@@ -274,7 +274,7 @@ def main(argv: list[str] | None = None) -> int:
         valid_entries = _filter_valid_devig_entries(entries, config)
     except Exception as exc:
         print(f"erro ao processar odds: {exc}", file=sys.stderr)
-        return 2
+        return 2 if args.require else 0
 
     summary = {
         "dry_run": not args.apply,
@@ -290,7 +290,10 @@ def main(argv: list[str] | None = None) -> int:
     }
     if not valid_entries:
         print(json.dumps(summary, ensure_ascii=False, indent=2), file=sys.stderr if args.require else sys.stdout)
-        return 2 if args.require or status != "skipped_missing_api_key" else 0
+        # Odds are best-effort enrichment: only --require (MARKET_ODDS_REQUIRED=1) is fatal. A
+        # transient API failure or non-de-vigable field must never abort the daily post pipeline
+        # -- the run continues silently with no market anchor, which is the intended contract.
+        return 2 if args.require else 0
 
     if args.apply:
         raw_config["market_outright_odds"] = valid_entries
