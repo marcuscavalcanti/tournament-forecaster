@@ -13,6 +13,10 @@ CALIBRATION_INPUT ?= data/calibration_predictions.json
 RESULTS_SOURCE ?= fifa
 RESULTS_INPUT ?=
 FIFA_RESULTS_URL ?= https://api.fifa.com/api/v3/calendar/matches
+MARKET_ODDS_SOURCE ?= the-odds-api
+MARKET_ODDS_INPUT ?=
+MARKET_ODDS_URL ?= https://api.the-odds-api.com/v4/sports/soccer_fifa_world_cup_winner/odds/?regions=us,uk,eu&markets=outrights&oddsFormat=decimal&apiKey={THE_ODDS_API_KEY}
+MARKET_ODDS_REQUIRED ?= 0
 DEBATE_INPUT ?=
 DEBATE_OUTPUT ?=
 
@@ -42,7 +46,20 @@ ifeq ($(APPLY),1)
 UPDATE_RESULTS_ARGS += --apply
 endif
 
-.PHONY: help daily force watch doctor diagrams calibration profile validate debate update-results calibrate-rho calibrate-base-rating
+UPDATE_MARKET_ODDS_ARGS := --config "$(CONFIG)"
+ifneq ($(strip $(MARKET_ODDS_INPUT)),)
+UPDATE_MARKET_ODDS_ARGS += --odds-json "$(MARKET_ODDS_INPUT)"
+else ifeq ($(MARKET_ODDS_SOURCE),the-odds-api)
+UPDATE_MARKET_ODDS_ARGS += --from-the-odds-api --odds-url '$(MARKET_ODDS_URL)'
+endif
+ifeq ($(APPLY),1)
+UPDATE_MARKET_ODDS_ARGS += --apply
+endif
+ifeq ($(MARKET_ODDS_REQUIRED),1)
+UPDATE_MARKET_ODDS_ARGS += --require
+endif
+
+.PHONY: help daily force watch doctor diagrams calibration profile validate debate update-results update-market-odds calibrate-rho calibrate-base-rating
 
 help:
 	@printf "Comandos principais:\n"
@@ -55,16 +72,19 @@ help:
 	@printf "  make calibration valida Brier/log loss/ECE usando CALIBRATION_INPUT\n"
 	@printf "  make profile    breakdown de tempo por etapa/rodada do último run no watchdog\n"
 	@printf "  make update-results busca placares oficiais da FIFA e atualiza com APPLY=1; RESULTS_INPUT mantém modo manual\n"
+	@printf "  make update-market-odds busca odds outright estruturadas e atualiza market_outright_odds com APPLY=1\n"
 	@printf "  make validate   roda testes, compileall e valida o JSON exemplo\n"
 
 daily:
 	@mkdir -p data "$(OUTPUT_DIR)"
 	$(MAKE) update-results APPLY=1
+	$(MAKE) update-market-odds APPLY=1
 	$(RUN_DAILY)
 
 force:
 	@mkdir -p data "$(OUTPUT_DIR)"
 	$(MAKE) update-results APPLY=1
+	$(MAKE) update-market-odds APPLY=1
 	$(RUN_DAILY) --force
 
 watch:
@@ -93,7 +113,11 @@ profile:
 update-results:
 	$(PYTHON) scripts/update_group_results.py $(UPDATE_RESULTS_ARGS)
 
+update-market-odds:
+	$(PYTHON) scripts/update_market_odds.py $(UPDATE_MARKET_ODDS_ARGS)
+
 calibrate-rho:
+	$(MAKE) update-market-odds APPLY=1
 	$(PYTHON) scripts/calibrate_rho.py $(CALIBRATE_ARGS)
 
 calibrate-base-rating:

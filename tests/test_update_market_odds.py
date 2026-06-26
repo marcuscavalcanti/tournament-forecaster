@@ -1,0 +1,113 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import scripts.update_market_odds as market_odds
+
+
+def _config_path(tmp_path: Path) -> Path:
+    config = {
+        "brazil_team_name": "Brasil",
+        "groups_config": {
+            "groups": {
+                "C": [
+                    {"name": "Brasil", "code": "BRA"},
+                ],
+                "J": [
+                    {"name": "Argentina", "code": "ARG"},
+                ],
+                "I": [
+                    {"name": "França", "code": "FRA"},
+                ],
+                "H": [
+                    {"name": "Espanha", "code": "ESP"},
+                ],
+                "L": [
+                    {"name": "Inglaterra", "code": "ENG"},
+                ],
+                "E": [
+                    {"name": "Alemanha", "code": "GER"},
+                ],
+                "F": [
+                    {"name": "Holanda", "code": "NED"},
+                ],
+                "K": [
+                    {"name": "Portugal", "code": "POR"},
+                ],
+            }
+        },
+        "market_outright_odds": [],
+    }
+    path = tmp_path / "worldcup_brazil.json"
+    path.write_text(json.dumps(config), encoding="utf-8")
+    return path
+
+
+def _odds_payload(*, partial: bool = False) -> list[dict]:
+    outcomes = [
+        {"name": "Brazil", "price": 6.0},
+        {"name": "Argentina", "price": 4.0},
+        {"name": "France", "price": 5.0},
+    ]
+    if not partial:
+        outcomes.extend(
+            [
+                {"name": "Spain", "price": 6.0},
+                {"name": "England", "price": 7.0},
+                {"name": "Germany", "price": 8.0},
+                {"name": "Netherlands", "price": 10.0},
+                {"name": "Portugal", "price": 12.0},
+            ]
+        )
+    return [
+        {
+            "bookmakers": [
+                {
+                    "key": "book_a",
+                    "title": "Book A",
+                    "markets": [{"key": "outrights", "outcomes": outcomes}],
+                }
+            ]
+        }
+    ]
+
+
+def test_update_market_odds_applies_valid_deviggable_api_payload(tmp_path: Path) -> None:
+    config_path = _config_path(tmp_path)
+    odds_path = tmp_path / "odds.json"
+    odds_path.write_text(json.dumps(_odds_payload()), encoding="utf-8")
+
+    rc = market_odds.main(["--config", str(config_path), "--odds-json", str(odds_path), "--apply"])
+
+    assert rc == 0
+    updated = json.loads(config_path.read_text(encoding="utf-8"))
+    odds = updated["market_outright_odds"]
+    assert len(odds) == 8
+    assert {"team": "Brasil", "decimal_odds": 6.0, "bookmaker": "Book A", "source_url": str(odds_path)} in odds
+    assert {"team": "Holanda", "decimal_odds": 10.0, "bookmaker": "Book A", "source_url": str(odds_path)} in odds
+
+
+def test_update_market_odds_rejects_partial_book_that_cannot_be_devigged(tmp_path: Path) -> None:
+    config_path = _config_path(tmp_path)
+    odds_path = tmp_path / "partial-odds.json"
+    odds_path.write_text(json.dumps(_odds_payload(partial=True)), encoding="utf-8")
+
+    rc = market_odds.main(["--config", str(config_path), "--odds-json", str(odds_path), "--apply"])
+
+    assert rc == 2
+    updated = json.loads(config_path.read_text(encoding="utf-8"))
+    assert updated["market_outright_odds"] == []
+
+
+def test_update_market_odds_without_api_key_is_optional_unless_required(tmp_path: Path, monkeypatch) -> None:
+    config_path = _config_path(tmp_path)
+    monkeypatch.delenv("THE_ODDS_API_KEY", raising=False)
+
+    optional_rc = market_odds.main(["--config", str(config_path), "--from-the-odds-api"])
+    required_rc = market_odds.main(["--config", str(config_path), "--from-the-odds-api", "--require"])
+
+    assert optional_rc == 0
+    assert required_rc == 2
+    updated = json.loads(config_path.read_text(encoding="utf-8"))
+    assert updated["market_outright_odds"] == []
