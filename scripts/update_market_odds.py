@@ -9,6 +9,7 @@ import os
 import sys
 import tempfile
 import unicodedata
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,10 @@ THE_ODDS_API_URL = (
     "https://api.the-odds-api.com/v4/sports/soccer_fifa_world_cup_winner/odds/"
     "?regions=us,uk,eu&markets=outrights&oddsFormat=decimal&apiKey={THE_ODDS_API_KEY}"
 )
+
+
+class MarketOddsUnavailable(RuntimeError):
+    """Expected best-effort failure while fetching or parsing external odds."""
 
 ENGLISH_TEAM_ALIASES = {
     "mexico": "México",
@@ -240,11 +245,17 @@ def _load_entries_from_args(args: argparse.Namespace, config: dict[str, Any]) ->
         entries = _entries_from_the_odds_api_payload(payload, config, source_url=str(args.odds_json))
         return "local", str(args.odds_json), entries, ""
     if args.from_the_odds_api:
-        fetched = _odds_api_text_from_url(args.odds_url)
+        try:
+            fetched = _odds_api_text_from_url(args.odds_url)
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise MarketOddsUnavailable(str(exc)) from exc
         if fetched is None:
             return "the-odds-api", args.odds_url, [], "skipped_missing_api_key"
         effective_url, text = fetched
-        payload = json.loads(text)
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise MarketOddsUnavailable(str(exc)) from exc
         entries = _entries_from_the_odds_api_payload(payload, config, source_url=effective_url.split("apiKey=", 1)[0] + "apiKey=***")
         return "the-odds-api", effective_url.split("apiKey=", 1)[0] + "apiKey=***", entries, ""
     raise ValueError("informe --odds-json ou --from-the-odds-api")
@@ -271,10 +282,10 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         source_kind, source_input, entries, status = _load_entries_from_args(args, config)
-        valid_entries = _filter_valid_devig_entries(entries, config)
-    except Exception as exc:
+    except MarketOddsUnavailable as exc:
         print(f"erro ao processar odds: {exc}", file=sys.stderr)
         return 2 if args.require else 0
+    valid_entries = _filter_valid_devig_entries(entries, config)
 
     summary = {
         "dry_run": not args.apply,

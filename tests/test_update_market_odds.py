@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 import scripts.update_market_odds as market_odds
 
 
@@ -120,6 +122,20 @@ def test_update_market_odds_api_failure_is_safe_skip_unless_required(tmp_path: P
     assert market_odds.main(base) == 0
     assert market_odds.main(base + ["--require"]) == 2
     assert json.loads(config_path.read_text(encoding="utf-8"))["market_outright_odds"] == []
+
+
+def test_update_market_odds_programming_errors_are_not_silenced(tmp_path: Path, monkeypatch) -> None:
+    config_path = _config_path(tmp_path)
+    odds_path = tmp_path / "odds.json"
+    odds_path.write_text(json.dumps(_odds_payload()), encoding="utf-8")
+
+    def _bug(entries, config):
+        raise RuntimeError("simulated implementation bug")
+
+    monkeypatch.setattr(market_odds, "_filter_valid_devig_entries", _bug)
+
+    with pytest.raises(RuntimeError, match="simulated implementation bug"):
+        market_odds.main(["--config", str(config_path), "--odds-json", str(odds_path), "--apply"])
 
 
 def test_update_market_odds_without_api_key_is_optional_unless_required(tmp_path: Path, monkeypatch) -> None:
