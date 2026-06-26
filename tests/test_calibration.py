@@ -147,6 +147,44 @@ def test_validate_calibration_cli_enforces_minimum_resolved_predictions(tmp_path
     assert isinstance(payload["brier_score"], float)
 
 
+def test_validate_calibration_cli_accepts_exact_minimum_resolved_predictions(tmp_path) -> None:
+    input_path = tmp_path / "predictions.json"
+    input_path.write_text(
+        json.dumps(
+            [
+                {"id": "resolved-1", "predicted_pct": 70.0, "outcome": 1, "resolved": True},
+                {"id": "resolved-2", "predicted_pct": 30.0, "outcome": 0, "resolved": True},
+                {"id": "pending-1", "predicted_pct": 50.0, "outcome": None, "resolved": False},
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "scripts/validate_calibration.py",
+            "--input",
+            str(input_path),
+            "--bins",
+            "5",
+            "--min-resolved",
+            "2",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+
+    assert payload["status"] == "ok"
+    assert payload["total_predictions"] == 2
+    assert payload["pending_predictions"] == 1
+    assert payload["min_resolved_predictions"] == 2
+    assert isinstance(payload["brier_score"], float)
+
+
 def test_prediction_logger_appends_pending_run_records_without_duplicates(tmp_path) -> None:
     bundle = ReportBundle(
         generated_at_iso="2026-06-14T12:00:00+00:00",
