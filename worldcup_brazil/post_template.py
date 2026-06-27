@@ -66,6 +66,11 @@ PHASE_BLOCK = """➡️ {header} ({phase_date}){phase_venue}
 
 """
 
+PHASE_BLOCK_LOCKED = """➡️ {header} ({phase_date}){phase_venue}
+• Definido: {ml_opp} ({ml_scn} de chance desse cruzamento) → {ml_label}: {ml_br} | {ml_opp}: {ml_opp_pct}
+
+"""
+
 
 def _pct(value: Any) -> str:
     try:
@@ -83,6 +88,13 @@ def _pct_int(value: Any) -> str:
         return f"{round(float(value))}%"
     except (TypeError, ValueError):
         return "—"
+
+
+def _pct_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _short_date(raw: Any) -> str:
@@ -125,6 +137,10 @@ def _completed_group_context(bundle: Any, *, before_date: date | None = None) ->
     if len(scores) == 1:
         return f"Com {scores[0]}, "
     return f"Com {_join_pt(scores)}, "
+
+
+def _brazil_group_is_complete(bundle: Any) -> bool:
+    return len(_completed_group_scores(bundle)) >= 6
 
 
 def _completed_group_scores(bundle: Any, *, before_date: date | None = None) -> list[str]:
@@ -430,6 +446,13 @@ def _parse_group_date(raw: Any, *, year: int) -> date | None:
     if month_token not in months_ascii:
         return None
     return date(year, months_ascii.index(month_token) + 1, day)
+
+
+def _parse_template_match_date(raw: Any, *, year: int) -> date | None:
+    text = str(raw or "").strip()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        return date.fromisoformat(text)
+    return _parse_group_date(text, year=year)
 
 
 def _venue_suffix(value: Any) -> str:
@@ -1130,10 +1153,21 @@ def render_template_post(
     if not group_matches:
         raise ValueError("template post requer group_matches no bundle")
 
-    dated = [(m, _parse_group_date(getattr(m, "match_date", ""), year=run_date.year)) for m in group_matches]
+    pairs = _knockout_pairs(bundle)
+    dated = [(m, _parse_template_match_date(getattr(m, "match_date", ""), year=run_date.year)) for m in group_matches]
     upcoming = [(m, d) for m, d in dated if d is not None and d >= run_date]
-    featured, featured_date = (upcoming[0] if upcoming else dated[0])
-    featured_is_first = featured is group_matches[0]
+    featured_is_knockout = False
+    if upcoming:
+        featured, featured_date = upcoming[0]
+    else:
+        knockout_featured = pairs.get("16 avos", {}).get("ml")
+        if knockout_featured is not None:
+            featured = knockout_featured
+            featured_date = _parse_template_match_date(getattr(featured, "match_date", ""), year=run_date.year)
+            featured_is_knockout = True
+        else:
+            featured, featured_date = dated[0]
+    featured_is_first = (not featured_is_knockout) and featured is group_matches[0]
 
     ordinal = ORDINAIS[post_index - 1] if 1 <= post_index <= len(ORDINAIS) else f"{post_index}º"
     title = f"{ordinal} PALPITE DA SÉRIE: Brasil x {getattr(featured, 'opponent', '')}"
@@ -1145,14 +1179,23 @@ def render_template_post(
     win = _pct_int(getattr(featured, "brazil_pct", None))
     draw_value = getattr(featured, "draw_pct", None)
     loss_value = _group_loss_pct(featured)
-    parts = [f"{win} vitória"]
-    if draw_value:
-        parts.append(f"{_pct_int(draw_value)} empate")
-    if loss_value:
-        parts.append(f"{_pct_int(loss_value)} derrota")
+    if featured_is_knockout:
+        parts = [f"{win} Brasil passa"]
+        if loss_value:
+            parts.append(f"{_pct_int(loss_value)} {getattr(featured, 'opponent', '')} passa")
+    else:
+        parts = [f"{win} vitória"]
+        if draw_value:
+            parts.append(f"{_pct_int(draw_value)} empate")
+        if loss_value:
+            parts.append(f"{_pct_int(loss_value)} derrota")
     next_game_line = f"BRASIL x {str(getattr(featured, 'opponent', '')).upper()} — " + " | ".join(parts)
 
-    remaining = [m for m, d in dated if m is not featured and d is not None and d > (featured_date or run_date)]
+    remaining = [
+        m
+        for m, d in dated
+        if (not featured_is_knockout) and m is not featured and d is not None and d > (featured_date or run_date)
+    ]
     next_post_match = remaining[0] if remaining else featured
     first_place_pct = _first_place_pct(bundle)
     completed_context = _completed_group_context(bundle, before_date=featured_date)
@@ -1164,7 +1207,12 @@ def render_template_post(
         rest_group_line = (
             f"{lead} vêm {listed}. Brasil termina em 1º do grupo em {first_place_pct} dos cenários."
         )
-    elif featured_date is not None and featured_date >= run_date and not _group_match_has_completed_score(bundle, featured):
+    elif (
+        not featured_is_knockout
+        and featured_date is not None
+        and featured_date >= run_date
+        and not _group_match_has_completed_score(bundle, featured)
+    ):
         lead = f"{completed_context}ainda" if completed_context else "Ainda"
         rest_group_line = (
             f"{lead} falta Brasil x {getattr(featured, 'opponent', '')}. "
@@ -1172,19 +1220,39 @@ def render_template_post(
         )
     else:
         lead = f"{completed_context}fase" if completed_context else "Fase"
-        rest_group_line = (
-            f"{lead} de grupos encerrada. Brasil terminou o grupo com "
-            f"1º lugar projetado em {first_place_pct} dos cenários."
-        )
+        if _brazil_group_is_complete(bundle):
+            rest_group_line = f"{lead} de grupos encerrada. Brasil terminou em 1º do grupo."
+        else:
+            rest_group_line = (
+                f"{lead} de grupos encerrada. Brasil terminou o grupo com "
+                f"1º lugar projetado em {first_place_pct} dos cenários."
+            )
 
-    pairs = _knockout_pairs(bundle)
     blocks: list[str] = []
     for phase in PHASE_ORDER:
         pair = pairs.get(phase, {})
         ml, alt = pair.get("ml"), pair.get("alt")
-        if ml is None or alt is None:
-            raise ValueError(f"template post requer cenário mais provável e alternativa para {phase}")
+        if ml is None:
+            raise ValueError(f"template post requer cenário mais provável para {phase}")
         is_final = phase == "Final"
+        ml_scenario_value = _pct_float(getattr(ml, "scenario_pct", None))
+        alt_scenario_value = _pct_float(getattr(alt, "scenario_pct", None)) if alt is not None else None
+        if ml_scenario_value is not None and ml_scenario_value >= 99.95:
+            blocks.append(
+                PHASE_BLOCK_LOCKED.format(
+                    header=PHASE_HEADERS[phase],
+                    phase_date=_short_date(getattr(ml, "match_date", "")),
+                    phase_venue=_venue_suffix(getattr(ml, "venue", "")),
+                    ml_opp=getattr(ml, "opponent", ""),
+                    ml_scn=_pct_int(getattr(ml, "scenario_pct", None)),
+                    ml_label="Brasil HEXA" if is_final else "Brasil passa",
+                    ml_br=_pct_int(getattr(ml, "brazil_pct", None)),
+                    ml_opp_pct=_pct_int(getattr(ml, "opponent_pct", None)),
+                )
+            )
+            continue
+        if alt is None:
+            raise ValueError(f"template post requer alternativa para {phase}")
         blocks.append(
             PHASE_BLOCK.format(
                 header=PHASE_HEADERS[phase],
@@ -1196,7 +1264,7 @@ def render_template_post(
                 ml_br=_pct_int(getattr(ml, "brazil_pct", None)),
                 ml_opp_pct=_pct_int(getattr(ml, "opponent_pct", None)),
                 alt_opp=getattr(alt, "opponent", ""),
-                alt_scn=_pct_int(getattr(alt, "scenario_pct", None)),
+                alt_scn=_pct_int(alt_scenario_value),
                 alt_label="Brasil HEXA" if is_final else "Brasil",
                 alt_br=_pct_int(getattr(alt, "brazil_pct", None)),
                 alt_opp_pct=_pct_int(getattr(alt, "opponent_pct", None)),
@@ -1263,8 +1331,16 @@ def _trim_to_limit(text: str, bundle: Any) -> str:
     no_venues = re.sub(r"(➡️ [^\n(]+\([^)]*\)) - [^\n]+", r"\1", trimmed)
     if len(no_venues) <= MAX_POST_CHARS:
         return no_venues
+    no_backstage = re.sub(
+        r"\n\nDOIS BASTIDORES DA REUNIÃO DE HOJE:\n\n.*?(?=\n\n📊 NÚMEROS DA RODADA:)",
+        "\n\n",
+        no_venues,
+        flags=re.S,
+    )
+    if len(no_backstage) <= MAX_POST_CHARS:
+        return no_backstage
     raise ValueError(
-        f"post de template excede {MAX_POST_CHARS} caracteres mesmo após cortes ({len(no_venues)}); revisar conteúdo dinâmico"
+        f"post de template excede {MAX_POST_CHARS} caracteres mesmo após cortes ({len(no_backstage)}); revisar conteúdo dinâmico"
     )
 
 

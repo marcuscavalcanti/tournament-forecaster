@@ -937,6 +937,32 @@ def _apply_match_result_to_rows(rows: dict[str, dict[str, Any]], team_a: str, te
         rows[row_b]["points"] += 1
 
 
+def _row_goal_difference(row: dict[str, Any]) -> int:
+    return int(row.get("goals_for", 0)) - int(row.get("goals_against", 0))
+
+
+def _completed_group_has_all_pairs(names: list[str], group_completed: dict[tuple[str, str], dict[str, Any]]) -> bool:
+    return all(_completed_pair_key(team_a, team_b) in group_completed for team_a, team_b in combinations(names, 2))
+
+
+def _group_ranking_key(row: dict[str, Any], *, score_tiebreakers_ready: bool) -> tuple[Any, ...]:
+    if score_tiebreakers_ready:
+        return (
+            int(row["points"]),
+            _row_goal_difference(row),
+            int(row.get("goals_for", 0)),
+            int(row["wins"]),
+            float(row["rating"]),
+            float(row.get("tie_noise", 0.0)),
+        )
+    return (
+        int(row["points"]),
+        int(row["wins"]),
+        float(row["rating"]),
+        float(row.get("tie_noise", 0.0)),
+    )
+
+
 def _brazil_group(config: dict[str, Any]) -> str:
     configured = str(config.get("brazil_group") or "").strip().upper()
     if configured:
@@ -998,9 +1024,9 @@ def _completed_current_table(
     rendered.sort(
         key=lambda row: (
             row["points"],
-            row["wins"],
             row["goal_difference"],
             row["goals_for"],
+            row["wins"],
             ratings.get(str(row["team"]), 0.0),
         ),
         reverse=True,
@@ -1200,6 +1226,7 @@ def _simulate_groups(
                 int(match["score_a"]),
                 int(match["score_b"]),
             )
+        score_tiebreakers_ready = _completed_group_has_all_pairs(names, group_completed)
         for team_a, team_b in combinations(names, 2):
             if _completed_pair_key(team_a, team_b) in group_completed:
                 continue
@@ -1223,16 +1250,20 @@ def _simulate_groups(
                 rows[team_b]["points"] += 1
         ordered_rows = sorted(
             rows.values(),
-            key=lambda row: (row["points"], row["wins"], row["rating"], row["tie_noise"]),
+            key=lambda row: _group_ranking_key(row, score_tiebreakers_ready=score_tiebreakers_ready),
             reverse=True,
         )
         rankings[group] = [str(row["team"]) for row in ordered_rows]
         if len(ordered_rows) >= 3:
             third = dict(ordered_rows[2])
             third["group"] = group
+            third["_score_tiebreakers_ready"] = score_tiebreakers_ready
             third_rows.append(third)
     third_rows.sort(
-        key=lambda row: (row["points"], row["wins"], row["rating"], row["tie_noise"]),
+        key=lambda row: _group_ranking_key(
+            row,
+            score_tiebreakers_ready=bool(row.get("_score_tiebreakers_ready")),
+        ),
         reverse=True,
     )
     return rankings, third_rows[:8]

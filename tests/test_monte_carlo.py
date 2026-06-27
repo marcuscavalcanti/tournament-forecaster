@@ -188,6 +188,47 @@ def test_monte_carlo_exposes_completed_results_for_brazil_crossing_groups() -> N
     assert compact["completed_group_matches"]["count"] == 3
 
 
+def test_completed_group_table_uses_score_tiebreakers_before_rating_uncertainty() -> None:
+    config = _mc_config(iterations=1200)
+    config["monte_carlo"].update(
+        {
+            "rating_uncertainty_enabled": True,
+            "rating_uncertainty_outer_samples": 6,
+            "rating_uncertainty_inner_iterations": 200,
+            "configured_rating_sigma": 60.0,
+            "prior_rating_sigma": 160.0,
+        }
+    )
+    # Deliberately make Morocco much stronger by rating. The completed scores
+    # still put Brazil first on goal difference, so rating must not break the tie.
+    config["monte_carlo"]["team_ratings"]["Brasil"] = 1500
+    config["monte_carlo"]["team_ratings"]["Marrocos"] = 2100
+    config["completed_group_matches"] = [
+        {"group": "C", "team_a": "Brasil", "team_b": "Marrocos", "score_a": 1, "score_b": 1, "date": "2026-06-13"},
+        {"group": "C", "team_a": "Escócia", "team_b": "Haiti", "score_a": 1, "score_b": 0, "date": "2026-06-13"},
+        {"group": "C", "team_a": "Escócia", "team_b": "Marrocos", "score_a": 0, "score_b": 1, "date": "2026-06-19"},
+        {"group": "C", "team_a": "Brasil", "team_b": "Haiti", "score_a": 3, "score_b": 0, "date": "2026-06-19"},
+        {"group": "C", "team_a": "Marrocos", "team_b": "Haiti", "score_a": 4, "score_b": 2, "date": "2026-06-24"},
+        {"group": "C", "team_a": "Escócia", "team_b": "Brasil", "score_a": 0, "score_b": 3, "date": "2026-06-24"},
+        {"group": "F", "team_a": "Holanda", "team_b": "Japão", "score_a": 2, "score_b": 2, "date": "2026-06-14"},
+        {"group": "F", "team_a": "Suécia", "team_b": "Tunísia", "score_a": 5, "score_b": 1, "date": "2026-06-15"},
+        {"group": "F", "team_a": "Holanda", "team_b": "Suécia", "score_a": 5, "score_b": 1, "date": "2026-06-20"},
+        {"group": "F", "team_a": "Tunísia", "team_b": "Japão", "score_a": 0, "score_b": 4, "date": "2026-06-21"},
+        {"group": "F", "team_a": "Tunísia", "team_b": "Holanda", "score_a": 1, "score_b": 3, "date": "2026-06-25"},
+        {"group": "F", "team_a": "Japão", "team_b": "Suécia", "score_a": 1, "score_b": 1, "date": "2026-06-25"},
+    ]
+
+    result = run_brazil_monte_carlo(config)
+
+    assert result["group_state"]["brazil_position_pct"]["1"] == 100.0
+    round_of_32 = result["phases"]["16 avos"]["opponents"]
+    assert len(round_of_32) == 1
+    assert round_of_32[0]["opponent"] == "Japão"
+    assert round_of_32[0]["scenario_pct"] == 100.0
+    assert round_of_32[0]["unconditional_pct"] == 100.0
+    assert round_of_32[0]["count"] == result["iterations"]
+
+
 def test_completed_group_result_overrides_extreme_pre_match_probability() -> None:
     baseline = run_brazil_monte_carlo(_mc_config(iterations=3000))
     config = _mc_config(iterations=3000)

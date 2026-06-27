@@ -7,6 +7,7 @@ from worldcup_brazil.post_template import (
     MAX_POST_CHARS,
     apply_editor_append,
     render_template_post,
+    _trim_to_limit,
     validate_template_post,
 )
 
@@ -165,6 +166,26 @@ def test_backstage_section_omitted_when_beats_lack_substance() -> None:
     assert text.split("NÚMEROS DA RODADA:")[1].split("⚠️")[0].count("• ") >= 3
 
 
+def test_trim_to_limit_drops_optional_backstage_before_failing_template_post() -> None:
+    oversized = (
+        "Intro obrigatório " + ("x" * 2500)
+        + "\n\nDOIS BASTIDORES DA REUNIÃO DE HOJE:\n\n"
+        + "1️⃣ Rodada 6 — GPT 5.5 explicou o ajuste tático do Japão com Neymar fora e Raphinha lesionado.\n\n"
+        + "2️⃣ Rodada 7 — Opus 4.8 separou risco de cruzamento de chance condicional de passar.\n\n"
+        + "📊 NÚMEROS DA RODADA:\n"
+        + "• 💬 24 mensagens em 6 rodadas; Opus liderou a discussão\n"
+        + "• 🧮 Monte Carlo com 40 mil iterações\n\n"
+        + "➡️ 16 AVOS (29/jun) - Houston Stadium\n"
+        + ("Fecho obrigatório " + ("y" * 250))
+    )
+
+    trimmed = _trim_to_limit(oversized, _bundle())
+
+    assert len(trimmed) <= MAX_POST_CHARS
+    assert "DOIS BASTIDORES" not in trimmed
+    assert "NÚMEROS DA RODADA" in trimmed
+
+
 def test_template_post_uses_next_unplayed_game_and_ordinal() -> None:
     text = render_template_post(_bundle(), post_index=2, run_date=date(2026, 6, 18))
 
@@ -232,6 +253,54 @@ def test_template_post_derives_group_loss_from_win_and_draw_when_bundle_opponent
     assert "BRASIL x HAITI — 92% vitória | 8% empate" in text
     assert "8% derrota" not in text.split("O CAMINHO")[0]
     assert "Galera do bolão" not in text
+
+
+def test_template_post_renders_locked_knockout_crossing_without_fake_alternative() -> None:
+    bundle = _bundle()
+    for match in bundle.knockout_matches:
+        if match.phase == "16 avos" and match.most_likely:
+            match.opponent = "Japão"
+            match.scenario_pct = 100.0
+        if match.phase == "16 avos" and not match.most_likely:
+            match.opponent = "Holanda"
+            match.scenario_pct = 0.0
+
+    text = render_template_post(bundle, post_index=1, run_date=date(2026, 6, 11))
+
+    first_phase = text.split("➡️ 16 AVOS", 1)[1].split("➡️ OITAVAS", 1)[0]
+    assert "Definido: Japão (100% de chance desse cruzamento)" in first_phase
+    assert "Alternativa: Holanda" not in first_phase
+
+
+def test_template_post_uses_next_knockout_match_after_group_stage_is_complete() -> None:
+    bundle = _bundle()
+    bundle.metadata["completed_group_matches"] = [
+        {"group": "C", "date": "2026-06-13", "team_a": "Brasil", "score_a": 1, "team_b": "Marrocos", "score_b": 1},
+        {"group": "C", "date": "2026-06-13", "team_a": "Escócia", "score_a": 1, "team_b": "Haiti", "score_b": 0},
+        {"group": "C", "date": "2026-06-19", "team_a": "Escócia", "score_a": 0, "team_b": "Marrocos", "score_b": 1},
+        {"group": "C", "date": "2026-06-19", "team_a": "Brasil", "score_a": 3, "team_b": "Haiti", "score_b": 0},
+        {"group": "C", "date": "2026-06-24", "team_a": "Marrocos", "score_a": 4, "team_b": "Haiti", "score_b": 2},
+        {"group": "C", "date": "2026-06-24", "team_a": "Escócia", "score_a": 0, "team_b": "Brasil", "score_b": 3},
+    ]
+    bundle.metadata["monte_carlo"]["group_state"] = {"brazil_first_pct": 100.0}
+    for match in bundle.knockout_matches:
+        if match.phase == "16 avos" and match.most_likely:
+            match.opponent = "Japão"
+            match.scenario_pct = 100.0
+            match.brazil_pct = 67.5
+            match.opponent_pct = 32.5
+            match.match_date = "2026-06-29"
+            match.venue = "Houston Stadium"
+
+    text = render_template_post(bundle, post_index=9, run_date=date(2026, 6, 27))
+
+    assert text.startswith("⚽ 29/jun · Brasil x Japão · 68/0/32 · Hexa:")
+    assert "9º PALPITE DA SÉRIE: Brasil x Japão" in text
+    assert "BRASIL x JAPÃO — 68% Brasil passa | 32% Japão passa" in text
+    assert "fase de grupos encerrada" in text
+    assert "Brasil terminou em 1º do grupo." in text
+    assert "1º lugar projetado" not in text
+    assert "BRASIL x MARROCOS" not in text
 
 
 def test_template_post_discloses_active_models_and_opponent_room_fallback() -> None:
