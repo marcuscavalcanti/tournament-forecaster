@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from worldcup_brazil import cli
 
@@ -131,6 +132,39 @@ def test_previous_template_bundle_ignores_current_run_json(tmp_path) -> None:
 
     assert bundle is not None
     assert bundle.generated_at_iso == "2026-06-11T12:00:00+00:00"
+
+
+def test_previous_template_bundle_prefers_latest_brazil_matchday_over_latest_file(tmp_path) -> None:
+    output_dir = tmp_path / "outputs"
+    output_dir.mkdir()
+    june24 = output_dir / "linkedin_brazil_2026-06-24.json"
+    june27 = output_dir / "linkedin_brazil_2026-06-27.json"
+    current = output_dir / "linkedin_brazil_2026-06-28.json"
+    june24.write_text(
+        json.dumps({"bundle": {"generated_at_iso": "2026-06-24T10:00:00+00:00"}}),
+        encoding="utf-8",
+    )
+    june27.write_text(
+        json.dumps({"bundle": {"generated_at_iso": "2026-06-27T10:00:00+00:00"}}),
+        encoding="utf-8",
+    )
+    current.write_text(
+        json.dumps({"bundle": {"generated_at_iso": "2026-06-28T10:00:00+00:00"}}),
+        encoding="utf-8",
+    )
+    current_bundle = SimpleNamespace(
+        generated_at_iso="2026-06-28T10:00:00+00:00",
+        group_matches=[
+            SimpleNamespace(match_date="13/jun"),
+            SimpleNamespace(match_date="19/jun"),
+            SimpleNamespace(match_date="24/jun"),
+        ],
+    )
+
+    bundle = cli._previous_template_bundle(output_dir, current, current_bundle=current_bundle)
+
+    assert bundle is not None
+    assert bundle.generated_at_iso == "2026-06-24T10:00:00+00:00"
 
 
 def test_calibration_append_failure_does_not_block_mark_success(tmp_path, monkeypatch, capsys) -> None:

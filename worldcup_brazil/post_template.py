@@ -732,6 +732,54 @@ def _tactical_adjustment_beat(round_index: Any, agent: str, answer: str) -> tupl
     )
 
 
+def _locked_crossing_sensitivity_beat(round_index: Any, agent: str, answer: str) -> tuple[int, str] | None:
+    compact = " ".join(str(answer or "").split())
+    normalized = _normalize_beat(compact)
+    if not (
+        "japao" in normalized
+        and ("cenario 100%" in normalized or "100% no cruzamento" in normalized or "2f = japao" in normalized)
+        and ("+1pp" in normalized or "1 p.p" in normalized or "1 ponto" in normalized)
+        and "titulo" in normalized
+    ):
+        return None
+    shift = re.search(
+        r"(\d{1,3}(?:[,.]\d+)?)\s*(?:->|→)\s*(\d{1,3}(?:[,.]\d+)?)\s*%",
+        compact,
+    )
+    if shift:
+        range_text = f" de {_display_pct_token(shift.group(1))} para {_display_pct_token(shift.group(2))}"
+    else:
+        pct = re.search(r"Jap[aã]o[^\d%]{0,90}(\d{1,3}(?:[,.]\d+)?)\s*%", compact, flags=re.IGNORECASE)
+        range_text = f" de {_display_pct_token(pct.group(1))}" if pct else ""
+    return (
+        16,
+        f"Rodada {round_index} — {agent}: Japão 100% no cruzamento; "
+        f"para +1pp no título, Brasil teria que sair{range_text} contra o Japão.",
+    )
+
+
+def _modal_chain_beat(round_index: Any, agent: str, answer: str) -> tuple[int, str] | None:
+    compact = " ".join(str(answer or "").split())
+    normalized = _normalize_beat(compact)
+    if not (
+        "multiplic" in normalized
+        and "cadeia" in normalized
+        and ("ramos alternativos" in normalized or "todos os oponentes" in normalized or "todo o bracket" in normalized)
+    ):
+        return None
+    product = re.search(r"(?:daria|dava|aprox\w*)[^\d%]{0,25}(\d{1,3}(?:[,.]\d+)?)\s*%", compact, flags=re.IGNORECASE)
+    if product is None:
+        product = re.search(r"(?:≈|~|cerca\s+de)\s*(\d{1,3}(?:[,.]\d+)?)\s*%", compact, flags=re.IGNORECASE)
+    title = re.search(r"\b(7[,.]8)\s*%", compact)
+    product_text = _display_pct_token(product.group(1)) if product else "bem menos"
+    title_text = _display_pct_token(title.group(1)) if title else "o título"
+    return (
+        15,
+        f"Rodada {round_index} — {agent}: multiplicar só a cadeia mais provável dava {product_text}; "
+        f"{title_text} vem dos ramos alternativos do bracket.",
+    )
+
+
 def _valid_room_response(response: Any) -> bool:
     return not (response.get("removed_from_main") or response.get("used_fallback"))
 
@@ -818,8 +866,6 @@ def _extract_beats(bundle: Any) -> list[str]:
         for response in turn.get("responses", []) or []:
             if not _valid_room_response(response):
                 continue
-            if not response.get("disagreed"):
-                continue
             answer = str(response.get("answer", ""))
             normalized_answer = _normalize_beat(answer)
             if source_correction and (
@@ -828,6 +874,16 @@ def _extract_beats(bundle: Any) -> list[str]:
             ):
                 continue
             agent = str(response.get("agent") or "")
+            locked_crossing = _locked_crossing_sensitivity_beat(round_index, agent, answer)
+            if locked_crossing:
+                scored.append((locked_crossing[0], agent, locked_crossing[1]))
+                continue
+            modal_chain = _modal_chain_beat(round_index, agent, answer)
+            if modal_chain:
+                scored.append((modal_chain[0], agent, modal_chain[1]))
+                continue
+            if not response.get("disagreed"):
+                continue
             weighted_path = _weighted_path_beat(round_index, agent, answer)
             if weighted_path:
                 scored.append((weighted_path[0], agent, weighted_path[1]))
@@ -866,7 +922,12 @@ def _extract_beats(bundle: Any) -> list[str]:
         key = _beat_semantic_key(beat)
         if key in fallback_keys:
             continue
-        if fallback and agent in fallback_agents and any(other_agent != agent for _s, other_agent, _b in scored):
+        if (
+            fallback
+            and agent in fallback_agents
+            and _score < 12
+            and any(other_agent != agent for _s, other_agent, _b in scored)
+        ):
             continue
         fallback.append(beat)
         fallback_keys.add(key)

@@ -4,7 +4,7 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 try:
@@ -29,6 +29,7 @@ from worldcup_brazil.pipeline import (
     load_config,
 )
 from worldcup_brazil.post_template import (
+    _parse_template_match_date,
     apply_editor_append,
     bundle_from_json,
     render_template_post,
@@ -84,7 +85,41 @@ def _run_post_editor_append(config: dict, base_text: str, *, watchdog: RunWatchd
     return final_text
 
 
-def _previous_template_bundle(output_dir: Path, current_json_path: Path) -> object | None:
+def _comparison_matchday_stamp(current_bundle: object | None) -> str | None:
+    if current_bundle is None:
+        return None
+    raw = str(getattr(current_bundle, "generated_at_iso", "") or "").strip()
+    try:
+        run_date = datetime.fromisoformat(raw).date()
+    except ValueError:
+        return None
+    year = run_date.year
+    dated: list[date] = []
+    for match in list(getattr(current_bundle, "group_matches", []) or []) + list(
+        getattr(current_bundle, "knockout_matches", []) or []
+    ):
+        parsed = _parse_template_match_date(getattr(match, "match_date", ""), year=year)
+        if parsed is not None and parsed < run_date:
+            dated.append(parsed)
+    if not dated:
+        return None
+    return max(dated).isoformat()
+
+
+def _previous_template_bundle(
+    output_dir: Path,
+    current_json_path: Path,
+    *,
+    current_bundle: object | None = None,
+) -> object | None:
+    matchday_stamp = _comparison_matchday_stamp(current_bundle)
+    if matchday_stamp:
+        preferred = output_dir / f"linkedin_brazil_{matchday_stamp}.json"
+        if preferred.exists() and preferred.name != current_json_path.name:
+            try:
+                return bundle_from_json(preferred)
+            except Exception:  # noqa: BLE001 - comparação histórica não pode derrubar o post
+                pass
     candidates = [
         path
         for path in sorted(output_dir.glob("linkedin_brazil_*.json"))
@@ -583,7 +618,11 @@ def _run(args: argparse.Namespace) -> int:
             template_post = render_template_post(
                 artifacts.bundle,
                 post_index=post_index,
-                previous_bundle=_previous_template_bundle(args.output_dir, json_path),
+                previous_bundle=_previous_template_bundle(
+                    args.output_dir,
+                    json_path,
+                    current_bundle=artifacts.bundle,
+                ),
             )
             if bool(config.get("post_editor_enabled", False)):
                 template_post = _run_post_editor_append(config, template_post, watchdog=watchdog)

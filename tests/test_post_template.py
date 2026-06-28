@@ -600,6 +600,118 @@ def test_backstage_describes_weighted_path_risk_without_turning_branch_probabili
     assert "virou protagonista" not in backstage
 
 
+def test_backstage_uses_narrative_consensus_checks_instead_of_generic_choreography() -> None:
+    bundle = _bundle()
+    bundle.model_participation = {
+        "total_messages": 31,
+        "total_rounds": 7,
+        "protagonist_counts": {"Opus 4.8": 2, "GPT 5.5": 2, "DeepSeek V4 Pro": 2},
+        "last_consensus_protagonist": "GPT 5.5",
+    }
+    bundle.meeting_transcript = [
+        {
+            "round": 3,
+            "responses": [
+                {
+                    "agent": "Opus 4.8",
+                    "answer": (
+                        "Faço o papel de challenger. Grupo F encerrado: Holanda 1º (7), Japão 2º (5), "
+                        "Suécia (4). 2F = Japão, cenário 100%; a única liberdade é a chance de vencer "
+                        "o Japão (69.8% de avanço). Para +1pp no título eu precisaria de +8.95pp no jogo "
+                        "(69.8→78.8%). O mercado real diz o oposto: Brasil -138 confirma 69.8%, não 78.8%."
+                    ),
+                    "disagreed": False,
+                    "removed_from_main": False,
+                    "used_fallback": False,
+                },
+            ],
+        },
+        {
+            "round": 5,
+            "responses": [
+                {
+                    "agent": "DeepSeek V4 Pro",
+                    "answer": (
+                        "O 7.8% surge exatamente da agregação sobre todos os oponentes possíveis do bracket, "
+                        "incluindo Costa do Marfim, México, Colômbia e Espanha. Multiplicar a cadeia de "
+                        "mais prováveis (Japão, Noruega, Inglaterra, Argentina, França) daria cerca de 4.1%, "
+                        "mas isso é uma conta errada porque ignora os ramos alternativos mais fáceis."
+                    ),
+                    "disagreed": False,
+                    "removed_from_main": False,
+                    "used_fallback": False,
+                },
+            ],
+        },
+    ]
+
+    text = render_template_post(bundle, post_index=12, run_date=date(2026, 6, 28))
+
+    backstage = text.split("DOIS BASTIDORES DA REUNIÃO DE HOJE:\n\n", 1)[1].split("📊", 1)[0]
+    assert "Japão 100%" in backstage
+    assert "69,8%" in backstage
+    assert "+1pp no título" in backstage
+    assert "4,1%" in backstage
+    assert "ramos alternativos" in backstage
+    assert "virou protagonista" not in backstage
+
+
+def test_backstage_keeps_two_strong_beats_from_same_agent_over_generic_other_agent() -> None:
+    bundle = _bundle()
+    bundle.meeting_transcript = [
+        {
+            "round": 3,
+            "responses": [
+                {
+                    "agent": "Opus 4.8",
+                    "answer": (
+                        "Grupo F encerrado: Holanda 1º, Japão 2º. 2F = Japão, cenário 100%; "
+                        "para +1pp no título eu precisaria de +8.95pp no jogo (69.8→78.8%)."
+                    ),
+                    "disagreed": False,
+                    "removed_from_main": False,
+                    "used_fallback": False,
+                },
+            ],
+        },
+        {
+            "round": 5,
+            "responses": [
+                {
+                    "agent": "Opus 4.8",
+                    "answer": (
+                        "Multiplicar a cadeia de mais prováveis: 0.698×0.752×0.479×0.418×0.392 ≈ 4.1%, "
+                        "mas isso é conta "
+                        "errada porque o 7.8% vem de todos os oponentes possíveis e dos ramos alternativos."
+                    ),
+                    "disagreed": True,
+                    "removed_from_main": False,
+                    "used_fallback": False,
+                },
+                {
+                    "agent": "GPT 5.5",
+                    "answer": (
+                        "As fontes frescas consultadas nesta chamada reforçam o mesmo desenho: "
+                        "Brasil-Japão é o próximo gatilho real, Japão chega forte mas dentro do preço "
+                        "de 69.8% para o Brasil passar, e França/Argentina seguem como tetos qualitativos."
+                    ),
+                    "disagreed": True,
+                    "removed_from_main": False,
+                    "used_fallback": False,
+                },
+            ],
+        },
+    ]
+
+    text = render_template_post(bundle, post_index=12, run_date=date(2026, 6, 28))
+
+    backstage = text.split("DOIS BASTIDORES DA REUNIÃO DE HOJE:\n\n", 1)[1].split("📊", 1)[0]
+    assert "Japão 100%" in backstage
+    assert "4,1%" in backstage
+    assert "ramos alternativos" in backstage
+    assert "fontes frescas" not in backstage
+
+
 def test_backstage_does_not_truncate_after_numeric_date_fragment() -> None:
     bundle = _bundle()
     bundle.model_participation = {
