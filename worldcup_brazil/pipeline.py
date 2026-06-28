@@ -2008,7 +2008,7 @@ def _validate_completed_group_results_fresh(
     if not missing:
         return
     detail = (
-        "Gate de resultados de grupo falhou: jogo(s) do Brasil já no passado sem placar "
+        "Gate de resultados de grupo falhou: jogo(s) de grupos relevantes do caminho do Brasil já no passado sem placar "
         "em completed_group_matches: "
         + "; ".join(missing)
         + ". Atualize completed_group_matches antes de rodar Monte Carlo."

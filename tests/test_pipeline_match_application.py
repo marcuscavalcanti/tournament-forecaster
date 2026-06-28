@@ -122,6 +122,8 @@ def test_completed_group_results_freshness_gate_checks_brazil_path_group_fixture
         _validate_completed_group_results_fresh(config, datetime(2026, 6, 23, 12, tzinfo=timezone.utc))
     except ReportCoherenceError as exc:
         assert "F: Holanda x Japão (2026-06-22)" in str(exc)
+        assert "grupos relevantes do caminho do Brasil" in str(exc)
+        assert "jogo(s) do Brasil" not in str(exc)
     else:
         raise AssertionError("expected ReportCoherenceError")
 

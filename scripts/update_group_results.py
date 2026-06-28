@@ -13,6 +13,7 @@ import tempfile
 import unicodedata
 import urllib.parse
 import urllib.request
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -131,7 +132,8 @@ def _fixture_date_range(config: dict[str, Any]) -> tuple[str, str]:
     )
     if not dates:
         return "2026-06-11T00:00:00Z", "2026-06-27T23:59:59Z"
-    return f"{dates[0]}T00:00:00Z", f"{dates[-1]}T23:59:59Z"
+    end_date = date.fromisoformat(dates[-1]) + timedelta(days=1)
+    return f"{dates[0]}T00:00:00Z", f"{end_date.isoformat()}T23:59:59Z"
 
 
 def _fifa_calendar_api_url(base_url: str, config: dict[str, Any]) -> str:

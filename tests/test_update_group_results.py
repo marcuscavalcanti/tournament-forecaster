@@ -3,6 +3,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from scripts.update_group_results import _fifa_calendar_api_url
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -89,6 +91,19 @@ def test_update_group_results_dry_run_matches_fixture_without_writing(tmp_path: 
     assert summary["dry_run"] is True
     assert summary["would_add"] == 1
     assert len(json.loads(config.read_text(encoding="utf-8"))["completed_group_matches"]) == 1
+
+
+def test_fifa_calendar_query_extends_one_utc_day_after_last_local_fixture() -> None:
+    config = {
+        "group_fixtures": [
+            {"group": "J", "team_a": "Jordânia", "team_b": "Argentina", "date": "2026-06-27"},
+        ]
+    }
+
+    url = _fifa_calendar_api_url("https://api.fifa.com/api/v3/calendar/matches", config)
+
+    assert "from=2026-06-27T00%3A00%3A00Z" in url
+    assert "to=2026-06-28T23%3A59%3A59Z" in url
 
 
 def test_update_group_results_apply_writes_canonical_fixture_order(tmp_path: Path) -> None:
