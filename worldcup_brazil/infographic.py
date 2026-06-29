@@ -77,6 +77,10 @@ def _pct_one_decimal(value: float) -> str:
     return f"{value:.1f}".replace(".", ",") + "%"
 
 
+def _pp(value: float) -> str:
+    return f"{value:+.1f}".replace(".", ",") + " p.p."
+
+
 def _participation(bundle: Any) -> dict[str, Any]:
     value = getattr(bundle, "model_participation", {}) or {}
     return value if isinstance(value, dict) else {}
@@ -113,36 +117,6 @@ def _metric_totals(bundles: list[Any]) -> dict[str, float]:
         "tokens": tokens,
         "cost": cost,
     }
-
-
-def _model_rows(bundles: list[Any]) -> list[dict[str, Any]]:
-    rows: dict[str, dict[str, Any]] = {}
-    for bundle in bundles:
-        influence = getattr(bundle, "model_influence_pct", {}) or {}
-        by_model = _participation(bundle).get("by_model") or {}
-        for model, pct in influence.items():
-            row = rows.setdefault(
-                str(model),
-                {"model": str(model), "influence": [], "valid": 0.0, "invalid": 0.0, "messages": 0.0, "runs": 0},
-            )
-            row["influence"].append(_num(pct))
-            row["runs"] += 1
-        for model, stats in by_model.items():
-            if not isinstance(stats, dict):
-                continue
-            row = rows.setdefault(
-                str(model),
-                {"model": str(model), "influence": [], "valid": 0.0, "invalid": 0.0, "messages": 0.0, "runs": 0},
-            )
-            row["valid"] += _num(stats.get("valid_responses"), _num(stats.get("responses")))
-            row["invalid"] += _num(stats.get("invalid_responses"))
-            row["messages"] += _num(stats.get("messages"))
-    output: list[dict[str, Any]] = []
-    for row in rows.values():
-        influences = row["influence"]
-        avg = sum(influences) / len(influences) if influences else 0.0
-        output.append({**row, "avg_influence": avg})
-    return sorted(output, key=lambda item: (-item["avg_influence"], -item["valid"], item["model"]))
 
 
 def _locked_crossing(bundle: Any) -> str:
@@ -207,6 +181,461 @@ def render_svg_to_png_with_chrome(
     except (OSError, subprocess.SubprocessError):
         return False
     return png_path.exists() and png_path.stat().st_size > 0
+
+
+def render_html_to_png_with_chrome(
+    html_path: Path,
+    png_path: Path,
+    *,
+    chrome_path: str | None = None,
+    width: int = 1400,
+    height: int = 2500,
+) -> bool:
+    candidates = [chrome_path] if chrome_path else [os.environ.get("CHROME_BIN"), *DEFAULT_CHROME_PATHS]
+    executable = next((Path(candidate) for candidate in candidates if candidate and Path(candidate).exists()), None)
+    if executable is None:
+        return False
+    png_path.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        str(executable),
+        "--headless=new",
+        "--disable-gpu",
+        "--hide-scrollbars",
+        f"--screenshot={png_path}",
+        f"--window-size={width},{height}",
+        html_path.resolve().as_uri(),
+    ]
+    try:
+        subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=45)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return png_path.exists() and png_path.stat().st_size > 0
+
+
+MONTHS_PT = {
+    "jan": 1,
+    "fev": 2,
+    "mar": 3,
+    "abr": 4,
+    "mai": 5,
+    "jun": 6,
+    "jul": 7,
+    "ago": 8,
+    "set": 9,
+    "out": 10,
+    "nov": 11,
+    "dez": 12,
+}
+
+
+def _match_date_tuple(raw: Any) -> tuple[int, int] | None:
+    value = str(raw or "").strip().lower()
+    if "/" not in value:
+        return None
+    day_raw, month_raw = value.split("/", 1)
+    try:
+        day = int(day_raw)
+    except ValueError:
+        return None
+    month = MONTHS_PT.get(month_raw[:3])
+    if month is None:
+        return None
+    return month, day
+
+
+def _match_label(bundle: Any) -> str:
+    generated = _parse_bundle_date(bundle)
+    generated_key = (generated.month, generated.day) if generated != datetime.min else (0, 0)
+    group_matches = list(getattr(bundle, "group_matches", []) or [])
+    future_group_matches: list[tuple[tuple[int, int], Any]] = []
+    for match in group_matches:
+        date_key = _match_date_tuple(getattr(match, "match_date", None))
+        if date_key is not None and date_key >= generated_key:
+            future_group_matches.append((date_key, match))
+    if future_group_matches:
+        _, match = sorted(future_group_matches, key=lambda item: item[0])[0]
+        return f"Brasil x {getattr(match, 'opponent', 'adversário')}"
+    for match in getattr(bundle, "knockout_matches", []) or []:
+        if str(getattr(match, "phase", "") or "") == "16 avos" and bool(getattr(match, "most_likely", False)):
+            return f"Brasil x {getattr(match, 'opponent', 'adversário')}"
+    return "Brasil"
+
+
+def _short_model(model: str) -> str:
+    replacements = {
+        "DeepSeek V4 Pro": "DeepSeek",
+        "Perplexity Pro": "Perplexity",
+        "Gemini Pro": "Gemini",
+        "GPT 5.5": "GPT 5.5",
+        "Opus 4.8": "Opus 4.8",
+    }
+    return replacements.get(model, model)
+
+
+def _leaders_from_influence(influence: dict[str, Any]) -> list[str]:
+    if not influence:
+        return []
+    values = {str(model): _num(value) for model, value in influence.items()}
+    top = max(values.values(), default=0.0)
+    if top <= 0:
+        return []
+    return [model for model, value in values.items() if abs(value - top) < 0.05]
+
+
+def _run_rows(bundles: list[Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for bundle in bundles:
+        part = _participation(bundle)
+        influence = getattr(bundle, "model_influence_pct", {}) or {}
+        leaders = _leaders_from_influence(influence)
+        total_messages = _num(part.get("total_messages"))
+        invalid = _num(part.get("invalid_responses"))
+        valid = _num(part.get("valid_messages"), total_messages - invalid)
+        rows.append(
+            {
+                "date": _date_label(bundle),
+                "match": _match_label(bundle),
+                "title": _stage(bundle, "titulo"),
+                "final": _stage(bundle, "final"),
+                "messages": total_messages,
+                "valid": valid,
+                "invalid": invalid,
+                "rounds": _num(part.get("total_rounds")),
+                "leaders": leaders,
+                "leader_text": " + ".join(_short_model(model) for model in leaders) if leaders else "sem líder",
+                "locked_crossing": _locked_crossing_short(bundle),
+            }
+        )
+    return rows
+
+
+def _model_rows(bundles: list[Any]) -> list[dict[str, Any]]:
+    rows: dict[str, dict[str, Any]] = {}
+    run_count = max(1, len(bundles))
+    for bundle in bundles:
+        influence = getattr(bundle, "model_influence_pct", {}) or {}
+        by_model = _participation(bundle).get("by_model") or {}
+        for model, pct in influence.items():
+            row = rows.setdefault(
+                str(model),
+                {
+                    "model": str(model),
+                    "influence": [],
+                    "influence_sum": 0.0,
+                    "valid": 0.0,
+                    "invalid": 0.0,
+                    "messages": 0.0,
+                    "questions": 0.0,
+                    "responses": 0.0,
+                    "runs": 0,
+                },
+            )
+            value = _num(pct)
+            row["influence"].append(value)
+            row["influence_sum"] += value
+            row["runs"] += 1
+        for model, stats in by_model.items():
+            if not isinstance(stats, dict):
+                continue
+            row = rows.setdefault(
+                str(model),
+                {
+                    "model": str(model),
+                    "influence": [],
+                    "influence_sum": 0.0,
+                    "valid": 0.0,
+                    "invalid": 0.0,
+                    "messages": 0.0,
+                    "questions": 0.0,
+                    "responses": 0.0,
+                    "runs": 0,
+                },
+            )
+            responses = _num(stats.get("responses"))
+            row["valid"] += _num(stats.get("valid_responses"), responses)
+            row["invalid"] += _num(stats.get("invalid_responses"))
+            row["messages"] += _num(stats.get("messages"))
+            row["questions"] += _num(stats.get("questions"))
+            row["responses"] += responses
+    output: list[dict[str, Any]] = []
+    for row in rows.values():
+        influences = row["influence"]
+        avg_present = sum(influences) / len(influences) if influences else 0.0
+        avg_all = row["influence_sum"] / run_count
+        output.append({**row, "avg_influence": avg_present, "avg_all_runs": avg_all})
+    return sorted(output, key=lambda item: (-item["influence_sum"], -item["valid"], item["invalid"], item["model"]))
+
+
+def _h(value: Any) -> str:
+    return html.escape(str(value))
+
+
+def _html_stat(label: str, value: str, note: str = "") -> str:
+    return (
+        '<div class="stat-card">'
+        f'<div class="stat-value">{_h(value)}</div>'
+        f'<div class="stat-label">{_h(label)}</div>'
+        f'<div class="stat-note">{_h(note)}</div>'
+        "</div>"
+    )
+
+
+def _market_status(bundle: Any) -> str:
+    challenge = ((getattr(bundle, "metadata", {}) or {}).get("market_title_challenge") or {})
+    status = str(challenge.get("status") or "sem sinal")
+    if bool(challenge.get("triggered")):
+        low = _pct(challenge.get("market_low_pct"))
+        high = _pct(challenge.get("market_high_pct"))
+        return f"mercado desafia ({low}-{high})"
+    if status == "within_threshold":
+        return "mercado dentro da faixa"
+    if status == "debate_claim_only":
+        return "mercado só como alegação"
+    return status.replace("_", " ")
+
+
+def _opponent_room_status(bundle: Any) -> str:
+    room = ((getattr(bundle, "metadata", {}) or {}).get("parallel_opponent_debriefing") or {})
+    if not room:
+        return "sem sala lateral"
+    if bool(room.get("usable_for_main_room")):
+        rounds = room.get("rounds") or 0
+        return f"sala lateral útil ({rounds} rodada{'s' if rounds != 1 else ''})"
+    exit_status = str(room.get("exit_status") or "não-usável")
+    return f"sala lateral: {exit_status.replace('_', ' ')}"
+
+
+def _sparkline_points(values: list[float], *, width: int = 900, height: int = 170) -> str:
+    if not values:
+        return ""
+    max_value = max(values + [1.0]) * 1.18
+    x_pad = 52
+    y_pad = 26
+    usable_width = width - x_pad * 2
+    usable_height = height - y_pad * 2
+    points: list[str] = []
+    for index, value in enumerate(values):
+        x = x_pad + (usable_width * index / max(1, len(values) - 1))
+        y = y_pad + usable_height - (value / max_value * usable_height)
+        points.append(f"{x:.1f},{y:.1f}")
+    return " ".join(points)
+
+
+def render_simulation_review_infographic_html(bundles: list[Any]) -> str:
+    if not bundles:
+        raise ValueError("infográfico requer pelo menos um bundle")
+    bundles = sorted(bundles, key=_parse_bundle_date)
+    latest = bundles[-1]
+    totals = _metric_totals(bundles)
+    run_rows = _run_rows(bundles)
+    model_rows = _model_rows(bundles)
+    period = f"{_date_label(bundles[0])} → {_date_label(latest)}"
+    valid_rate = (totals["valid"] / totals["messages"] * 100.0) if totals["messages"] else 0.0
+    title_start = _stage(bundles[0], "titulo")
+    title_end = _stage(latest, "titulo")
+    final_start = _stage(bundles[0], "final")
+    final_end = _stage(latest, "final")
+    title_delta = title_end - title_start
+    values = [_stage(bundle, "titulo") for bundle in bundles]
+    max_influence = max([row["influence_sum"] for row in model_rows] + [1.0])
+    rank_cards = []
+    for index, row in enumerate(model_rows[:5], start=1):
+        bar = max(4, int(100 * row["influence_sum"] / max_influence))
+        rank_cards.append(
+            '<div class="model-row">'
+            f'<div class="rank-num">#{index}</div>'
+            f'<div class="model-main"><div class="model-name">{_h(_short_model(row["model"]))}</div>'
+            f'<div class="bar-track"><div class="bar-fill" style="width:{bar}%"></div></div>'
+            f'<div class="model-sub">{int(row["valid"])} válidas · {int(row["invalid"])} removidas · {int(row["questions"])} protagonismos</div></div>'
+            f'<div class="model-score">{_pct_one_decimal(row["influence_sum"])}</div>'
+            "</div>"
+        )
+    run_cards = []
+    for row in run_rows:
+        run_cards.append(
+            '<div class="run-card">'
+            f'<div class="run-date">{_h(row["date"])}</div>'
+            f'<div class="run-match">{_h(row["match"])}</div>'
+            f'<div class="run-title">{_pct(row["title"])}</div>'
+            f'<div class="run-meta">Hexa · final {_pct(row["final"])}</div>'
+            f'<div class="leader-pill">{_h(row["leader_text"])}</div>'
+            f'<div class="run-foot">{int(row["valid"])} válidas · {int(row["invalid"])} removidas</div>'
+            "</div>"
+        )
+    leader_rows = []
+    for row in run_rows:
+        leader_rows.append(
+            '<tr>'
+            f'<td>{_h(row["date"])}</td>'
+            f'<td>{_h(row["match"])}</td>'
+            f'<td>{_h(row["leader_text"])}</td>'
+            f'<td>{_pct(row["title"])}</td>'
+            "</tr>"
+        )
+    insight_items = [
+        f"Hexa saiu de {_pct(title_start)} para {_pct(title_end)} ({_pp(title_delta)}).",
+        f"Final subiu de {_pct(final_start)} para {_pct(final_end)}.",
+        f"{_locked_crossing_short(latest)}.",
+        f"{_market_status(latest)}.",
+        f"{_opponent_room_status(latest)}.",
+    ]
+    trend_points = _sparkline_points(values)
+    circle_nodes = []
+    if trend_points:
+        for point, row in zip(trend_points.split(), run_rows, strict=True):
+            x_raw, y_raw = point.split(",")
+            circle_nodes.append(
+                f'<circle cx="{x_raw}" cy="{y_raw}" r="8"></circle>'
+                f'<text x="{x_raw}" y="{float(y_raw) - 18:.1f}">{_pct(row["title"])}</text>'
+            )
+    return f"""<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>CopaComAchismo - Review das Simulações</title>
+<style>
+* {{ box-sizing: border-box; }}
+html, body {{ margin: 0; background: #020617; }}
+body {{ width: 1400px; min-height: 2500px; font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #f8fafc; }}
+.poster {{ width: 1400px; min-height: 2500px; padding: 52px; background:
+  radial-gradient(circle at 85% 6%, rgba(45,212,191,.18), transparent 26%),
+  radial-gradient(circle at 8% 88%, rgba(250,204,21,.10), transparent 24%),
+  linear-gradient(135deg, #04111f 0%, #071827 48%, #020617 100%); overflow: hidden; }}
+.top {{ display: flex; justify-content: space-between; align-items: flex-start; gap: 32px; }}
+.eyebrow {{ color: #facc15; font-size: 34px; font-weight: 900; letter-spacing: 0; text-transform: uppercase; }}
+h1 {{ margin: 8px 0 10px; font-size: 68px; line-height: .95; letter-spacing: 0; }}
+.subtitle {{ color: #99f6e4; font-size: 25px; font-weight: 700; }}
+.badge {{ border: 2px solid rgba(250,204,21,.55); border-radius: 16px; padding: 18px 22px; min-width: 265px; text-align: right; background: rgba(2,6,23,.42); }}
+.badge strong {{ display: block; color: #facc15; font-size: 44px; line-height: 1; }}
+.badge span {{ color: #cbd5e1; font-size: 20px; }}
+.method {{ margin-top: 34px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }}
+.step {{ border: 1px solid rgba(148,163,184,.36); border-radius: 14px; padding: 16px 18px; background: rgba(8,24,39,.70); min-height: 82px; }}
+.step b {{ color: #facc15; font-size: 24px; margin-right: 9px; }}
+.step span {{ display: block; margin-top: 8px; color: #cbd5e1; font-size: 18px; line-height: 1.15; }}
+.section-title {{ margin: 34px 0 16px; display: flex; align-items: center; gap: 18px; color: #facc15; font-size: 29px; font-weight: 900; text-transform: uppercase; }}
+.section-title:before, .section-title:after {{ content: ""; height: 1px; flex: 1; background: linear-gradient(90deg, transparent, rgba(250,204,21,.55), transparent); }}
+.run-grid {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }}
+.run-card, .panel, .stat-card {{ border: 1px solid rgba(45,212,191,.45); border-radius: 16px; background: rgba(6,24,39,.82); box-shadow: 0 16px 55px rgba(0,0,0,.28); }}
+.run-card {{ min-height: 228px; padding: 20px; position: relative; }}
+.run-date {{ color: #facc15; font-weight: 900; font-size: 25px; }}
+.run-match {{ margin-top: 6px; color: #e2e8f0; font-size: 21px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.run-title {{ margin-top: 14px; color: #facc15; font-size: 52px; line-height: .95; font-weight: 950; }}
+.run-meta {{ color: #bae6fd; font-size: 18px; font-weight: 700; margin-top: 4px; }}
+.leader-pill {{ margin-top: 16px; padding: 9px 12px; border-radius: 999px; background: rgba(45,212,191,.16); color: #99f6e4; font-size: 17px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.run-foot {{ position: absolute; left: 20px; right: 20px; bottom: 16px; color: #cbd5e1; font-size: 16px; }}
+.trend-panel {{ margin-top: 18px; padding: 18px 28px; min-height: 0; }}
+.trend-svg {{ width: 100%; height: 210px; display: block; }}
+.trend-svg polyline {{ fill: none; stroke: #2dd4bf; stroke-width: 7; stroke-linecap: round; stroke-linejoin: round; }}
+.trend-svg circle {{ fill: #facc15; stroke: #fff7ed; stroke-width: 3; }}
+.trend-svg text {{ fill: #facc15; font-size: 23px; font-weight: 900; text-anchor: middle; }}
+.two-col {{ display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }}
+.panel {{ padding: 24px; min-height: 420px; }}
+.panel.trend-panel {{ min-height: 0; }}
+.panel h2 {{ margin: 0 0 18px; font-size: 31px; line-height: 1; }}
+.model-row {{ display: grid; grid-template-columns: 58px 1fr 112px; gap: 16px; align-items: center; padding: 14px 0; border-top: 1px solid rgba(148,163,184,.16); }}
+.model-row:first-of-type {{ border-top: none; }}
+.rank-num {{ color: #facc15; font-size: 28px; font-weight: 950; }}
+.model-name {{ font-size: 23px; font-weight: 900; }}
+.model-sub {{ margin-top: 6px; color: #cbd5e1; font-size: 16px; }}
+.bar-track {{ margin-top: 8px; height: 12px; background: #0f2a3d; border-radius: 999px; overflow: hidden; }}
+.bar-fill {{ height: 100%; background: linear-gradient(90deg, #2dd4bf, #facc15); border-radius: 999px; }}
+.model-score {{ text-align: right; color: #facc15; font-size: 25px; font-weight: 950; }}
+table {{ width: 100%; border-collapse: collapse; }}
+td, th {{ padding: 12px 8px; border-top: 1px solid rgba(148,163,184,.16); text-align: left; font-size: 18px; }}
+th {{ color: #99f6e4; font-size: 15px; text-transform: uppercase; letter-spacing: .04em; }}
+td:nth-child(3), td:nth-child(4) {{ font-weight: 900; color: #f8fafc; }}
+.stats {{ display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; }}
+.stat-card {{ min-height: 154px; padding: 19px 18px; border-color: rgba(250,204,21,.42); }}
+.stat-value {{ color: #facc15; font-size: 42px; line-height: .98; font-weight: 950; }}
+.stat-label {{ margin-top: 12px; color: #f8fafc; font-size: 18px; font-weight: 900; }}
+.stat-note {{ margin-top: 8px; color: #cbd5e1; font-size: 15px; line-height: 1.22; }}
+.insights {{ display: grid; grid-template-columns: 1.1fr .9fr; gap: 18px; }}
+.quote {{ padding: 26px; border: 1px solid rgba(250,204,21,.44); border-radius: 16px; background: rgba(2,6,23,.58); min-height: 204px; }}
+.quote h2 {{ margin: 0 0 14px; color: #facc15; font-size: 28px; }}
+.quote p {{ margin: 0; color: #e2e8f0; font-size: 22px; line-height: 1.32; font-weight: 700; }}
+.bullets {{ padding: 24px 28px; }}
+.panel.bullets {{ min-height: 270px; }}
+.bullets ul {{ margin: 0; padding-left: 22px; }}
+.bullets li {{ margin: 0 0 14px; color: #dbeafe; font-size: 20px; line-height: 1.25; }}
+.footer {{ margin-top: 22px; border: 1px solid rgba(148,163,184,.28); border-radius: 14px; padding: 17px 22px; color: #cbd5e1; font-size: 19px; display: flex; justify-content: space-between; gap: 18px; }}
+</style>
+</head>
+<body>
+<main class="poster">
+  <section class="top">
+    <div>
+      <div class="eyebrow">CopaComAchismo</div>
+      <h1>Review das<br>Simulações</h1>
+      <div class="subtitle">Ranking dos modelos, influência por run e saúde operacional · {period}</div>
+    </div>
+    <div class="badge"><strong>{_pct(title_end)}</strong><span>Hexa no último run<br>{_h(_match_label(latest))}</span></div>
+  </section>
+
+  <section class="method">
+    <div class="step"><b>1</b>Dados FIFA<span>placares e chaveamento oficiais entram antes do MC.</span></div>
+    <div class="step"><b>2</b>Monte Carlo<span>calcula funil, adversários e título.</span></div>
+    <div class="step"><b>3</b>Sala multi-modelo<span>modelos desafiam premissas e gates removem lixo.</span></div>
+    <div class="step"><b>4</b>Auditoria contínua<span>mercado desafia; não reprecifica sozinho.</span></div>
+  </section>
+
+  <div class="section-title">1. Evolução por run</div>
+  <section class="run-grid">
+    {''.join(run_cards)}
+  </section>
+  <section class="panel trend-panel">
+    <svg class="trend-svg" viewBox="0 0 900 210" preserveAspectRatio="none" aria-label="Evolução do Hexa">
+      <line x1="0" y1="180" x2="900" y2="180" stroke="rgba(148,163,184,.22)" stroke-width="1"></line>
+      <line x1="0" y1="90" x2="900" y2="90" stroke="rgba(148,163,184,.14)" stroke-width="1"></line>
+      <polyline points="{trend_points}"></polyline>
+      {''.join(circle_nodes)}
+    </svg>
+  </section>
+
+  <div class="section-title">2. Ranking e liderança dos modelos</div>
+  <section class="two-col">
+    <div class="panel">
+      <h2>Ranking geral dos modelos</h2>
+      {''.join(rank_cards)}
+    </div>
+    <div class="panel">
+      <h2>Mais influente por run</h2>
+      <table>
+        <thead><tr><th>Run</th><th>Jogo</th><th>Líder</th><th>Hexa</th></tr></thead>
+        <tbody>{''.join(leader_rows)}</tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="section-title">3. Saúde operacional da série</div>
+  <section class="stats">
+    {_html_stat("Mensagens válidas", f"{int(totals['valid'])}/{int(totals['messages'])}", _pct(valid_rate))}
+    {_html_stat("Respostas removidas", str(int(totals['invalid'])), "gates de qualidade")}
+    {_html_stat("Tokens usados", _token_millions(totals["tokens"]), f"{_money(totals['cost'])} no período")}
+    {_html_stat("Chamadas aos modelos", str(int(totals["calls"])), f"{int(totals['fallback'])} fallbacks")}
+    {_html_stat("Maior swing", _pp(title_delta), f"Hexa {period}")}
+  </section>
+
+  <div class="section-title">4. Leituras que importam</div>
+  <section class="insights">
+    <div class="quote">
+      <h2>O que a sala trouxe</h2>
+      <p>O ranking não mede “modelo favorito”; mede contribuição real: influência acumulada, votos válidos, remoções e protagonismo. Quando um modelo cai no gate, ele perde peso no placar.</p>
+    </div>
+    <div class="panel bullets">
+      <ul>
+        {''.join(f'<li>{_h(item)}</li>' for item in insight_items)}
+      </ul>
+    </div>
+  </section>
+
+  <section class="footer">
+    <span>Infográfico gerado automaticamente a partir dos bundles de simulação.</span>
+    <strong>#CopaComAchismo</strong>
+  </section>
+</main>
+</body>
+</html>
+"""
 
 
 def _text(x: float, y: float, body: str, *, size: int = 24, color: str = "#f8fafc", weight: int = 600, anchor: str = "start") -> str:

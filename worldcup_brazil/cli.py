@@ -23,8 +23,9 @@ from worldcup_brazil.bracket import brazil_bracket_path, invalid_configured_knoc
 from worldcup_brazil.calibration import append_prediction_log, prediction_records_from_bundle
 from worldcup_brazil.infographic import (
     collect_recent_infographic_bundles,
+    render_html_to_png_with_chrome,
+    render_simulation_review_infographic_html,
     render_simulation_review_infographic_svg,
-    render_svg_to_png_with_chrome,
 )
 from worldcup_brazil.pipeline import (
     MeetingConsensusError,
@@ -556,7 +557,9 @@ def _run(args: argparse.Namespace) -> int:
         json_path = args.output_dir / f"linkedin_brazil_{stamp}.json"
         audit_path = args.output_dir / f"audit_brazil_{stamp}.md"
         graph_path = args.output_dir / f"decision_flow_brazil_{stamp}.svg"
-        infographic_path = args.output_dir / f"infographic_brazil_{stamp}.svg"
+        infographic_path = args.output_dir / f"infographic_brazil_{stamp}.png"
+        infographic_html_path = args.output_dir / f"infographic_brazil_{stamp}.html"
+        infographic_svg_path = args.output_dir / f"infographic_brazil_{stamp}.svg"
         infographic_png_path = args.output_dir / f"infographic_brazil_{stamp}.png"
         # Resiliência: o JSON é o ÚNICO registro em disco de meeting_transcript,
         # model_influence_pct e model_token_costs (~US$6,43 de debate). É escrito
@@ -611,11 +614,15 @@ def _run(args: argparse.Namespace) -> int:
         audit_path.write_text(render_audit_report(artifacts.bundle), encoding="utf-8")
         graph_path.write_text(render_decision_flow_svg(artifacts.bundle), encoding="utf-8")
         infographic_bundles = collect_recent_infographic_bundles(args.output_dir, json_path, limit=4)
-        infographic_path.write_text(
+        infographic_svg_path.write_text(
             render_simulation_review_infographic_svg(infographic_bundles),
             encoding="utf-8",
         )
-        infographic_png_written = render_svg_to_png_with_chrome(infographic_path, infographic_png_path)
+        infographic_html_path.write_text(
+            render_simulation_review_infographic_html(infographic_bundles),
+            encoding="utf-8",
+        )
+        infographic_png_written = render_html_to_png_with_chrome(infographic_html_path, infographic_png_path)
         template_post_path = args.output_dir / f"linkedin_post_brazil_{stamp}.md"
         try:
             post_index = (
@@ -668,7 +675,7 @@ def _run(args: argparse.Namespace) -> int:
                 "write_outputs",
                 detail=(
                     f"wrote {post_path.name}, {json_path.name}, {audit_path.name}, {graph_path.name}; "
-                    f"{infographic_path.name}"
+                    f"{infographic_html_path.name}"
                     f"{', ' + infographic_png_path.name if infographic_png_written else ''}; "
                     f"calibration_log={args.calibration_log}"
                 ),
@@ -681,7 +688,9 @@ def _run(args: argparse.Namespace) -> int:
         print(f"json: {json_path}")
         print(f"audit: {audit_path}")
         print(f"graph: {graph_path}")
-        print(f"infographic: {infographic_path}")
+        print(f"infographic: {infographic_path if infographic_png_written else infographic_html_path}")
+        print(f"infographic_html: {infographic_html_path}")
+        print(f"infographic_svg: {infographic_svg_path}")
         if infographic_png_written:
             print(f"infographic_png: {infographic_png_path}")
     except (SourcePlanningQuorumError, ReportCoherenceError, MeetingConsensusError) as exc:

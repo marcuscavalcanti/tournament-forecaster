@@ -90,16 +90,19 @@ def test_bundle_json_is_written_even_when_a_render_raises(tmp_path, monkeypatch,
     assert payload["bundle"]["model_influence_pct"] == {"GPT 5.5": 40.0}
 
 
-def test_successful_run_writes_infographic_svg(tmp_path, monkeypatch, capsys) -> None:
+def test_successful_run_writes_infographic_html_and_svg_debug_artifact(tmp_path, monkeypatch, capsys) -> None:
     monkeypatch.setattr(cli, "build_report_bundle_sync", lambda **kwargs: _FakeArtifacts())
+    monkeypatch.setattr(cli, "render_html_to_png_with_chrome", lambda *args, **kwargs: False)
 
     rc = cli.main(_base_argv(tmp_path))
 
     assert rc == 0
-    infographic_path = tmp_path / "outputs" / "infographic_brazil_2026-06-13.svg"
-    assert infographic_path.exists()
-    assert "Review das Simulações" in infographic_path.read_text(encoding="utf-8")
-    assert f"infographic: {infographic_path}" in capsys.readouterr().out
+    infographic_html_path = tmp_path / "outputs" / "infographic_brazil_2026-06-13.html"
+    infographic_svg_path = tmp_path / "outputs" / "infographic_brazil_2026-06-13.svg"
+    assert infographic_html_path.exists()
+    assert infographic_svg_path.exists()
+    assert "Ranking geral dos modelos" in infographic_html_path.read_text(encoding="utf-8")
+    assert f"infographic: {infographic_html_path}" in capsys.readouterr().out
 
 
 def test_acquire_run_lock_second_acquisition_returns_none(tmp_path) -> None:

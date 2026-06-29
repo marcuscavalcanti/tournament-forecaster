@@ -4,6 +4,8 @@ from types import SimpleNamespace
 
 from worldcup_brazil.infographic import (
     collect_recent_infographic_bundles,
+    render_html_to_png_with_chrome,
+    render_simulation_review_infographic_html,
     render_svg_to_png_with_chrome,
     render_simulation_review_infographic_svg,
 )
@@ -59,6 +61,27 @@ def test_render_simulation_review_infographic_svg_summarizes_runs_and_model_metr
     assert "Japão 100%" in svg
 
 
+def test_render_simulation_review_infographic_html_prioritizes_model_ranking_and_run_leaders() -> None:
+    html = render_simulation_review_infographic_html(
+        [
+            _bundle("2026-06-15", title=4.1, final=9.6, messages=24, valid=24, invalid=0),
+            _bundle("2026-06-18", title=5.1, final=10.7, messages=24, valid=22, invalid=2),
+            _bundle("2026-06-24", title=3.5, final=7.8, messages=31, valid=25, invalid=6),
+            _bundle("2026-06-28", title=7.8, final=16.2, messages=31, valid=27, invalid=4),
+        ]
+    )
+
+    assert html.startswith("<!doctype html>")
+    assert "Ranking geral dos modelos" in html
+    assert "Mais influente por run" in html
+    assert "Opus 4.8" in html
+    assert "GPT 5.5" in html
+    assert "Mensagens válidas" in html
+    assert "Tokens usados" in html
+    assert "Japão 100%" in html
+    assert "Sem dados empilhados" not in html
+
+
 def test_collect_recent_infographic_bundles_keeps_current_and_previous_history(tmp_path: Path) -> None:
     output_dir = tmp_path / "outputs"
     output_dir.mkdir()
@@ -89,6 +112,17 @@ def test_render_svg_to_png_with_chrome_is_best_effort_when_chrome_missing(tmp_pa
     svg_path.write_text("<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'></svg>", encoding="utf-8")
 
     ok = render_svg_to_png_with_chrome(svg_path, png_path, chrome_path=str(tmp_path / "missing-chrome"))
+
+    assert ok is False
+    assert not png_path.exists()
+
+
+def test_render_html_to_png_with_chrome_is_best_effort_when_chrome_missing(tmp_path: Path) -> None:
+    html_path = tmp_path / "chart.html"
+    png_path = tmp_path / "chart.png"
+    html_path.write_text("<!doctype html><html><body>ok</body></html>", encoding="utf-8")
+
+    ok = render_html_to_png_with_chrome(html_path, png_path, chrome_path=str(tmp_path / "missing-chrome"))
 
     assert ok is False
     assert not png_path.exists()
