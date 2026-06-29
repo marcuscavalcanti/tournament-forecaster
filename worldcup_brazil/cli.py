@@ -21,6 +21,11 @@ from worldcup_brazil.agents import (
 )
 from worldcup_brazil.bracket import brazil_bracket_path, invalid_configured_knockout_opponents
 from worldcup_brazil.calibration import append_prediction_log, prediction_records_from_bundle
+from worldcup_brazil.infographic import (
+    collect_recent_infographic_bundles,
+    render_simulation_review_infographic_svg,
+    render_svg_to_png_with_chrome,
+)
 from worldcup_brazil.pipeline import (
     MeetingConsensusError,
     ReportCoherenceError,
@@ -551,6 +556,8 @@ def _run(args: argparse.Namespace) -> int:
         json_path = args.output_dir / f"linkedin_brazil_{stamp}.json"
         audit_path = args.output_dir / f"audit_brazil_{stamp}.md"
         graph_path = args.output_dir / f"decision_flow_brazil_{stamp}.svg"
+        infographic_path = args.output_dir / f"infographic_brazil_{stamp}.svg"
+        infographic_png_path = args.output_dir / f"infographic_brazil_{stamp}.png"
         # Resiliência: o JSON é o ÚNICO registro em disco de meeting_transcript,
         # model_influence_pct e model_token_costs (~US$6,43 de debate). É escrito
         # PRIMEIRO; se qualquer render (post/audit/svg/template) estourar depois, o
@@ -603,6 +610,12 @@ def _run(args: argparse.Namespace) -> int:
         post_path.write_text(artifacts.post, encoding="utf-8")
         audit_path.write_text(render_audit_report(artifacts.bundle), encoding="utf-8")
         graph_path.write_text(render_decision_flow_svg(artifacts.bundle), encoding="utf-8")
+        infographic_bundles = collect_recent_infographic_bundles(args.output_dir, json_path, limit=4)
+        infographic_path.write_text(
+            render_simulation_review_infographic_svg(infographic_bundles),
+            encoding="utf-8",
+        )
+        infographic_png_written = render_svg_to_png_with_chrome(infographic_path, infographic_png_path)
         template_post_path = args.output_dir / f"linkedin_post_brazil_{stamp}.md"
         try:
             post_index = (
@@ -655,6 +668,8 @@ def _run(args: argparse.Namespace) -> int:
                 "write_outputs",
                 detail=(
                     f"wrote {post_path.name}, {json_path.name}, {audit_path.name}, {graph_path.name}; "
+                    f"{infographic_path.name}"
+                    f"{', ' + infographic_png_path.name if infographic_png_written else ''}; "
                     f"calibration_log={args.calibration_log}"
                 ),
                 extra={"calibration_records": len(calibration_records), "calibration_log": str(args.calibration_log)},
@@ -666,6 +681,9 @@ def _run(args: argparse.Namespace) -> int:
         print(f"json: {json_path}")
         print(f"audit: {audit_path}")
         print(f"graph: {graph_path}")
+        print(f"infographic: {infographic_path}")
+        if infographic_png_written:
+            print(f"infographic_png: {infographic_png_path}")
     except (SourcePlanningQuorumError, ReportCoherenceError, MeetingConsensusError) as exc:
         if watchdog:
             watchdog.fail("run", detail=str(exc))

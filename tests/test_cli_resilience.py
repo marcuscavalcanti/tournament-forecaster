@@ -90,6 +90,18 @@ def test_bundle_json_is_written_even_when_a_render_raises(tmp_path, monkeypatch,
     assert payload["bundle"]["model_influence_pct"] == {"GPT 5.5": 40.0}
 
 
+def test_successful_run_writes_infographic_svg(tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(cli, "build_report_bundle_sync", lambda **kwargs: _FakeArtifacts())
+
+    rc = cli.main(_base_argv(tmp_path))
+
+    assert rc == 0
+    infographic_path = tmp_path / "outputs" / "infographic_brazil_2026-06-13.svg"
+    assert infographic_path.exists()
+    assert "Review das Simulações" in infographic_path.read_text(encoding="utf-8")
+    assert f"infographic: {infographic_path}" in capsys.readouterr().out
+
+
 def test_acquire_run_lock_second_acquisition_returns_none(tmp_path) -> None:
     """Bug histórico (ITEM 6): não existia lock; 3 runs no mesmo dia dobravam o
     gasto e rasgavam o read-modify-write da calibração. O fix adquire um flock
