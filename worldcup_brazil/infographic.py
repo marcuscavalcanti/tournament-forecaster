@@ -3,7 +3,9 @@ from __future__ import annotations
 import html
 import math
 import os
+import re
 import subprocess
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -189,7 +191,7 @@ def render_html_to_png_with_chrome(
     *,
     chrome_path: str | None = None,
     width: int = 1400,
-    height: int = 2500,
+    height: int = 2800,
 ) -> bool:
     candidates = [chrome_path] if chrome_path else [os.environ.get("CHROME_BIN"), *DEFAULT_CHROME_PATHS]
     executable = next((Path(candidate) for candidate in candidates if candidate and Path(candidate).exists()), None)
@@ -405,6 +407,107 @@ def _opponent_room_status(bundle: Any) -> str:
     return f"sala lateral: {exit_status.replace('_', ' ')}"
 
 
+def _normalize_team(value: Any) -> str:
+    text = unicodedata.normalize("NFKD", str(value or ""))
+    text = "".join(char for char in text if not unicodedata.combining(char))
+    return re.sub(r"[^a-z0-9]+", " ", text.casefold()).strip()
+
+
+def _forecast_group_match_by_opponent(bundle: Any) -> dict[str, Any]:
+    matches: dict[str, Any] = {}
+    for match in getattr(bundle, "group_matches", []) or []:
+        opponent = getattr(match, "opponent", None)
+        if opponent:
+            matches[_normalize_team(opponent)] = match
+    return matches
+
+
+def _parse_brazil_score(score: Any) -> tuple[str, int, int] | None:
+    match = re.match(r"^\s*(.+?)\s+(\d+)-(\d+)\s+(.+?)\s*$", str(score or ""))
+    if not match:
+        return None
+    team_a, score_a_raw, score_b_raw, team_b = match.groups()
+    score_a = int(score_a_raw)
+    score_b = int(score_b_raw)
+    if _normalize_team(team_a) == "brasil":
+        return str(team_b).strip(), score_a, score_b
+    if _normalize_team(team_b) == "brasil":
+        return str(team_a).strip(), score_b, score_a
+    return None
+
+
+def _actual_outcome_label(brazil_goals: int, opponent_goals: int) -> str:
+    if brazil_goals > opponent_goals:
+        return "Vitória"
+    if brazil_goals == opponent_goals:
+        return "Empate"
+    return "Derrota"
+
+
+def _actual_outcome_key(brazil_goals: int, opponent_goals: int) -> str:
+    if brazil_goals > opponent_goals:
+        return "brazil"
+    if brazil_goals == opponent_goals:
+        return "draw"
+    return "opponent"
+
+
+def _prediction_key(match: Any) -> str:
+    values = {
+        "brazil": _num(getattr(match, "brazil_pct", None)),
+        "draw": _num(getattr(match, "draw_pct", None)),
+        "opponent": _num(getattr(match, "opponent_pct", None)),
+    }
+    return max(values.items(), key=lambda item: item[1])[0]
+
+
+def _probability_for_key(match: Any, key: str) -> float:
+    if key == "brazil":
+        return _num(getattr(match, "brazil_pct", None))
+    if key == "draw":
+        return _num(getattr(match, "draw_pct", None))
+    return _num(getattr(match, "opponent_pct", None))
+
+
+def _accuracy_rows(bundle: Any) -> tuple[list[dict[str, Any]], str]:
+    group_state = ((getattr(bundle, "metadata", {}) or {}).get("group_state") or {})
+    completed_results = group_state.get("completed_results") or []
+    forecasts = _forecast_group_match_by_opponent(bundle)
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for result in completed_results:
+        if not isinstance(result, dict):
+            continue
+        parsed = _parse_brazil_score(result.get("score"))
+        if parsed is None:
+            continue
+        opponent, brazil_goals, opponent_goals = parsed
+        opponent_key = _normalize_team(opponent)
+        if opponent_key in seen:
+            continue
+        seen.add(opponent_key)
+        forecast = forecasts.get(opponent_key)
+        if forecast is None:
+            continue
+        actual_key = _actual_outcome_key(brazil_goals, opponent_goals)
+        actual_prob = _probability_for_key(forecast, actual_key)
+        predicted_key = _prediction_key(forecast)
+        rows.append(
+            {
+                "score": str(result.get("score") or ""),
+                "opponent": opponent,
+                "actual_label": _actual_outcome_label(brazil_goals, opponent_goals),
+                "actual_prob": actual_prob,
+                "hit": predicted_key == actual_key,
+            }
+        )
+    if not rows:
+        return [], "sem jogos encerrados"
+    hit_count = sum(1 for row in rows if row["hit"])
+    avg_prob = sum(float(row["actual_prob"]) for row in rows) / len(rows)
+    return rows, f"{hit_count}/{len(rows)} direção · índice médio {_pct(avg_prob)}"
+
+
 def _sparkline_points(values: list[float], *, width: int = 900, height: int = 170) -> str:
     if not values:
         return ""
@@ -429,6 +532,7 @@ def render_simulation_review_infographic_html(bundles: list[Any]) -> str:
     totals = _metric_totals(bundles)
     run_rows = _run_rows(bundles)
     model_rows = _model_rows(bundles)
+    accuracy_rows, accuracy_summary = _accuracy_rows(latest)
     period = f"{_date_label(bundles[0])} → {_date_label(latest)}"
     valid_rate = (totals["valid"] / totals["messages"] * 100.0) if totals["messages"] else 0.0
     title_start = _stage(bundles[0], "titulo")
@@ -472,6 +576,18 @@ def render_simulation_review_infographic_html(bundles: list[Any]) -> str:
             f'<td>{_pct(row["title"])}</td>'
             "</tr>"
         )
+    accuracy_html_rows = []
+    for row in accuracy_rows:
+        status = "acertou" if row["hit"] else "errou"
+        status_class = "hit" if row["hit"] else "miss"
+        accuracy_html_rows.append(
+            '<tr>'
+            f'<td>{_h(row["score"])}</td>'
+            f'<td>{_h(row["actual_label"])}</td>'
+            f'<td>{_pct(row["actual_prob"])}</td>'
+            f'<td><span class="{status_class}">{status}</span></td>'
+            "</tr>"
+        )
     insight_items = [
         f"Hexa saiu de {_pct(title_start)} para {_pct(title_end)} ({_pp(title_delta)}).",
         f"Final subiu de {_pct(final_start)} para {_pct(final_end)}.",
@@ -496,8 +612,8 @@ def render_simulation_review_infographic_html(bundles: list[Any]) -> str:
 <style>
 * {{ box-sizing: border-box; }}
 html, body {{ margin: 0; background: #020617; }}
-body {{ width: 1400px; min-height: 2500px; font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #f8fafc; }}
-.poster {{ width: 1400px; min-height: 2500px; padding: 52px; background:
+body {{ width: 1400px; min-height: 2800px; font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #f8fafc; }}
+.poster {{ width: 1400px; min-height: 2800px; padding: 52px; background:
   radial-gradient(circle at 85% 6%, rgba(45,212,191,.18), transparent 26%),
   radial-gradient(circle at 8% 88%, rgba(250,204,21,.10), transparent 24%),
   linear-gradient(135deg, #04111f 0%, #071827 48%, #020617 100%); overflow: hidden; }}
@@ -544,6 +660,13 @@ table {{ width: 100%; border-collapse: collapse; }}
 td, th {{ padding: 12px 8px; border-top: 1px solid rgba(148,163,184,.16); text-align: left; font-size: 18px; }}
 th {{ color: #99f6e4; font-size: 15px; text-transform: uppercase; letter-spacing: .04em; }}
 td:nth-child(3), td:nth-child(4) {{ font-weight: 900; color: #f8fafc; }}
+.accuracy-panel {{ min-height: 270px; }}
+.accuracy-grid {{ display: grid; grid-template-columns: 1fr 330px; gap: 24px; align-items: stretch; }}
+.accuracy-summary {{ border: 1px solid rgba(250,204,21,.44); border-radius: 14px; padding: 22px; background: rgba(250,204,21,.08); }}
+.accuracy-summary strong {{ display: block; color: #facc15; font-size: 38px; line-height: 1; margin-bottom: 10px; }}
+.accuracy-summary span {{ color: #dbeafe; font-size: 18px; line-height: 1.25; font-weight: 700; }}
+.hit {{ color: #99f6e4; }}
+.miss {{ color: #fecaca; }}
 .stats {{ display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; }}
 .stat-card {{ min-height: 154px; padding: 19px 18px; border-color: rgba(250,204,21,.42); }}
 .stat-value {{ color: #facc15; font-size: 42px; line-height: .98; font-weight: 950; }}
@@ -615,7 +738,21 @@ td:nth-child(3), td:nth-child(4) {{ font-weight: 900; color: #f8fafc; }}
     {_html_stat("Maior swing", _pp(title_delta), f"Hexa {period}")}
   </section>
 
-  <div class="section-title">4. Leituras que importam</div>
+  <div class="section-title">4. Índice de acerto por jogo</div>
+  <section class="panel accuracy-panel">
+    <div class="accuracy-grid">
+      <table>
+        <thead><tr><th>Jogo encerrado</th><th>Resultado</th><th>Prob. dada ao real</th><th>Direção</th></tr></thead>
+        <tbody>{''.join(accuracy_html_rows)}</tbody>
+      </table>
+      <div class="accuracy-summary">
+        <strong>{_h(accuracy_summary)}</strong>
+        <span>Índice probabilístico: quanto maior a probabilidade atribuída ao que realmente aconteceu, melhor. Não é ajuste pós-jogo.</span>
+      </div>
+    </div>
+  </section>
+
+  <div class="section-title">5. Leituras que importam</div>
   <section class="insights">
     <div class="quote">
       <h2>O que a sala trouxe</h2>

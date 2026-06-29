@@ -27,12 +27,24 @@ def _bundle(stamp: str, *, title: float, final: float, messages: int, valid: int
         },
         model_influence_pct={"Opus 4.8": 27.0, "GPT 5.5": 23.0},
         model_token_costs={"total": {"total_tokens": 100_000, "cost_usd": 2.5, "calls": 10, "fallback_calls": 1}},
+        group_matches=[
+            SimpleNamespace(opponent="Marrocos", brazil_pct=59.0, draw_pct=24.0, opponent_pct=17.0),
+            SimpleNamespace(opponent="Haiti", brazil_pct=92.0, draw_pct=8.0, opponent_pct=0.0),
+            SimpleNamespace(opponent="Escócia", brazil_pct=73.0, draw_pct=19.0, opponent_pct=8.0),
+        ],
         knockout_matches=[
             SimpleNamespace(phase="16 avos", opponent="Japão", scenario_pct=100.0, brazil_pct=69.8, most_likely=True)
         ],
         metadata={
             "market_title_challenge": {"status": "within_threshold"},
             "parallel_opponent_debriefing": {"exit_status": "consensus", "usable_for_main_room": True},
+            "group_state": {
+                "completed_results": [
+                    {"score": "Brasil 1-1 Marrocos"},
+                    {"score": "Brasil 3-0 Haiti"},
+                    {"score": "Escócia 0-3 Brasil"},
+                ]
+            },
         },
         warnings=[],
         meeting_transcript=[],
@@ -78,6 +90,10 @@ def test_render_simulation_review_infographic_html_prioritizes_model_ranking_and
     assert "GPT 5.5" in html
     assert "Mensagens válidas" in html
     assert "Tokens usados" in html
+    assert "Índice de acerto por jogo" in html
+    assert "Brasil 1-1 Marrocos" in html
+    assert "24%" in html
+    assert "2/3 direção" in html
     assert "Japão 100%" in html
     assert "Sem dados empilhados" not in html
 
