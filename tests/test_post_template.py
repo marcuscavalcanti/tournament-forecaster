@@ -6,6 +6,7 @@ import pytest
 from worldcup_brazil.post_template import (
     MAX_POST_CHARS,
     apply_editor_append,
+    infer_series_post_index,
     render_template_post,
     _trim_to_limit,
     validate_template_post,
@@ -80,7 +81,7 @@ def test_template_post_fills_all_placeholders_within_limit() -> None:
     validate_template_post(text, _bundle())
     assert len(text) <= MAX_POST_CHARS
     assert text.startswith("⚽ 13/jun · Brasil x Marrocos · 59/24/17 · Hexa: 8,6%")
-    assert "\n\nPRIMEIRO PALPITE DA SÉRIE: Brasil x Marrocos\n" in text
+    assert "\n\n1º PALPITE DA SÉRIE: Brasil x Marrocos\n" in text
     assert "A ESTREIA (sábado, Nova Jersey):" in text
     assert "BRASIL x MARROCOS — 59% vitória | 24% empate | 17% derrota" in text
     assert "➡️ 16 AVOS (29/jun) - Estádio X" in text
@@ -190,7 +191,7 @@ def test_template_post_uses_next_unplayed_game_and_ordinal() -> None:
     text = render_template_post(_bundle(), post_index=2, run_date=date(2026, 6, 18))
 
     assert text.startswith("⚽ 19/jun · Brasil x Haiti · 92/8/0 · Hexa: 8,6%")
-    assert "\n\nSEGUNDO PALPITE DA SÉRIE: Brasil x Haiti\n" in text
+    assert "\n\n2º PALPITE DA SÉRIE: Brasil x Haiti\n" in text
     assert "O PRÓXIMO JOGO (sexta-feira, Filadélfia):" in text
     assert "BRASIL x HAITI — 92% vitória | 8% empate" in text
     assert "Próximo post: véspera/dia de Brasil x Escócia (24/jun), com o mapa recalculado." in text
@@ -345,10 +346,12 @@ def test_template_post_skips_completed_knockout_and_uses_next_future_knockout_ma
         if match.phase == "Final":
             match.match_date = "2026-07-19"
 
-    text = render_template_post(bundle, post_index=13, run_date=date(2026, 7, 4))
+    post_index = infer_series_post_index(bundle, run_date=date(2026, 7, 4))
+    text = render_template_post(bundle, post_index=post_index, run_date=date(2026, 7, 4))
 
     assert text.startswith("⚽ 5/jul · Brasil x Noruega · 73/0/27 · Hexa:")
-    assert "13º PALPITE DA SÉRIE: Brasil x Noruega" in text
+    assert post_index == 5
+    assert "5º PALPITE DA SÉRIE: Brasil x Noruega" in text
     assert "BRASIL x NORUEGA — 73% Brasil passa | 27% Noruega passa" in text
     assert "Brasil x Japão" not in text.split("O CAMINHO", 1)[0]
     assert "Avançou para as oitavas de final com a vitória nos 16 avos sobre o Japão por 2x1." in text
@@ -897,16 +900,70 @@ def test_template_post_includes_change_bullets_when_previous_bundle_is_available
     assert "Esse mapa muda a cada rodada" not in text
 
 
-def test_template_post_change_header_uses_latest_brazil_match_already_played() -> None:
+def test_template_post_change_header_uses_previous_simulation_featured_match() -> None:
     previous = _bundle()
+    previous.generated_at_iso = "2026-06-28T19:12:55+00:00"
+    previous.stage_probabilities = {"quartas": 50.8, "semifinal": 29.8, "final": 16.2, "titulo": 7.8}
+    previous.metadata["monte_carlo"]["stage_probabilities"] = {
+        "16_avos": 100.0,
+        "oitavas": 69.8,
+        "quartas": 54.0,
+        "semifinal": 30.4,
+        "final": 16.4,
+        "titulo": 7.8,
+    }
+    for match in previous.knockout_matches:
+        if match.phase == "16 avos" and match.most_likely:
+            match.opponent = "Japão"
+            match.scenario_pct = 100.0
+            match.brazil_pct = 69.8
+            match.opponent_pct = 30.2
+            match.match_date = "2026-06-29"
+        if match.phase == "Quartas" and match.most_likely:
+            match.opponent = "Inglaterra"
+            match.scenario_pct = 65.9
+            match.brazil_pct = 47.9
+            match.opponent_pct = 52.1
+
     current = _bundle()
-    current.generated_at_iso = "2026-06-20T12:00:00+00:00"
-    current.stage_probabilities = {"quartas": 42.0, "semifinal": 24.0, "final": 12.0, "titulo": 6.0}
+    current.generated_at_iso = "2026-07-04T17:33:28+00:00"
+    current.stage_probabilities = {"quartas": 72.1, "semifinal": 42.3, "final": 23.5, "titulo": 11.7}
+    current.metadata["completed_knockout_matches"] = {
+        "matches": [{"phase": "16 avos", "date": "2026-06-29", "score": "Brasil 2-1 Japão", "winner": "Brasil"}]
+    }
+    current.metadata["monte_carlo"]["stage_probabilities"] = {
+        "16_avos": 100.0,
+        "oitavas": 100.0,
+        "quartas": 74.1,
+        "semifinal": 41.7,
+        "final": 23.2,
+        "titulo": 11.7,
+    }
+    for match in current.knockout_matches:
+        if match.phase == "16 avos" and match.most_likely:
+            match.opponent = "Japão"
+            match.scenario_pct = 100.0
+            match.brazil_pct = 100.0
+            match.opponent_pct = 0.0
+            match.match_date = "2026-06-29"
+        if match.phase == "Oitavas" and match.most_likely:
+            match.opponent = "Noruega"
+            match.scenario_pct = 100.0
+            match.brazil_pct = 74.1
+            match.opponent_pct = 25.9
+            match.match_date = "2026-07-05"
+        if match.phase == "Quartas" and match.most_likely:
+            match.opponent = "Inglaterra"
+            match.scenario_pct = 71.9
+            match.brazil_pct = 50.3
+            match.opponent_pct = 49.7
 
-    text = render_template_post(current, post_index=3, run_date=date(2026, 6, 20), previous_bundle=previous)
+    text = render_template_post(current, post_index=5, run_date=date(2026, 7, 4), previous_bundle=previous)
 
-    assert "O QUE MUDOU DESDE BRASIL x HAITI (19/06):" in text
-    assert "O QUE MUDOU DESDE A ESTREIA" not in text
+    assert "O QUE MUDOU DESDE BRASIL x JAPÃO (29/06):" in text
+    assert "O QUE MUDOU DESDE BRASIL x ESCÓCIA (24/06)" not in text
+    assert "• Hexa 7,8%→11,7%; final 16%→24%." in text
+    assert "• Quartas: Inglaterra 66%→72%; Brasil 48%→50%." in text
 
 
 def test_template_post_surfaces_team_context_warnings_in_run_note() -> None:

@@ -38,6 +38,7 @@ from worldcup_brazil.post_template import (
     _parse_template_match_date,
     apply_editor_append,
     bundle_from_json,
+    infer_series_post_index,
     render_template_post,
     validate_template_post,
 )
@@ -625,19 +626,9 @@ def _run(args: argparse.Namespace) -> int:
         infographic_png_written = render_html_to_png_with_chrome(infographic_html_path, infographic_png_path)
         template_post_path = args.output_dir / f"linkedin_post_brazil_{stamp}.md"
         try:
-            post_index = (
-                len(
-                    [
-                        p
-                        for p in args.output_dir.glob("linkedin_post_brazil_*.md")
-                        if p.name != template_post_path.name
-                    ]
-                )
-                + 1
-            )
             template_post = render_template_post(
                 artifacts.bundle,
-                post_index=post_index,
+                post_index=infer_series_post_index(artifacts.bundle),
                 previous_bundle=_previous_template_bundle(
                     args.output_dir,
                     json_path,

@@ -10,10 +10,6 @@ from typing import Any
 
 MAX_POST_CHARS = 3000
 
-ORDINAIS = [
-    "PRIMEIRO", "SEGUNDO", "TERCEIRO", "QUARTO", "QUINTO", "SEXTO", "SÉTIMO", "OITAVO",
-]
-
 WEEKDAYS_PT = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"]
 MONTHS_PT = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"]
 
@@ -495,18 +491,23 @@ def _match_reference_label(match: Any, index: int, played_at: date) -> str:
 
 def _change_reference_label(bundle: Any) -> str:
     reference_date = _bundle_date(bundle)
-    group_matches = list(getattr(bundle, "group_matches", []) or [])
-    if reference_date is not None and group_matches:
-        year = _bundle_year(bundle)
-        played = [
-            (index, match, parsed)
-            for index, match in enumerate(group_matches)
-            if (parsed := _parse_group_date(getattr(match, "match_date", ""), year=year)) is not None
-            and parsed <= reference_date
-        ]
-        if played:
-            index, match, parsed = played[-1]
-            return _match_reference_label(match, index, parsed)
+    if reference_date is not None:
+        try:
+            match, match_date, is_knockout = _select_featured_match(bundle, run_date=reference_date)
+        except ValueError:
+            match = match_date = None
+            is_knockout = False
+        if match is not None and match_date is not None:
+            if is_knockout:
+                when = f"{match_date.day:02d}/{match_date.month:02d}"
+                opponent = str(getattr(match, "opponent", "") or "adversário").strip()
+                return f"BRASIL x {opponent.upper()} ({when})"
+            group_matches = list(getattr(bundle, "group_matches", []) or [])
+            try:
+                index = group_matches.index(match)
+            except ValueError:
+                index = 1
+            return _match_reference_label(match, index, match_date)
     return _analysis_short_date(bundle)
 
 
@@ -1328,6 +1329,56 @@ def _next_future_knockout_match(bundle: Any, *, run_date: date) -> Any | None:
     return candidates[0][2]
 
 
+def _select_featured_match(bundle: Any, *, run_date: date) -> tuple[Any, date | None, bool]:
+    group_matches = list(getattr(bundle, "group_matches", []) or [])
+    if not group_matches:
+        raise ValueError("template post requer group_matches no bundle")
+    pairs = _knockout_pairs(bundle)
+    dated = [(m, _parse_template_match_date(getattr(m, "match_date", ""), year=run_date.year)) for m in group_matches]
+    upcoming = [(m, d) for m, d in dated if d is not None and d >= run_date]
+    if upcoming:
+        featured, featured_date = upcoming[0]
+        return featured, featured_date, False
+    knockout_featured = _next_future_knockout_match(bundle, run_date=run_date)
+    if knockout_featured is None:
+        knockout_featured = pairs.get("16 avos", {}).get("ml")
+    if knockout_featured is not None:
+        featured_date = _parse_template_match_date(getattr(knockout_featured, "match_date", ""), year=run_date.year)
+        return knockout_featured, featured_date, True
+    featured, featured_date = dated[0]
+    return featured, featured_date, False
+
+
+def infer_series_post_index(bundle: Any, *, run_date: date | None = None) -> int:
+    """Numero da serie por jogo oficial do Brasil, não por quantidade de arquivos gerados."""
+    if run_date is None:
+        raw = str(getattr(bundle, "generated_at_iso", "") or "")
+        run_date = datetime.fromisoformat(raw).date()
+
+    featured, featured_date, _is_knockout = _select_featured_match(bundle, run_date=run_date)
+    cutoff = featured_date or run_date
+    year = cutoff.year
+
+    previous_matches = 0
+    for match in getattr(bundle, "group_matches", []) or []:
+        played_at = _parse_template_match_date(getattr(match, "match_date", ""), year=year)
+        if played_at is not None and played_at < cutoff:
+            previous_matches += 1
+
+    for item in _completed_knockout_items(bundle):
+        parsed = _parse_brazil_knockout_score(item.get("score"))
+        if parsed is None:
+            continue
+        winner = _normalize_beat(item.get("winner", ""))
+        if winner and winner != "brasil":
+            continue
+        played_at = _parse_completed_match_date(item.get("date"), year=year)
+        if played_at is not None and played_at < cutoff:
+            previous_matches += 1
+
+    return max(1, previous_matches + 1)
+
+
 def _active_path_phases(*, featured_is_knockout: bool, featured: Any) -> list[str]:
     if not featured_is_knockout:
         return PHASE_ORDER
@@ -1447,7 +1498,7 @@ def _change_section(bundle: Any, previous_bundle: Any | None) -> str:
             "O QUE MUDOU DESDE A ÚLTIMA ANÁLISE:\n"
             "• O mapa foi recalculado, mas sem mudança material suficiente para virar headline.\n\n"
         )
-    return f"O QUE MUDOU DESDE {_change_reference_label(bundle)}:\n" + "\n".join(bullets[:3]) + "\n\n"
+    return f"O QUE MUDOU DESDE {_change_reference_label(previous_bundle)}:\n" + "\n".join(bullets[:3]) + "\n\n"
 
 
 def render_template_post(
@@ -1466,23 +1517,10 @@ def render_template_post(
 
     pairs = _knockout_pairs(bundle)
     dated = [(m, _parse_template_match_date(getattr(m, "match_date", ""), year=run_date.year)) for m in group_matches]
-    upcoming = [(m, d) for m, d in dated if d is not None and d >= run_date]
-    featured_is_knockout = False
-    if upcoming:
-        featured, featured_date = upcoming[0]
-    else:
-        knockout_featured = _next_future_knockout_match(bundle, run_date=run_date)
-        if knockout_featured is None:
-            knockout_featured = pairs.get("16 avos", {}).get("ml")
-        if knockout_featured is not None:
-            featured = knockout_featured
-            featured_date = _parse_template_match_date(getattr(featured, "match_date", ""), year=run_date.year)
-            featured_is_knockout = True
-        else:
-            featured, featured_date = dated[0]
+    featured, featured_date, featured_is_knockout = _select_featured_match(bundle, run_date=run_date)
     featured_is_first = (not featured_is_knockout) and featured is group_matches[0]
 
-    ordinal = ORDINAIS[post_index - 1] if 1 <= post_index <= len(ORDINAIS) else f"{post_index}º"
+    ordinal = f"{post_index}º"
     title = f"{ordinal} PALPITE DA SÉRIE: Brasil x {getattr(featured, 'opponent', '')}{_title_suffix(bundle, previous_bundle)}"
 
     weekday = WEEKDAYS_PT[featured_date.weekday()] if featured_date else "em breve"
