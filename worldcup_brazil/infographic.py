@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from worldcup_brazil.post_template import bundle_from_json
+from worldcup_brazil.post_template import bundle_from_json, infer_series_post_index
 
 DEFAULT_CHROME_PATHS = (
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -143,7 +143,17 @@ def _locked_crossing_short(bundle: Any) -> str:
     return "Cruzamentos recalculados"
 
 
-def collect_recent_infographic_bundles(output_dir: Path, current_json_path: Path, *, limit: int = 4) -> list[Any]:
+def _infographic_series_key(bundle: Any, path: Path) -> tuple[str, str]:
+    try:
+        return ("round", str(infer_series_post_index(bundle)))
+    except Exception:  # noqa: BLE001 - bundles antigos incompletos ficam no fallback por arquivo
+        label = _match_label(bundle)
+        if label != "Brasil":
+            return ("match", label)
+        return ("file", path.name)
+
+
+def collect_recent_infographic_bundles(output_dir: Path, current_json_path: Path, *, limit: int = 5) -> list[Any]:
     paths = [
         path
         for path in sorted(output_dir.glob("linkedin_brazil_*.json"))
@@ -151,9 +161,16 @@ def collect_recent_infographic_bundles(output_dir: Path, current_json_path: Path
     ]
     if current_json_path not in paths and current_json_path.exists():
         paths.append(current_json_path)
-    selected = paths[-max(1, limit):]
-    bundles = [bundle_from_json(path) for path in selected]
-    return sorted(bundles, key=_parse_bundle_date)
+    grouped: dict[tuple[str, str], tuple[datetime, str, Any]] = {}
+    for path in paths:
+        bundle = bundle_from_json(path)
+        key = _infographic_series_key(bundle, path)
+        sort_date = _parse_bundle_date(bundle)
+        current = grouped.get(key)
+        if current is None or (sort_date, path.name) >= (current[0], current[1]):
+            grouped[key] = (sort_date, path.name, bundle)
+    selected = sorted(grouped.values(), key=lambda item: (item[0], item[1]))[-max(1, limit):]
+    return [bundle for _sort_date, _name, bundle in selected]
 
 
 def render_svg_to_png_with_chrome(
@@ -274,7 +291,7 @@ def _next_future_knockout(bundle: Any, generated_key: tuple[int, int]) -> Any | 
     return sorted(candidates, key=lambda item: (item[0], item[1]))[0][2]
 
 
-def _match_label(bundle: Any) -> str:
+def _featured_forecast_match(bundle: Any) -> Any | None:
     generated = _parse_bundle_date(bundle)
     generated_key = (generated.month, generated.day) if generated != datetime.min else (0, 0)
     group_matches = list(getattr(bundle, "group_matches", []) or [])
@@ -285,10 +302,17 @@ def _match_label(bundle: Any) -> str:
             future_group_matches.append((date_key, match))
     if future_group_matches:
         _, match = sorted(future_group_matches, key=lambda item: item[0])[0]
-        return f"Brasil x {getattr(match, 'opponent', 'adversário')}"
+        return match
     knockout = _next_future_knockout(bundle, generated_key)
     if knockout is not None:
-        return f"Brasil x {getattr(knockout, 'opponent', 'adversário')}"
+        return knockout
+    return None
+
+
+def _match_label(bundle: Any) -> str:
+    match = _featured_forecast_match(bundle)
+    if match is not None:
+        return f"Brasil x {getattr(match, 'opponent', 'adversário')}"
     return "Brasil"
 
 
@@ -533,25 +557,43 @@ def _completed_brazil_results(bundle: Any) -> list[dict[str, Any]]:
     return results
 
 
-def _accuracy_rows(bundle: Any) -> tuple[list[dict[str, Any]], str]:
-    completed_results = _completed_brazil_results(bundle)
-    forecasts = _forecast_match_by_opponent(bundle)
+def _actual_result_by_opponent(bundle: Any) -> dict[str, dict[str, Any]]:
+    results: dict[str, dict[str, Any]] = {}
+    for result in _completed_brazil_results(bundle):
+        parsed = _parse_brazil_score(result.get("score"))
+        if parsed is None:
+            continue
+        opponent, _brazil_goals, _opponent_goals = parsed
+        results[_normalize_team(opponent)] = result
+    return results
+
+
+def _summarize_accuracy(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], str]:
+    if not rows:
+        return [], "sem jogos encerrados"
+    hit_count = sum(1 for row in rows if row["hit"])
+    avg_prob = sum(float(row["actual_prob"]) for row in rows) / len(rows)
+    return rows, f"{hit_count}/{len(rows)} direção · índice médio {_pct(avg_prob)}"
+
+
+def _accuracy_rows_for_forecasts(
+    completed_by_opponent: dict[str, dict[str, Any]],
+    forecasts: list[Any],
+) -> tuple[list[dict[str, Any]], str]:
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for result in completed_results:
-        if not isinstance(result, dict):
+    for forecast in forecasts:
+        opponent_key = _normalize_team(getattr(forecast, "opponent", ""))
+        if not opponent_key or opponent_key in seen:
+            continue
+        result = completed_by_opponent.get(opponent_key)
+        if result is None:
             continue
         parsed = _parse_brazil_score(result.get("score"))
         if parsed is None:
             continue
         opponent, brazil_goals, opponent_goals = parsed
-        opponent_key = _normalize_team(opponent)
-        if opponent_key in seen:
-            continue
         seen.add(opponent_key)
-        forecast = forecasts.get(opponent_key)
-        if forecast is None:
-            continue
         actual_key = _actual_outcome_key(brazil_goals, opponent_goals)
         actual_prob = _probability_for_key(forecast, actual_key)
         predicted_key = _prediction_key(forecast)
@@ -564,11 +606,20 @@ def _accuracy_rows(bundle: Any) -> tuple[list[dict[str, Any]], str]:
                 "hit": predicted_key == actual_key,
             }
         )
-    if not rows:
+    return _summarize_accuracy(rows)
+
+
+def _accuracy_rows(bundle_or_bundles: Any) -> tuple[list[dict[str, Any]], str]:
+    bundles = list(bundle_or_bundles) if isinstance(bundle_or_bundles, list) else [bundle_or_bundles]
+    if not bundles:
         return [], "sem jogos encerrados"
-    hit_count = sum(1 for row in rows if row["hit"])
-    avg_prob = sum(float(row["actual_prob"]) for row in rows) / len(rows)
-    return rows, f"{hit_count}/{len(rows)} direção · índice médio {_pct(avg_prob)}"
+    latest = bundles[-1]
+    completed_by_opponent = _actual_result_by_opponent(latest)
+    featured_forecasts = [match for bundle in bundles if (match := _featured_forecast_match(bundle)) is not None]
+    rows, summary = _accuracy_rows_for_forecasts(completed_by_opponent, featured_forecasts)
+    if rows:
+        return rows, summary
+    return _accuracy_rows_for_forecasts(completed_by_opponent, list(_forecast_match_by_opponent(latest).values()))
 
 
 def _sparkline_points(values: list[float], *, width: int = 900, height: int = 170) -> str:
@@ -595,7 +646,7 @@ def render_simulation_review_infographic_html(bundles: list[Any]) -> str:
     totals = _metric_totals(bundles)
     run_rows = _run_rows(bundles)
     model_rows = _model_rows(bundles)
-    accuracy_rows, accuracy_summary = _accuracy_rows(latest)
+    accuracy_rows, accuracy_summary = _accuracy_rows(bundles)
     period = f"{_date_label(bundles[0])} → {_date_label(latest)}"
     valid_rate = (totals["valid"] / totals["messages"] * 100.0) if totals["messages"] else 0.0
     title_start = _stage(bundles[0], "titulo")
@@ -693,15 +744,15 @@ h1 {{ margin: 8px 0 10px; font-size: 68px; line-height: .95; letter-spacing: 0; 
 .step span {{ display: block; margin-top: 8px; color: #cbd5e1; font-size: 18px; line-height: 1.15; }}
 .section-title {{ margin: 34px 0 16px; display: flex; align-items: center; gap: 18px; color: #facc15; font-size: 29px; font-weight: 900; text-transform: uppercase; }}
 .section-title:before, .section-title:after {{ content: ""; height: 1px; flex: 1; background: linear-gradient(90deg, transparent, rgba(250,204,21,.55), transparent); }}
-.run-grid {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }}
+.run-grid {{ display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; }}
 .run-card, .panel, .stat-card {{ border: 1px solid rgba(45,212,191,.45); border-radius: 16px; background: rgba(6,24,39,.82); box-shadow: 0 16px 55px rgba(0,0,0,.28); }}
-.run-card {{ min-height: 228px; padding: 20px; position: relative; }}
-.run-date {{ color: #facc15; font-weight: 900; font-size: 25px; }}
-.run-match {{ margin-top: 6px; color: #e2e8f0; font-size: 21px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
-.run-title {{ margin-top: 14px; color: #facc15; font-size: 52px; line-height: .95; font-weight: 950; }}
-.run-meta {{ color: #bae6fd; font-size: 18px; font-weight: 700; margin-top: 4px; }}
-.leader-pill {{ margin-top: 16px; padding: 9px 12px; border-radius: 999px; background: rgba(45,212,191,.16); color: #99f6e4; font-size: 17px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
-.run-foot {{ position: absolute; left: 20px; right: 20px; bottom: 16px; color: #cbd5e1; font-size: 16px; }}
+.run-card {{ min-height: 218px; padding: 18px 16px; position: relative; }}
+.run-date {{ color: #facc15; font-weight: 900; font-size: 24px; }}
+.run-match {{ margin-top: 6px; color: #e2e8f0; font-size: 18px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.run-title {{ margin-top: 14px; color: #facc15; font-size: 46px; line-height: .95; font-weight: 950; }}
+.run-meta {{ color: #bae6fd; font-size: 16px; font-weight: 700; margin-top: 4px; }}
+.leader-pill {{ margin-top: 16px; padding: 8px 10px; border-radius: 999px; background: rgba(45,212,191,.16); color: #99f6e4; font-size: 14px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.run-foot {{ position: absolute; left: 16px; right: 16px; bottom: 16px; color: #cbd5e1; font-size: 14px; }}
 .trend-panel {{ margin-top: 18px; padding: 18px 28px; min-height: 0; }}
 .trend-svg {{ width: 100%; height: 210px; display: block; }}
 .trend-svg polyline {{ fill: none; stroke: #2dd4bf; stroke-width: 7; stroke-linecap: round; stroke-linejoin: round; }}

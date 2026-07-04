@@ -614,7 +614,7 @@ def _run(args: argparse.Namespace) -> int:
         post_path.write_text(artifacts.post, encoding="utf-8")
         audit_path.write_text(render_audit_report(artifacts.bundle), encoding="utf-8")
         graph_path.write_text(render_decision_flow_svg(artifacts.bundle), encoding="utf-8")
-        infographic_bundles = collect_recent_infographic_bundles(args.output_dir, json_path, limit=4)
+        infographic_bundles = collect_recent_infographic_bundles(args.output_dir, json_path, limit=5)
         infographic_svg_path.write_text(
             render_simulation_review_infographic_svg(infographic_bundles),
             encoding="utf-8",

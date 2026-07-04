@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from worldcup_brazil.infographic import (
+    _match_label,
     collect_recent_infographic_bundles,
     render_html_to_png_with_chrome,
     render_simulation_review_infographic_html,
@@ -104,9 +105,20 @@ def test_render_simulation_review_infographic_html_prioritizes_model_ranking_and
     assert "Japão 100%" in html
     assert "Sem dados empilhados" not in html
     assert html.count('<div class="run-date">') == 4
+    assert ".run-grid { display: grid; grid-template-columns: repeat(5, 1fr);" in html
 
 
 def test_infographic_uses_next_future_knockout_after_round_of_32_is_completed() -> None:
+    previous = _bundle("2026-06-28", title=7.8, final=16.2, messages=31, valid=27, invalid=4)
+    previous.group_matches = [
+        SimpleNamespace(opponent="Marrocos", match_date="13/jun"),
+        SimpleNamespace(opponent="Haiti", match_date="19/jun"),
+        SimpleNamespace(opponent="Escócia", match_date="24/jun"),
+    ]
+    previous.knockout_matches = [
+        SimpleNamespace(phase="16 avos", opponent="Japão", scenario_pct=100.0, brazil_pct=69.8, opponent_pct=30.2, most_likely=True, match_date="2026-06-29"),
+        SimpleNamespace(phase="Oitavas", opponent="Noruega", scenario_pct=57.7, brazil_pct=75.2, most_likely=True, match_date="2026-07-05"),
+    ]
     bundle = _bundle("2026-07-04", title=11.7, final=23.5, messages=28, valid=24, invalid=4)
     bundle.group_matches = [
         SimpleNamespace(opponent="Marrocos", match_date="13/jun"),
@@ -126,19 +138,96 @@ def test_infographic_uses_next_future_knockout_after_round_of_32_is_completed() 
         }
     }
 
-    html = render_simulation_review_infographic_html([bundle])
-    svg = render_simulation_review_infographic_svg([bundle])
+    html = render_simulation_review_infographic_html([previous, bundle])
+    svg = render_simulation_review_infographic_svg([previous, bundle])
 
     assert "Brasil x Noruega" in html
     assert "Noruega 100%; Brasil 74,1%" in html
-    assert "Brasil x Japão" not in html
+    assert html.count("Brasil x Japão") == 2
     assert "Japão 100%" not in html
     assert "Brasil 2-1 Japão" in html
-    assert "3/4 direção" in html
+    assert "Brasil 2-1 Japão</td><td>Vitória</td><td>69,8%</td>" in html
     assert "Noruega 100%; Brasil 74,1%" in svg
 
 
-def test_collect_recent_infographic_bundles_keeps_current_and_previous_history(tmp_path: Path) -> None:
+def test_collect_recent_infographic_bundles_keeps_one_latest_bundle_per_brazil_round(tmp_path: Path) -> None:
+    output_dir = tmp_path / "outputs"
+    output_dir.mkdir()
+
+    def write_bundle(day: str, *, title: float = 1.0) -> Path:
+        path = output_dir / f"linkedin_brazil_{day}.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "bundle": {
+                        "generated_at_iso": f"{day}T12:00:00+00:00",
+                        "stage_probabilities": {"titulo": title},
+                        "group_matches": [
+                            {"opponent": "Marrocos", "match_date": "13/jun"},
+                            {"opponent": "Haiti", "match_date": "19/jun"},
+                            {"opponent": "Escócia", "match_date": "24/jun"},
+                        ],
+                        "knockout_matches": [
+                            {
+                                "phase": "16 avos",
+                                "opponent": "Japão",
+                                "scenario_pct": 100.0,
+                                "brazil_pct": 69.8,
+                                "most_likely": True,
+                                "match_date": "2026-06-29",
+                            },
+                            {
+                                "phase": "Oitavas",
+                                "opponent": "Noruega",
+                                "scenario_pct": 100.0,
+                                "brazil_pct": 74.1,
+                                "most_likely": True,
+                                "match_date": "2026-07-05",
+                            },
+                        ],
+                        "metadata": {
+                            "completed_knockout_matches": {
+                                "matches": [
+                                    {
+                                        "phase": "16 avos",
+                                        "date": "2026-06-29",
+                                        "score": "Brasil 2-1 Japão",
+                                        "winner": "Brasil",
+                                    }
+                                ]
+                            }
+                        },
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    for day in ["2026-06-11", "2026-06-13", "2026-06-18", "2026-06-24", "2026-06-27"]:
+        write_bundle(day)
+    write_bundle("2026-06-28", title=7.8)
+    current_path = write_bundle("2026-07-04", title=11.7)
+
+    bundles = collect_recent_infographic_bundles(output_dir, current_path, limit=5)
+
+    assert [bundle.generated_at_iso[:10] for bundle in bundles] == [
+        "2026-06-13",
+        "2026-06-18",
+        "2026-06-24",
+        "2026-06-28",
+        "2026-07-04",
+    ]
+    assert [_match_label(bundle) for bundle in bundles] == [
+        "Brasil x Marrocos",
+        "Brasil x Haiti",
+        "Brasil x Escócia",
+        "Brasil x Japão",
+        "Brasil x Noruega",
+    ]
+
+
+def test_collect_recent_infographic_bundles_falls_back_to_recent_files_without_round_metadata(tmp_path: Path) -> None:
     output_dir = tmp_path / "outputs"
     output_dir.mkdir()
     for day in ["2026-06-15", "2026-06-18", "2026-06-24", "2026-06-27"]:
