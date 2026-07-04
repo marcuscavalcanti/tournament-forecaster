@@ -1143,6 +1143,22 @@ def _most_likely_phase_match(bundle: Any, phase: str) -> Any | None:
     return None
 
 
+def _next_future_knockout_match(bundle: Any, *, run_date: date) -> Any | None:
+    candidates: list[tuple[int, date, Any]] = []
+    for order, phase in enumerate(PHASE_ORDER):
+        match = _most_likely_phase_match(bundle, phase)
+        if match is None:
+            continue
+        match_date = _parse_template_match_date(getattr(match, "match_date", ""), year=run_date.year)
+        if match_date is None or match_date < run_date:
+            continue
+        candidates.append((order, match_date, match))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (item[1], item[0]))
+    return candidates[0][2]
+
+
 def _changed_stage_bullet(previous_bundle: Any, bundle: Any) -> str | None:
     prev_title, title = _stage_number(previous_bundle, "titulo"), _stage_number(bundle, "titulo")
     prev_final, final = _stage_number(previous_bundle, "final"), _stage_number(bundle, "final")
@@ -1221,7 +1237,9 @@ def render_template_post(
     if upcoming:
         featured, featured_date = upcoming[0]
     else:
-        knockout_featured = pairs.get("16 avos", {}).get("ml")
+        knockout_featured = _next_future_knockout_match(bundle, run_date=run_date)
+        if knockout_featured is None:
+            knockout_featured = pairs.get("16 avos", {}).get("ml")
         if knockout_featured is not None:
             featured = knockout_featured
             featured_date = _parse_template_match_date(getattr(featured, "match_date", ""), year=run_date.year)

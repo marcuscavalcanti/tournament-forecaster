@@ -229,6 +229,90 @@ def test_completed_group_table_uses_score_tiebreakers_before_rating_uncertainty(
     assert round_of_32[0]["count"] == result["iterations"]
 
 
+def test_completed_knockout_results_override_future_path_simulation() -> None:
+    config = _mc_config(iterations=800)
+    config["monte_carlo"]["team_ratings"].update(
+        {
+            "Alemanha": 1860,
+            "Curaçau": 1360,
+            "Costa do Marfim": 1640,
+            "Equador": 1580,
+            "França": 1900,
+            "Senegal": 1700,
+            "Iraque": 1450,
+            "Noruega": 1680,
+        }
+    )
+    config["completed_group_matches"] = [
+        {"group": "C", "team_a": "Brasil", "team_b": "Marrocos", "score_a": 1, "score_b": 1, "date": "2026-06-13"},
+        {"group": "C", "team_a": "Escócia", "team_b": "Haiti", "score_a": 1, "score_b": 0, "date": "2026-06-13"},
+        {"group": "C", "team_a": "Escócia", "team_b": "Marrocos", "score_a": 0, "score_b": 1, "date": "2026-06-19"},
+        {"group": "C", "team_a": "Brasil", "team_b": "Haiti", "score_a": 3, "score_b": 0, "date": "2026-06-19"},
+        {"group": "C", "team_a": "Marrocos", "team_b": "Haiti", "score_a": 4, "score_b": 2, "date": "2026-06-24"},
+        {"group": "C", "team_a": "Escócia", "team_b": "Brasil", "score_a": 0, "score_b": 3, "date": "2026-06-24"},
+        {"group": "F", "team_a": "Holanda", "team_b": "Japão", "score_a": 2, "score_b": 2, "date": "2026-06-14"},
+        {"group": "F", "team_a": "Suécia", "team_b": "Tunísia", "score_a": 5, "score_b": 1, "date": "2026-06-15"},
+        {"group": "F", "team_a": "Holanda", "team_b": "Suécia", "score_a": 5, "score_b": 1, "date": "2026-06-20"},
+        {"group": "F", "team_a": "Tunísia", "team_b": "Japão", "score_a": 0, "score_b": 4, "date": "2026-06-21"},
+        {"group": "F", "team_a": "Tunísia", "team_b": "Holanda", "score_a": 1, "score_b": 3, "date": "2026-06-25"},
+        {"group": "F", "team_a": "Japão", "team_b": "Suécia", "score_a": 1, "score_b": 1, "date": "2026-06-25"},
+        {"group": "E", "team_a": "Alemanha", "team_b": "Curaçau", "score_a": 4, "score_b": 0, "date": "2026-06-14"},
+        {"group": "E", "team_a": "Costa do Marfim", "team_b": "Equador", "score_a": 2, "score_b": 0, "date": "2026-06-14"},
+        {"group": "E", "team_a": "Alemanha", "team_b": "Equador", "score_a": 2, "score_b": 0, "date": "2026-06-20"},
+        {"group": "E", "team_a": "Curaçau", "team_b": "Costa do Marfim", "score_a": 0, "score_b": 2, "date": "2026-06-20"},
+        {"group": "E", "team_a": "Alemanha", "team_b": "Costa do Marfim", "score_a": 2, "score_b": 1, "date": "2026-06-25"},
+        {"group": "E", "team_a": "Equador", "team_b": "Curaçau", "score_a": 1, "score_b": 0, "date": "2026-06-25"},
+        {"group": "I", "team_a": "França", "team_b": "Iraque", "score_a": 3, "score_b": 0, "date": "2026-06-17"},
+        {"group": "I", "team_a": "Noruega", "team_b": "Senegal", "score_a": 2, "score_b": 0, "date": "2026-06-17"},
+        {"group": "I", "team_a": "França", "team_b": "Senegal", "score_a": 1, "score_b": 0, "date": "2026-06-22"},
+        {"group": "I", "team_a": "Iraque", "team_b": "Noruega", "score_a": 0, "score_b": 2, "date": "2026-06-22"},
+        {"group": "I", "team_a": "França", "team_b": "Noruega", "score_a": 2, "score_b": 1, "date": "2026-06-27"},
+        {"group": "I", "team_a": "Senegal", "team_b": "Iraque", "score_a": 2, "score_b": 0, "date": "2026-06-27"},
+    ]
+    config["completed_knockout_matches"] = [
+        {
+            "phase": "16 avos",
+            "team_a": "Brasil",
+            "score_a": 2,
+            "team_b": "Japão",
+            "score_b": 1,
+            "winner": "Brasil",
+            "date": "2026-06-29",
+            "source": "https://fifa.example/brasil-japao",
+        },
+        {
+            "phase": "16 avos",
+            "team_a": "Costa do Marfim",
+            "score_a": 1,
+            "team_b": "Noruega",
+            "score_b": 2,
+            "winner": "Noruega",
+            "date": "2026-06-30",
+            "source": "https://fifa.example/civ-nor",
+        },
+    ]
+
+    result = run_brazil_monte_carlo(config)
+
+    round_of_32 = result["phases"]["16 avos"]["opponents"]
+    assert round_of_32 == [
+        {
+            "opponent": "Japão",
+            "scenario_pct": 100.0,
+            "unconditional_pct": 100.0,
+            "brazil_pct": 100.0,
+            "count": result["iterations"],
+            "ci": round_of_32[0]["ci"],
+        }
+    ]
+    round_of_16 = result["phases"]["Oitavas"]["opponents"]
+    assert len(round_of_16) == 1
+    assert round_of_16[0]["opponent"] == "Noruega"
+    assert round_of_16[0]["scenario_pct"] == 100.0
+    assert round_of_16[0]["unconditional_pct"] == 100.0
+    assert result["completed_knockout_matches"]["count"] == 2
+
+
 def test_completed_group_result_overrides_extreme_pre_match_probability() -> None:
     baseline = run_brazil_monte_carlo(_mc_config(iterations=3000))
     config = _mc_config(iterations=3000)
@@ -1260,8 +1344,8 @@ def test_monte_carlo_output_is_bit_identical_after_hot_loop_memoization() -> Non
         )
     )
 
-    assert _hash(result_off) == "c14d860cce5a79576dbdd1c54f9d80f7d5b6a57be3e9c7e5a4bd90951e2dce20"
-    assert _hash(result_on) == "9d6af7f799a18d6d05be0de7dea5b23e22a8cc0e7d435de02ec7be9ff57087e8"
+    assert _hash(result_off) == "369afe56a36e41b8371e0b51a0bb25c83bc0625c3b6162d65ab65216af429e7b"
+    assert _hash(result_on) == "8ed6ee3cbc6605951a625535b04498550e1b2ff77482482156b6cb66b6c81773"
 
 
 def _evidence_config(team_context: dict) -> dict:

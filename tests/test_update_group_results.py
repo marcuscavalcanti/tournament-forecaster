@@ -97,13 +97,14 @@ def test_fifa_calendar_query_extends_one_utc_day_after_last_local_fixture() -> N
     config = {
         "group_fixtures": [
             {"group": "J", "team_a": "Jordânia", "team_b": "Argentina", "date": "2026-06-27"},
-        ]
+        ],
+        "results_fetch_through_date": "2026-07-05",
     }
 
     url = _fifa_calendar_api_url("https://api.fifa.com/api/v3/calendar/matches", config)
 
     assert "from=2026-06-27T00%3A00%3A00Z" in url
-    assert "to=2026-06-28T23%3A59%3A59Z" in url
+    assert "to=2026-07-05T23%3A59%3A59Z" in url
 
 
 def test_update_group_results_apply_writes_canonical_fixture_order(tmp_path: Path) -> None:
@@ -372,6 +373,111 @@ def test_update_group_results_extracts_completed_scores_from_fifa_api_json(tmp_p
     assert summary["additions"][0]["score_b"] == 0
     assert summary["additions"][0]["date"] == "2026-06-19"
     assert summary["additions"][0]["source"] == "https://inside.fifa.com/data-centre/matches#400000001"
+
+
+def test_update_group_results_extracts_completed_knockout_scores_from_fifa_api_json(tmp_path: Path) -> None:
+    config = tmp_path / "config.json"
+    payload = tmp_path / "fifa-api.json"
+    _write_config(config)
+    raw_config = json.loads(config.read_text(encoding="utf-8"))
+    raw_config["groups_config"]["groups"]["F"] = [
+        {"name": "Holanda", "code": "NED"},
+        {"name": "Japão", "code": "JPN"},
+        {"name": "Suécia", "code": "SWE"},
+        {"name": "Tunísia", "code": "TUN"},
+    ]
+    raw_config["groups_config"]["groups"]["E"] = [
+        {"name": "Alemanha", "code": "GER"},
+        {"name": "Curaçau", "code": "CUW"},
+        {"name": "Costa do Marfim", "code": "CIV"},
+        {"name": "Equador", "code": "ECU"},
+    ]
+    raw_config["groups_config"]["groups"]["I"] = [
+        {"name": "França", "code": "FRA"},
+        {"name": "Senegal", "code": "SEN"},
+        {"name": "Iraque", "code": "IRQ"},
+        {"name": "Noruega", "code": "NOR"},
+    ]
+    config.write_text(json.dumps(raw_config, ensure_ascii=False, indent=2), encoding="utf-8")
+    payload.write_text(
+        json.dumps(
+            {
+                "Results": [
+                    {
+                        "IdMatch": "400021516",
+                        "StageName": [{"Locale": "en-GB", "Description": "Round of 32"}],
+                        "Date": "2026-06-29T17:00:00Z",
+                        "LocalDate": "2026-06-29T12:00:00Z",
+                        "Home": {"Abbreviation": "BRA", "IdTeam": "43924", "Score": 2},
+                        "Away": {"Abbreviation": "JPN", "IdTeam": "43819", "Score": 1},
+                        "HomeTeamScore": 2,
+                        "AwayTeamScore": 1,
+                        "Winner": "43924",
+                        "ResultType": 1,
+                    },
+                    {
+                        "IdMatch": "400021514",
+                        "StageName": [{"Locale": "en-GB", "Description": "Round of 32"}],
+                        "Date": "2026-06-30T17:00:00Z",
+                        "LocalDate": "2026-06-30T12:00:00Z",
+                        "Home": {"Abbreviation": "CIV", "IdTeam": "43854", "Score": 1},
+                        "Away": {"Abbreviation": "NOR", "IdTeam": "43881", "Score": 2},
+                        "HomeTeamScore": 1,
+                        "AwayTeamScore": 2,
+                        "Winner": "43881",
+                        "ResultType": 1,
+                    },
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/update_group_results.py",
+            "--config",
+            str(config),
+            "--fifa-api-json",
+            str(payload),
+            "--apply",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    summary = json.loads(result.stdout)
+    assert summary["would_add"] == 2
+    completed = json.loads(config.read_text(encoding="utf-8"))["completed_knockout_matches"]
+    assert completed == [
+        {
+            "phase": "16 avos",
+            "team_a": "Brasil",
+            "score_a": 2,
+            "team_b": "Japão",
+            "score_b": 1,
+            "winner": "Brasil",
+            "date": "2026-06-29",
+            "source": "https://inside.fifa.com/data-centre/matches#400021516",
+            "match_id": "400021516",
+        },
+        {
+            "phase": "16 avos",
+            "team_a": "Costa do Marfim",
+            "score_a": 1,
+            "team_b": "Noruega",
+            "score_b": 2,
+            "winner": "Noruega",
+            "date": "2026-06-30",
+            "source": "https://inside.fifa.com/data-centre/matches#400021514",
+            "match_id": "400021514",
+        },
+    ]
 
 
 def test_update_group_results_skips_fifa_live_score_until_result_is_final(tmp_path: Path) -> None:

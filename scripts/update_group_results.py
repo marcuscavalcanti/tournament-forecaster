@@ -119,7 +119,7 @@ def _fifa_result_is_final(item: dict[str, Any]) -> bool:
     if value is None:
         return True
     try:
-        return int(value) == 1
+        return int(value) in {1, 2}
     except (TypeError, ValueError):
         return _normalize(str(value)) in {"final", "finished", "completed", "played"}
 
@@ -132,7 +132,12 @@ def _fixture_date_range(config: dict[str, Any]) -> tuple[str, str]:
     )
     if not dates:
         return "2026-06-11T00:00:00Z", "2026-06-27T23:59:59Z"
-    end_date = date.fromisoformat(dates[-1]) + timedelta(days=1)
+    configured_through = str(config.get("results_fetch_through_date") or "").strip()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", configured_through):
+        through_date = date.fromisoformat(configured_through)
+    else:
+        through_date = date.today() + timedelta(days=1)
+    end_date = max(date.fromisoformat(dates[-1]) + timedelta(days=1), through_date)
     return f"{dates[0]}T00:00:00Z", f"{end_date.isoformat()}T23:59:59Z"
 
 
@@ -240,6 +245,55 @@ def _nested_team_code(item: dict[str, Any], side: str) -> str:
     return ""
 
 
+def _nested_team_id(item: dict[str, Any], side: str) -> str:
+    side_value = item.get(side)
+    if not isinstance(side_value, dict):
+        return ""
+    return str(side_value.get("IdTeam") or side_value.get("idTeam") or "").strip()
+
+
+def _knockout_phase_from_stage(stage: str) -> str | None:
+    normalized = _normalize(stage)
+    mapping = {
+        "round of 32": "16 avos",
+        "round of 16": "Oitavas",
+        "quarter-finals": "Quartas",
+        "quarter finals": "Quartas",
+        "semifinals": "Semifinal",
+        "semi-finals": "Semifinal",
+        "final": "Final",
+    }
+    return mapping.get(normalized)
+
+
+def _winner_from_api_item(
+    item: dict[str, Any],
+    *,
+    team_a: str,
+    team_b: str,
+    score_a: int,
+    score_b: int,
+) -> str | None:
+    winner_id = str(item.get("Winner") or item.get("winner") or item.get("IdWinner") or "").strip()
+    if winner_id:
+        if winner_id == _nested_team_id(item, "Home"):
+            return team_a
+        if winner_id == _nested_team_id(item, "Away"):
+            return team_b
+    if score_a > score_b:
+        return team_a
+    if score_b > score_a:
+        return team_b
+    penalty_a = _score_value(item, "HomeTeamPenaltyScore", "homeTeamPenaltyScore")
+    penalty_b = _score_value(item, "AwayTeamPenaltyScore", "awayTeamPenaltyScore")
+    if penalty_a is not None and penalty_b is not None:
+        if penalty_a > penalty_b:
+            return team_a
+        if penalty_b > penalty_a:
+            return team_b
+    return None
+
+
 def _fifa_records_from_api_payload(payload: Any, config: dict[str, Any]) -> list[dict[str, Any]]:
     if isinstance(payload, dict):
         raw_items = payload.get("Results") or payload.get("results") or payload.get("matches") or []
@@ -254,7 +308,10 @@ def _fifa_records_from_api_payload(payload: Any, config: dict[str, Any]) -> list
         if not isinstance(item, dict):
             continue
         stage = _localized_description(item.get("StageName") or item.get("stageName") or item.get("stage"))
-        if stage and _normalize(stage) not in {"first stage", "fase de grupos", "group stage"}:
+        stage_key = _normalize(stage)
+        is_group_stage = not stage or stage_key in {"first stage", "fase de grupos", "group stage"}
+        knockout_phase = None if is_group_stage else _knockout_phase_from_stage(stage)
+        if not is_group_stage and knockout_phase is None:
             continue
         if not _fifa_result_is_final(item):
             continue
@@ -268,7 +325,7 @@ def _fifa_records_from_api_payload(payload: Any, config: dict[str, Any]) -> list
             continue
         group_a, team_a = code_lookup[code_a]
         group_b, team_b = code_lookup[code_b]
-        if group_a != group_b:
+        if is_group_stage and group_a != group_b:
             continue
         match_id = str(item.get("IdMatch") or item.get("idMatch") or item.get("id") or "").strip()
         if match_id and match_id in seen_match_ids:
@@ -276,19 +333,32 @@ def _fifa_records_from_api_payload(payload: Any, config: dict[str, Any]) -> list
         if match_id:
             seen_match_ids.add(match_id)
         raw_date = str(item.get("Date") or item.get("LocalDate") or item.get("matchDate") or item.get("utcDate") or "").strip()
-        records.append(
-            {
-                "group": group_a,
-                "team_a": team_a,
-                "score_a": score_a,
-                "team_b": team_b,
-                "score_b": score_b,
-                "date": raw_date[:10] if raw_date else None,
-                "source": f"{FIFA_DATA_CENTRE_URL}#{match_id}" if match_id else FIFA_DATA_CENTRE_URL,
-            }
-        )
+        record = {
+            "team_a": team_a,
+            "score_a": score_a,
+            "team_b": team_b,
+            "score_b": score_b,
+            "date": raw_date[:10] if raw_date else None,
+            "source": f"{FIFA_DATA_CENTRE_URL}#{match_id}" if match_id else FIFA_DATA_CENTRE_URL,
+        }
+        if match_id:
+            record["match_id"] = match_id
+        if is_group_stage:
+            record["group"] = group_a
+        else:
+            winner = _winner_from_api_item(item, team_a=team_a, team_b=team_b, score_a=score_a, score_b=score_b)
+            if not winner:
+                continue
+            record["phase"] = knockout_phase
+            record["winner"] = winner
+            penalty_a = _score_value(item, "HomeTeamPenaltyScore", "homeTeamPenaltyScore")
+            penalty_b = _score_value(item, "AwayTeamPenaltyScore", "awayTeamPenaltyScore")
+            if penalty_a is not None and penalty_b is not None:
+                record["penalty_score_a"] = penalty_a
+                record["penalty_score_b"] = penalty_b
+        records.append(record)
     if not records:
-        raise ValueError("nenhum placar final da fase de grupos da Copa 2026 encontrado no JSON da FIFA")
+        raise ValueError("nenhum placar final da Copa 2026 encontrado no JSON da FIFA")
     return records
 
 
@@ -352,6 +422,30 @@ def _existing_lookup(config: dict[str, Any]) -> dict[tuple[str, tuple[str, str]]
     return existing
 
 
+def _known_team_names(config: dict[str, Any]) -> set[str]:
+    groups_config = config.get("groups_config") if isinstance(config.get("groups_config"), dict) else {}
+    groups = groups_config.get("groups") if isinstance(groups_config.get("groups"), dict) else {}
+    names: set[str] = set()
+    for teams in groups.values():
+        for team in teams if isinstance(teams, list) else []:
+            if isinstance(team, dict) and str(team.get("name") or "").strip():
+                names.add(_normalize(str(team.get("name"))))
+    return names
+
+
+def _knockout_existing_lookup(config: dict[str, Any]) -> dict[tuple[str, tuple[str, str]], dict[str, Any]]:
+    existing: dict[tuple[str, tuple[str, str]], dict[str, Any]] = {}
+    for result in config.get("completed_knockout_matches") or []:
+        if not isinstance(result, dict):
+            continue
+        phase = str(result.get("phase") or "").strip()
+        team_a = str(result.get("team_a") or "").strip()
+        team_b = str(result.get("team_b") or "").strip()
+        if phase and team_a and team_b:
+            existing[(_normalize(phase), _pair_key(team_a, team_b))] = result
+    return existing
+
+
 def _canonical_result(record: dict[str, Any], fixtures: list[dict[str, Any]]) -> dict[str, Any]:
     parsed = _result_teams_and_scores(record)
     if parsed is None:
@@ -380,6 +474,49 @@ def _canonical_result(record: dict[str, Any], fixtures: list[dict[str, Any]]) ->
     return canonical
 
 
+def _canonical_knockout_result(record: dict[str, Any], known_teams: set[str]) -> dict[str, Any]:
+    parsed = _result_teams_and_scores(record)
+    if parsed is None:
+        raise ValueError(f"resultado sem times/placar legíveis: {record}")
+    team_a, score_a, team_b, score_b = parsed
+    phase = str(record.get("phase") or "").strip()
+    if not phase:
+        raise ValueError(f"resultado de mata-mata sem fase: {record}")
+    if _normalize(team_a) not in known_teams or _normalize(team_b) not in known_teams:
+        raise ValueError(f"resultado de mata-mata com time fora do config: {record}")
+    winner = str(record.get("winner") or "").strip()
+    if not winner:
+        if score_a > score_b:
+            winner = team_a
+        elif score_b > score_a:
+            winner = team_b
+    if _normalize(winner) not in {_normalize(team_a), _normalize(team_b)}:
+        raise ValueError(f"resultado de mata-mata sem vencedor legível: {record}")
+    canonical = {
+        "phase": phase,
+        "team_a": team_a,
+        "score_a": score_a,
+        "team_b": team_b,
+        "score_b": score_b,
+        "winner": team_a if _normalize(winner) == _normalize(team_a) else team_b,
+        "date": record.get("date"),
+    }
+    source = record.get("source") or record.get("source_url")
+    if source:
+        canonical["source"] = source
+    match_id = str(record.get("match_id") or "").strip()
+    if match_id:
+        canonical["match_id"] = match_id
+    for source_key, target_key in (
+        ("penalty_score_a", "penalty_score_a"),
+        ("penalty_score_b", "penalty_score_b"),
+    ):
+        value = _score_value(record, source_key)
+        if value is not None:
+            canonical[target_key] = value
+    return canonical
+
+
 def _same_score_in_fixture_order(current: dict[str, Any], canonical: dict[str, Any], fixtures: list[dict[str, Any]]) -> bool:
     try:
         current_canonical = _canonical_result(current, fixtures)
@@ -388,11 +525,23 @@ def _same_score_in_fixture_order(current: dict[str, Any], canonical: dict[str, A
     return current_canonical["score_a"] == canonical["score_a"] and current_canonical["score_b"] == canonical["score_b"]
 
 
+def _same_knockout_result(current: dict[str, Any], canonical: dict[str, Any]) -> bool:
+    return (
+        _score_value(current, "score_a") == canonical["score_a"]
+        and _score_value(current, "score_b") == canonical["score_b"]
+        and _normalize(str(current.get("winner") or "")) == _normalize(str(canonical.get("winner") or ""))
+    )
+
+
 def _merge_results(config: dict[str, Any], records: list[dict[str, Any]], *, replace: bool = False) -> dict[str, Any]:
     fixtures = _fixture_lookup(config)
     existing = _existing_lookup(config)
+    knockout_existing = _knockout_existing_lookup(config)
+    known_teams = _known_team_names(config)
     additions: list[dict[str, Any]] = []
     replacements: list[dict[str, Any]] = []
+    knockout_additions: list[dict[str, Any]] = []
+    knockout_replacements: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     conflicts: list[str] = []
     unmatched: list[str] = []
@@ -403,6 +552,31 @@ def _merge_results(config: dict[str, Any], records: list[dict[str, Any]], *, rep
             unmatched.append(f"resultado sem times/placar legíveis: {record}")
             continue
         team_a, _, team_b, _ = parsed
+        if str(record.get("phase") or "").strip():
+            try:
+                canonical_knockout = _canonical_knockout_result(record, known_teams)
+            except ValueError as exc:
+                unmatched.append(str(exc))
+                continue
+            key = (_normalize(str(canonical_knockout["phase"])), _pair_key(team_a, team_b))
+            current = knockout_existing.get(key)
+            if current:
+                if _same_knockout_result(current, canonical_knockout):
+                    skipped.append(canonical_knockout)
+                    continue
+                if not replace:
+                    conflicts.append(
+                        f"{canonical_knockout['phase']}: {canonical_knockout['team_a']} x {canonical_knockout['team_b']} "
+                        f"já existe com placar {current.get('score_a')}-{current.get('score_b')}; "
+                        f"novo {canonical_knockout['score_a']}-{canonical_knockout['score_b']}"
+                    )
+                    continue
+                current.update(canonical_knockout)
+                knockout_replacements.append(canonical_knockout)
+                continue
+            knockout_additions.append(canonical_knockout)
+            knockout_existing[key] = canonical_knockout
+            continue
         group = str(record.get("group") or "").strip().upper()
         candidates: list[tuple[tuple[str, tuple[str, str]], list[dict[str, Any]]]] = []
         if group:
@@ -440,13 +614,21 @@ def _merge_results(config: dict[str, Any], records: list[dict[str, Any]], *, rep
     return {
         "additions": additions,
         "replacements": replacements,
+        "knockout_additions": knockout_additions,
+        "knockout_replacements": knockout_replacements,
         "skipped": skipped,
         "conflicts": conflicts,
         "unmatched": unmatched,
     }
 
 
-def _apply_completed_updates(raw_config: dict[str, Any], additions: list[dict[str, Any]], replacements: list[dict[str, Any]]) -> None:
+def _apply_completed_updates(
+    raw_config: dict[str, Any],
+    additions: list[dict[str, Any]],
+    replacements: list[dict[str, Any]],
+    knockout_additions: list[dict[str, Any]] | None = None,
+    knockout_replacements: list[dict[str, Any]] | None = None,
+) -> None:
     completed = list(raw_config.get("completed_group_matches") or [])
     replacement_lookup = {
         (str(item.get("group") or "").strip().upper(), _pair_key(str(item.get("team_a") or ""), str(item.get("team_b") or ""))): item
@@ -465,6 +647,23 @@ def _apply_completed_updates(raw_config: dict[str, Any], additions: list[dict[st
     updated.extend(replacement_lookup.values())
     updated.extend(additions)
     raw_config["completed_group_matches"] = updated
+
+    knockout_completed = list(raw_config.get("completed_knockout_matches") or [])
+    knockout_replacement_lookup = {
+        (_normalize(str(item.get("phase") or "")), _pair_key(str(item.get("team_a") or ""), str(item.get("team_b") or ""))): item
+        for item in knockout_replacements or []
+    }
+    knockout_updated: list[dict[str, Any]] = []
+    for item in knockout_completed:
+        if not isinstance(item, dict):
+            knockout_updated.append(item)
+            continue
+        key = (_normalize(str(item.get("phase") or "")), _pair_key(str(item.get("team_a") or ""), str(item.get("team_b") or "")))
+        knockout_updated.append(knockout_replacement_lookup.pop(key, item))
+    knockout_updated.extend(knockout_replacement_lookup.values())
+    knockout_updated.extend(knockout_additions or [])
+    if knockout_updated:
+        raw_config["completed_knockout_matches"] = knockout_updated
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -511,18 +710,33 @@ def main(argv: list[str] | None = None) -> int:
         "effective_config": str(config_path),
         "write_config": str(write_config_path) if args.apply else None,
         "results_input": source_input,
-        "would_add": len(merge["additions"]),
-        "would_replace": len(merge["replacements"]),
+        "would_add": len(merge["additions"]) + len(merge["knockout_additions"]),
+        "would_replace": len(merge["replacements"]) + len(merge["knockout_replacements"]),
+        "would_add_group": len(merge["additions"]),
+        "would_replace_group": len(merge["replacements"]),
+        "would_add_knockout": len(merge["knockout_additions"]),
+        "would_replace_knockout": len(merge["knockout_replacements"]),
         "skipped_existing": len(merge["skipped"]),
         "conflicts": merge["conflicts"],
         "unmatched": merge["unmatched"],
-        "additions": merge["additions"],
+        "additions": [*merge["additions"], *merge["knockout_additions"]],
     }
     if merge["conflicts"] or merge["unmatched"]:
         print(json.dumps(summary, ensure_ascii=False, indent=2), file=sys.stderr)
         return 2
-    if args.apply and (merge["additions"] or merge["replacements"]):
-        _apply_completed_updates(raw_config, merge["additions"], merge["replacements"])
+    if args.apply and (
+        merge["additions"]
+        or merge["replacements"]
+        or merge["knockout_additions"]
+        or merge["knockout_replacements"]
+    ):
+        _apply_completed_updates(
+            raw_config,
+            merge["additions"],
+            merge["replacements"],
+            merge["knockout_additions"],
+            merge["knockout_replacements"],
+        )
         _atomic_write_json(write_config_path, raw_config)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0

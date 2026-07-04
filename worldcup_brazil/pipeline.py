@@ -2018,6 +2018,58 @@ def _validate_completed_group_results_fresh(
     raise ReportCoherenceError(detail)
 
 
+def _completed_knockout_mentions(config: dict[str, Any], *, phase: str, opponent: str) -> bool:
+    brazil_name = str(config.get("brazil_team_name") or "Brasil").strip() or "Brasil"
+    phase_key = _normalize_text(phase)
+    for item in config.get("completed_knockout_matches") or config.get("knockout_results") or []:
+        if not isinstance(item, dict):
+            continue
+        item_phase = str(item.get("phase") or "").strip()
+        if item_phase and _normalize_text(item_phase) != phase_key:
+            continue
+        if _completed_match_mentions(item, brazil_name, opponent):
+            return True
+    return False
+
+
+def _validate_knockout_results_fresh(
+    config: dict[str, Any],
+    knockout_estimates: list[Any],
+    generated_at: datetime,
+    watchdog: RunWatchdog | None = None,
+) -> None:
+    if bool(config.get("skip_completed_knockout_results_freshness_gate", False)):
+        return
+    missing: list[str] = []
+    for estimate in knockout_estimates:
+        if not bool(getattr(estimate, "most_likely", False)):
+            continue
+        phase = str(getattr(estimate, "phase", "") or "").strip()
+        opponent = str(getattr(estimate, "opponent", "") or "").strip()
+        if not phase or not opponent or _is_placeholder_opponent_name(opponent):
+            continue
+        scenario = _float_probability(getattr(estimate, "scenario_pct", None))
+        if scenario is None or scenario < 99.5:
+            continue
+        match_date = _parse_group_fixture_date(getattr(estimate, "match_date", None), year=generated_at.year)
+        if match_date is None or match_date >= generated_at.date():
+            continue
+        if _completed_knockout_mentions(config, phase=phase, opponent=opponent):
+            continue
+        missing.append(f"{phase}: Brasil x {opponent} ({getattr(estimate, 'match_date', match_date.isoformat())})")
+    if not missing:
+        return
+    detail = (
+        "Gate de resultados de mata-mata falhou: jogo(s) do caminho do Brasil já no passado sem placar "
+        "em completed_knockout_matches: "
+        + "; ".join(missing)
+        + ". Atualize completed_knockout_matches antes da sala de modelos."
+    )
+    if watchdog:
+        watchdog.fail("completed_knockout_results", detail=detail)
+    raise ReportCoherenceError(detail)
+
+
 def _specs_after_preflight_exclusion(
     agent_specs: list[Any],
     config: dict[str, Any],
@@ -3964,6 +4016,7 @@ def _configured_matches_for_prompt(config: dict[str, Any]) -> dict[str, Any]:
         "group_matches": _default_group_matches(config),
         "group_fixtures": list(config.get("group_fixtures", []) or []),
         "completed_group_matches": list(config.get("completed_group_matches", []) or []),
+        "completed_knockout_matches": list(config.get("completed_knockout_matches", []) or []),
         "knockout_matches": _default_knockout_matches(config),
         "monte_carlo": monte_carlo_summary,
         "path_phase_relevant_groups": config.get("_path_phase_relevant_groups")
@@ -4087,6 +4140,7 @@ def _compact_source_planning_scope(config: dict[str, Any]) -> dict[str, Any]:
         "group_matches": [_compact_group_match_label(match) for match in _default_group_matches(config)],
         "group_fixtures": {"count": len(group_fixtures), "groups": fixture_groups},
         "completed_group_matches": list(config.get("completed_group_matches", []) or []),
+        "completed_knockout_matches": list(config.get("completed_knockout_matches", []) or []),
         "knockout_matches": [_compact_knockout_match_label(match) for match in _default_knockout_matches(config)],
         "bracket_path": bracket_path,
         "monte_carlo": monte_carlo_summary,
@@ -9113,6 +9167,7 @@ async def build_report_bundle(
         _widen_ci_for_bracket_uncertainty(estimate, match, config=config)
         knockout_estimates.append(estimate)
     _apply_monte_carlo_knockout_scenarios(knockout_estimates, monte_carlo_result)
+    _validate_knockout_results_fresh(config, knockout_estimates, generated_at, watchdog)
     mc_config_for_ci = config.get("monte_carlo") if isinstance(config.get("monte_carlo"), dict) else {}
     for estimate in knockout_estimates:
         widen_ci_for_monte_carlo_path_uncertainty(

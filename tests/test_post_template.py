@@ -303,6 +303,48 @@ def test_template_post_uses_next_knockout_match_after_group_stage_is_complete() 
     assert "BRASIL x MARROCOS" not in text
 
 
+def test_template_post_skips_completed_knockout_and_uses_next_future_knockout_match() -> None:
+    bundle = _bundle()
+    bundle.metadata["completed_group_matches"] = [
+        {"group": "C", "date": "2026-06-13", "team_a": "Brasil", "score_a": 1, "team_b": "Marrocos", "score_b": 1},
+        {"group": "C", "date": "2026-06-13", "team_a": "Escócia", "score_a": 1, "team_b": "Haiti", "score_b": 0},
+        {"group": "C", "date": "2026-06-19", "team_a": "Escócia", "score_a": 0, "team_b": "Marrocos", "score_b": 1},
+        {"group": "C", "date": "2026-06-19", "team_a": "Brasil", "score_a": 3, "team_b": "Haiti", "score_b": 0},
+        {"group": "C", "date": "2026-06-24", "team_a": "Marrocos", "score_a": 4, "team_b": "Haiti", "score_b": 2},
+        {"group": "C", "date": "2026-06-24", "team_a": "Escócia", "score_a": 0, "team_b": "Brasil", "score_b": 3},
+    ]
+    bundle.metadata["completed_knockout_matches"] = {
+        "count": 2,
+        "matches": [
+            {"phase": "16 avos", "date": "2026-06-29", "score": "Brasil 2-1 Japão", "winner": "Brasil"},
+            {"phase": "16 avos", "date": "2026-06-30", "score": "Costa do Marfim 1-2 Noruega", "winner": "Noruega"},
+        ],
+    }
+    bundle.metadata["monte_carlo"]["group_state"] = {"brazil_first_pct": 100.0}
+    for match in bundle.knockout_matches:
+        if match.phase == "16 avos" and match.most_likely:
+            match.opponent = "Japão"
+            match.scenario_pct = 100.0
+            match.brazil_pct = 100.0
+            match.opponent_pct = 0.0
+            match.match_date = "2026-06-29"
+            match.venue = "Houston Stadium"
+        if match.phase == "Oitavas" and match.most_likely:
+            match.opponent = "Noruega"
+            match.scenario_pct = 100.0
+            match.brazil_pct = 73.0
+            match.opponent_pct = 27.0
+            match.match_date = "2026-07-05"
+            match.venue = "New York New Jersey Stadium"
+
+    text = render_template_post(bundle, post_index=13, run_date=date(2026, 7, 4))
+
+    assert text.startswith("⚽ 5/jul · Brasil x Noruega · 73/0/27 · Hexa:")
+    assert "13º PALPITE DA SÉRIE: Brasil x Noruega" in text
+    assert "BRASIL x NORUEGA — 73% Brasil passa | 27% Noruega passa" in text
+    assert "Brasil x Japão" not in text.split("O CAMINHO", 1)[0]
+
+
 def test_template_post_discloses_active_models_and_opponent_room_fallback() -> None:
     bundle = _bundle()
     bundle.source_plan_by_model = {

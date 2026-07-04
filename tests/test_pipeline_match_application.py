@@ -18,6 +18,7 @@ from worldcup_brazil.pipeline import (
     _validate_report_coherence,
     _missing_past_brazil_group_results,
     _validate_completed_group_results_fresh,
+    _validate_knockout_results_fresh,
     _widen_ci_for_bracket_uncertainty,
     load_config,
 )
@@ -91,6 +92,62 @@ def test_completed_group_results_freshness_gate_fails_before_stale_monte_carlo()
         assert "Atualize completed_group_matches" in str(exc)
     else:
         raise AssertionError("expected ReportCoherenceError")
+
+
+def test_completed_knockout_results_freshness_gate_fails_before_stale_model_room() -> None:
+    config = {
+        "brazil_team_name": "Brasil",
+        "completed_knockout_matches": [],
+    }
+    estimates = [
+        MatchEstimate(
+            brazil="Brasil",
+            opponent="Japão",
+            phase="16 avos",
+            brazil_pct=71.0,
+            opponent_pct=29.0,
+            statistical_weight=0.6,
+            qualitative_weight=0.4,
+            rationale="MC stale",
+            match_date="2026-06-29",
+            most_likely=True,
+            scenario_pct=100.0,
+        )
+    ]
+
+    try:
+        _validate_knockout_results_fresh(config, estimates, datetime(2026, 7, 4, 12, tzinfo=timezone.utc))
+    except ReportCoherenceError as exc:
+        assert "completed_knockout_matches" in str(exc)
+        assert "Brasil x Japão" in str(exc)
+    else:
+        raise AssertionError("expected ReportCoherenceError")
+
+
+def test_completed_knockout_results_freshness_gate_accepts_completed_brazil_path_match() -> None:
+    config = {
+        "brazil_team_name": "Brasil",
+        "completed_knockout_matches": [
+            {"phase": "16 avos", "team_a": "Brasil", "score_a": 2, "team_b": "Japão", "score_b": 1, "winner": "Brasil"}
+        ],
+    }
+    estimates = [
+        MatchEstimate(
+            brazil="Brasil",
+            opponent="Japão",
+            phase="16 avos",
+            brazil_pct=100.0,
+            opponent_pct=0.0,
+            statistical_weight=0.6,
+            qualitative_weight=0.4,
+            rationale="completed",
+            match_date="2026-06-29",
+            most_likely=True,
+            scenario_pct=100.0,
+        )
+    ]
+
+    _validate_knockout_results_fresh(config, estimates, datetime(2026, 7, 4, 12, tzinfo=timezone.utc))
 
 
 def test_completed_group_results_freshness_gate_checks_brazil_path_group_fixtures() -> None:

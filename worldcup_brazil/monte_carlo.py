@@ -908,6 +908,98 @@ def _completed_group_match_lookup(completed_matches: list[dict[str, Any]]) -> di
     return lookup
 
 
+def _completed_knockout_matches(config: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_matches = config.get("completed_knockout_matches") or config.get("knockout_results") or []
+    if not isinstance(raw_matches, list):
+        return []
+    completed: list[dict[str, Any]] = []
+    for raw in raw_matches:
+        if not isinstance(raw, dict):
+            continue
+        team_a = str(raw.get("team_a") or raw.get("home") or raw.get("team1") or "").strip()
+        team_b = str(raw.get("team_b") or raw.get("away") or raw.get("team2") or "").strip()
+        phase = str(raw.get("phase") or "").strip()
+        if not team_a or not team_b or not phase:
+            continue
+        score_a = _score_value(raw, "score_a", "home_score", "goals_a", "team_a_score")
+        score_b = _score_value(raw, "score_b", "away_score", "goals_b", "team_b_score")
+        if score_a is None or score_b is None:
+            score_text = str(raw.get("score") or "").strip()
+            score_match = re.fullmatch(r"\s*(\d+)\s*[-xX]\s*(\d+)\s*", score_text)
+            if score_match:
+                score_a = int(score_match.group(1))
+                score_b = int(score_match.group(2))
+        if score_a is None or score_b is None:
+            continue
+        winner = str(raw.get("winner") or "").strip()
+        if not winner:
+            if score_a > score_b:
+                winner = team_a
+            elif score_b > score_a:
+                winner = team_b
+        if _normalize(winner) not in {_normalize(team_a), _normalize(team_b)}:
+            continue
+        completed_match = {
+            "phase": phase,
+            "team_a": team_a,
+            "team_b": team_b,
+            "score_a": score_a,
+            "score_b": score_b,
+            "winner": team_a if _normalize(winner) == _normalize(team_a) else team_b,
+            "date": raw.get("date"),
+            "source": raw.get("source") or raw.get("source_url"),
+            "score": f"{team_a} {score_a}-{score_b} {team_b}",
+        }
+        match_id = str(raw.get("match_id") or "").strip()
+        if match_id:
+            completed_match["match_id"] = match_id
+        penalty_a = _score_value(raw, "penalty_score_a", "home_penalty_score", "HomeTeamPenaltyScore")
+        penalty_b = _score_value(raw, "penalty_score_b", "away_penalty_score", "AwayTeamPenaltyScore")
+        if penalty_a is not None and penalty_b is not None:
+            completed_match["penalty_score"] = f"{penalty_a}-{penalty_b}"
+        completed.append(completed_match)
+    return completed
+
+
+def _completed_knockout_match_lookup(completed_matches: list[dict[str, Any]]) -> dict[str, dict[tuple[str, str], dict[str, Any]]]:
+    lookup: dict[str, dict[tuple[str, str], dict[str, Any]]] = {}
+    for match in completed_matches:
+        phase = str(match.get("phase") or "").strip()
+        team_a = str(match.get("team_a") or "")
+        team_b = str(match.get("team_b") or "")
+        if not phase or not team_a or not team_b:
+            continue
+        lookup.setdefault(_normalize(phase), {})[_completed_pair_key(team_a, team_b)] = match
+    return lookup
+
+
+def _completed_knockout_for_pair(
+    completed_lookup: dict[str, dict[tuple[str, str], dict[str, Any]]] | None,
+    *,
+    phase: str,
+    team_a: str,
+    team_b: str,
+) -> dict[str, Any] | None:
+    phase_lookup = (completed_lookup or {}).get(_normalize(phase), {})
+    return phase_lookup.get(_completed_pair_key(team_a, team_b))
+
+
+def _completed_knockout_winner(result: dict[str, Any], *, team_a: str, team_b: str) -> str | None:
+    winner = str(result.get("winner") or "").strip()
+    if _normalize(winner) == _normalize(team_a):
+        return team_a
+    if _normalize(winner) == _normalize(team_b):
+        return team_b
+    score_a = _score_value(result, "score_a")
+    score_b = _score_value(result, "score_b")
+    if score_a is not None and score_b is not None:
+        if score_a > score_b:
+            return team_a
+        if score_b > score_a:
+            return team_b
+    return None
+
+
 def _row_team_key(rows: dict[str, dict[str, Any]], team: str) -> str | None:
     if team in rows:
         return team
@@ -1054,6 +1146,19 @@ def _completed_results_for_all_groups(completed_matches: list[dict[str, Any]]) -
             "group": match.get("group"),
             "date": match.get("date"),
             "score": match.get("score"),
+            "source": match.get("source"),
+        }
+        for match in completed_matches
+    ]
+
+
+def _completed_results_for_all_knockouts(completed_matches: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "phase": match.get("phase"),
+            "date": match.get("date"),
+            "score": match.get("score"),
+            "winner": match.get("winner"),
             "source": match.get("source"),
         }
         for match in completed_matches
@@ -1583,6 +1688,7 @@ def _simulate_tournament_counts(
     rng: random.Random,
     explicit_brazil_probs: dict[tuple[str, str], tuple[float, float, float]],
     completed_group_lookup: dict[str, dict[tuple[str, str], dict[str, Any]]] | None,
+    completed_knockout_lookup: dict[str, dict[tuple[str, str], dict[str, Any]]] | None,
     default_draw_pct: float,
     rating_scale: float,
     brazil: str,
@@ -1652,13 +1758,25 @@ def _simulate_tournament_counts(
                     bucket["opponent_counts"][opponent] = bucket["opponent_counts"].get(opponent, 0) + 1
                     bucket["brazil_slot_counts"][brazil_slot] = bucket["brazil_slot_counts"].get(brazil_slot, 0) + 1
 
-                winner = _sample_knockout_winner(
-                    rng,
-                    team_a,
-                    team_b,
-                    ratings=ratings,
-                    rating_scale=rating_scale,
+                completed_knockout = _completed_knockout_for_pair(
+                    completed_knockout_lookup,
+                    phase=phase,
+                    team_a=team_a,
+                    team_b=team_b,
                 )
+                winner = (
+                    _completed_knockout_winner(completed_knockout, team_a=team_a, team_b=team_b)
+                    if completed_knockout
+                    else None
+                )
+                if winner is None:
+                    winner = _sample_knockout_winner(
+                        rng,
+                        team_a,
+                        team_b,
+                        ratings=ratings,
+                        rating_scale=rating_scale,
+                    )
                 match_winners[match_id] = winner
                 if brazil in {team_a, team_b} and winner == brazil:
                     opponent = team_b if team_a == brazil else team_a
@@ -1847,6 +1965,8 @@ def run_brazil_monte_carlo(config: dict[str, Any]) -> dict[str, Any]:
     explicit_brazil_probs = _explicit_brazil_group_probabilities(config)
     completed_group_matches = _completed_group_matches(config)
     completed_group_lookup = _completed_group_match_lookup(completed_group_matches)
+    completed_knockout_matches = _completed_knockout_matches(config)
+    completed_knockout_lookup = _completed_knockout_match_lookup(completed_knockout_matches)
     default_draw_pct = float(mc_config.get("default_draw_pct", DEFAULT_DRAW_PCT))
     rating_scale = float(mc_config.get("rating_scale", DEFAULT_RATING_SCALE))
     brazil = str(config.get("brazil_team_name", "Brasil"))
@@ -1901,6 +2021,7 @@ def run_brazil_monte_carlo(config: dict[str, Any]) -> dict[str, Any]:
                 rng=rng,
                 explicit_brazil_probs=explicit_brazil_probs,
                 completed_group_lookup=completed_group_lookup,
+                completed_knockout_lookup=completed_knockout_lookup,
                 default_draw_pct=default_draw_pct,
                 rating_scale=rating_scale,
                 brazil=brazil,
@@ -1945,6 +2066,7 @@ def run_brazil_monte_carlo(config: dict[str, Any]) -> dict[str, Any]:
             rng=rng,
             explicit_brazil_probs=explicit_brazil_probs,
             completed_group_lookup=completed_group_lookup,
+            completed_knockout_lookup=completed_knockout_lookup,
             default_draw_pct=default_draw_pct,
             rating_scale=rating_scale,
             brazil=brazil,
@@ -2036,6 +2158,10 @@ def run_brazil_monte_carlo(config: dict[str, Any]) -> dict[str, Any]:
             "count": len(completed_group_matches),
             "matches": _completed_results_for_all_groups(completed_group_matches),
         },
+        "completed_knockout_matches": {
+            "count": len(completed_knockout_matches),
+            "matches": _completed_results_for_all_knockouts(completed_knockout_matches),
+        },
         "phase_relevant_groups": phase_relevant_groups,
         "relevant_group_states": relevant_group_states,
         "group_state": group_state,
@@ -2079,6 +2205,7 @@ def monte_carlo_compact_summary(result: dict[str, Any], *, top_n: int = 3) -> di
         "rating_uncertainty": result.get("rating_uncertainty", {"enabled": False}),
         "simulation_diagnostics": result.get("simulation_diagnostics", {}),
         "completed_group_matches": result.get("completed_group_matches", {"count": 0, "matches": []}),
+        "completed_knockout_matches": result.get("completed_knockout_matches", {"count": 0, "matches": []}),
         "phase_relevant_groups": result.get("phase_relevant_groups", {}),
         "relevant_group_states": result.get("relevant_group_states", {}),
         "group_state": result.get("group_state", {}),
