@@ -103,6 +103,7 @@ def test_render_simulation_review_infographic_html_prioritizes_model_ranking_and
     assert "2/3 direção" in html
     assert "Japão 100%" in html
     assert "Sem dados empilhados" not in html
+    assert html.count('<div class="run-date">') == 4
 
 
 def test_infographic_uses_next_future_knockout_after_round_of_32_is_completed() -> None:
@@ -113,10 +114,17 @@ def test_infographic_uses_next_future_knockout_after_round_of_32_is_completed() 
         SimpleNamespace(opponent="Escócia", match_date="24/jun"),
     ]
     bundle.knockout_matches = [
-        SimpleNamespace(phase="16 avos", opponent="Japão", scenario_pct=100.0, brazil_pct=100.0, most_likely=True, match_date="2026-06-29"),
+        SimpleNamespace(phase="16 avos", opponent="Japão", scenario_pct=100.0, brazil_pct=100.0, opponent_pct=0.0, most_likely=True, match_date="2026-06-29"),
         SimpleNamespace(phase="Oitavas", opponent="Noruega", scenario_pct=100.0, brazil_pct=74.1, most_likely=True, match_date="2026-07-05"),
         SimpleNamespace(phase="Quartas", opponent="Inglaterra", scenario_pct=71.9, brazil_pct=50.3, most_likely=True, match_date="2026-07-11"),
     ]
+    bundle.metadata["monte_carlo"] = {
+        "completed_knockout_matches": {
+            "matches": [
+                {"phase": "16 avos", "date": "2026-06-29", "score": "Brasil 2-1 Japão", "winner": "Brasil"}
+            ]
+        }
+    }
 
     html = render_simulation_review_infographic_html([bundle])
     svg = render_simulation_review_infographic_svg([bundle])
@@ -125,6 +133,8 @@ def test_infographic_uses_next_future_knockout_after_round_of_32_is_completed() 
     assert "Noruega 100%; Brasil 74,1%" in html
     assert "Brasil x Japão" not in html
     assert "Japão 100%" not in html
+    assert "Brasil 2-1 Japão" in html
+    assert "3/4 direção" in html
     assert "Noruega 100%; Brasil 74,1%" in svg
 
 

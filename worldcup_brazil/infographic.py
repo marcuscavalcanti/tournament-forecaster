@@ -442,9 +442,9 @@ def _normalize_team(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", " ", text.casefold()).strip()
 
 
-def _forecast_group_match_by_opponent(bundle: Any) -> dict[str, Any]:
+def _forecast_match_by_opponent(bundle: Any) -> dict[str, Any]:
     matches: dict[str, Any] = {}
-    for match in getattr(bundle, "group_matches", []) or []:
+    for match in list(getattr(bundle, "group_matches", []) or []) + list(getattr(bundle, "knockout_matches", []) or []):
         opponent = getattr(match, "opponent", None)
         if opponent:
             matches[_normalize_team(opponent)] = match
@@ -495,13 +495,47 @@ def _probability_for_key(match: Any, key: str) -> float:
         return _num(getattr(match, "brazil_pct", None))
     if key == "draw":
         return _num(getattr(match, "draw_pct", None))
-    return _num(getattr(match, "opponent_pct", None))
+    opponent = getattr(match, "opponent_pct", None)
+    if opponent is not None:
+        return _num(opponent)
+    draw = _num(getattr(match, "draw_pct", None))
+    return max(0.0, 100.0 - _num(getattr(match, "brazil_pct", None)) - draw)
+
+
+def _completed_knockout_matches(bundle: Any) -> list[dict[str, Any]]:
+    metadata = getattr(bundle, "metadata", {}) or {}
+    if not isinstance(metadata, dict):
+        return []
+    direct = metadata.get("completed_knockout_matches")
+    if isinstance(direct, dict):
+        matches = direct.get("matches")
+        if isinstance(matches, list):
+            return [item for item in matches if isinstance(item, dict)]
+    monte_carlo = metadata.get("monte_carlo")
+    if isinstance(monte_carlo, dict):
+        nested = monte_carlo.get("completed_knockout_matches")
+        if isinstance(nested, dict):
+            matches = nested.get("matches")
+            if isinstance(matches, list):
+                return [item for item in matches if isinstance(item, dict)]
+    return []
+
+
+def _completed_brazil_results(bundle: Any) -> list[dict[str, Any]]:
+    metadata = getattr(bundle, "metadata", {}) or {}
+    group_state = (metadata.get("group_state") if isinstance(metadata, dict) else {}) or {}
+    completed_results = group_state.get("completed_results") if isinstance(group_state, dict) else []
+    results = [item for item in completed_results or [] if isinstance(item, dict)]
+    for item in _completed_knockout_matches(bundle):
+        if _parse_brazil_score(item.get("score")) is None:
+            continue
+        results.append(item)
+    return results
 
 
 def _accuracy_rows(bundle: Any) -> tuple[list[dict[str, Any]], str]:
-    group_state = ((getattr(bundle, "metadata", {}) or {}).get("group_state") or {})
-    completed_results = group_state.get("completed_results") or []
-    forecasts = _forecast_group_match_by_opponent(bundle)
+    completed_results = _completed_brazil_results(bundle)
+    forecasts = _forecast_match_by_opponent(bundle)
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
     for result in completed_results:
