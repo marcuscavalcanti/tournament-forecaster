@@ -513,6 +513,38 @@ def test_render_linkedin_post_includes_monte_carlo_path_summary() -> None:
     assert "- 16 avos, adversários por simulação: Japão 38.4%, Suécia 31.7%." in post
 
 
+def test_render_linkedin_post_uses_conditioned_monte_carlo_reach_probability_for_stage_summary() -> None:
+    bundle = ReportBundle(
+        generated_at_iso="2026-07-04T12:00:00+00:00",
+        group_matches=[],
+        knockout_matches=[],
+        stage_probabilities={"quartas": 72.1, "semifinal": 42.3, "final": 23.5, "titulo": 11.7},
+        final_rationale="Racional.",
+        sources=[],
+        agent_summaries={},
+        warnings=[],
+        custom_hashtag="#CopaComAchismo",
+        metadata={
+            "monte_carlo": {
+                "stage_probabilities": {
+                    "16_avos": 100.0,
+                    "oitavas": 100.0,
+                    "quartas": 74.1,
+                    "semifinal": 41.7,
+                    "final": 23.2,
+                    "titulo": 11.7,
+                }
+            }
+        },
+    )
+
+    post = render_linkedin_post(bundle)
+
+    assert "Probabilidade de Brasil chegar às quartas: 74.1%" in post
+    assert "Probabilidade de Brasil chegar às quartas: 72.1%" not in post
+    assert "Probabilidade de título: 11.7%" in post
+
+
 def test_render_linkedin_post_stays_publishable_and_audit_keeps_full_meeting_chat_text() -> None:
     long_answer = "começo " + ("detalhe " * 180) + "FIM-DA-FALA-COMPLETA"
     bundle = ReportBundle(

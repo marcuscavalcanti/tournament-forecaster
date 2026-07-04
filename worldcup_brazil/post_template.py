@@ -41,9 +41,11 @@ TEMPLATE = """{round_header}
 
 {rest_group_line}
 
+{completed_knockout_line}
+
 O CAMINHO ATÉ O HEXA, adversário por adversário (no mata-mata não tem empate: ou passa, ou volta pra casa):
 
-{path_blocks}RESUMO DA CAMINHADA: o Brasil chega nos 16 avos em {r16_pct} dos cenários, oitavas em {r8_pct}, quartas em {qf_pct}, na semifinal em {sf_pct}, na final em {final_pct}... e levanta a taça em {title_pct} 🏆.
+{path_blocks}{journey_summary}
 
 {change_section}
 {backstage_section}📊 NÚMEROS DA RODADA:
@@ -137,6 +139,77 @@ def _completed_group_context(bundle: Any, *, before_date: date | None = None) ->
     if len(scores) == 1:
         return f"Com {scores[0]}, "
     return f"Com {_join_pt(scores)}, "
+
+
+def _completed_knockout_payload(bundle: Any) -> dict[str, Any]:
+    metadata = getattr(bundle, "metadata", {}) or {}
+    if not isinstance(metadata, dict):
+        return {}
+    direct = metadata.get("completed_knockout_matches")
+    if isinstance(direct, dict) and direct:
+        return direct
+    monte_carlo = metadata.get("monte_carlo")
+    if isinstance(monte_carlo, dict):
+        nested = monte_carlo.get("completed_knockout_matches")
+        if isinstance(nested, dict):
+            return nested
+    return {}
+
+
+def _completed_knockout_items(bundle: Any) -> list[dict[str, Any]]:
+    payload = _completed_knockout_payload(bundle)
+    matches = payload.get("matches") if isinstance(payload, dict) else []
+    return [item for item in matches or [] if isinstance(item, dict)]
+
+
+def _parse_brazil_knockout_score(score: Any) -> tuple[str, int, int] | None:
+    match = re.match(r"^\s*(.+?)\s+(\d+)-(\d+)\s+(.+?)\s*$", str(score or ""))
+    if not match:
+        return None
+    team_a, score_a_raw, score_b_raw, team_b = match.groups()
+    score_a = int(score_a_raw)
+    score_b = int(score_b_raw)
+    if _normalize_beat(team_a) == "brasil":
+        return str(team_b).strip(), score_a, score_b
+    if _normalize_beat(team_b) == "brasil":
+        return str(team_a).strip(), score_b, score_a
+    return None
+
+
+def _next_phase_label_from_completed(phase: str) -> str:
+    normalized = str(phase or "").strip()
+    return {
+        "16 avos": "oitavas de final",
+        "Oitavas": "quartas de final",
+        "Quartas": "semifinal",
+        "Semifinal": "final",
+    }.get(normalized, "próxima fase")
+
+
+def _completed_brazil_knockout_context(bundle: Any, *, before_date: date | None = None) -> str:
+    year = _bundle_year(bundle)
+    candidates: list[tuple[date, int, dict[str, Any], tuple[str, int, int]]] = []
+    for index, item in enumerate(_completed_knockout_items(bundle)):
+        parsed = _parse_brazil_knockout_score(item.get("score"))
+        if parsed is None:
+            continue
+        winner = _normalize_beat(item.get("winner", ""))
+        if winner and winner != "brasil":
+            continue
+        played_at = _parse_completed_match_date(item.get("date"), year=year)
+        if before_date is not None and played_at is not None and played_at >= before_date:
+            continue
+        sort_date = played_at or date.min
+        candidates.append((sort_date, index, item, parsed))
+    if not candidates:
+        return ""
+    _played_at, _index, item, (opponent, brazil_goals, opponent_goals) = sorted(candidates)[-1]
+    phase = str(item.get("phase") or "").strip()
+    score = f"{brazil_goals}x{opponent_goals}"
+    return (
+        f"Avançou para as {_next_phase_label_from_completed(phase)} com a vitória "
+        f"nos {phase} sobre o {opponent} por {score}."
+    )
 
 
 def _brazil_group_is_complete(bundle: Any) -> bool:
@@ -296,6 +369,8 @@ def _active_model_names(bundle: Any, removed: list[str]) -> list[str]:
 
 def _compact_removed_reason(reason: str) -> str:
     normalized = _normalize_beat(reason)
+    if "fallback operacional" in normalized or "busca/fetch" in normalized or "fetch externo" in normalized:
+        return "fallback operacional de busca/fetch"
     if "fora do escopo" in normalized and "futebol competitivo" in normalized:
         return "fontes fora do escopo competitivo"
     if "falha operacional" in normalized and "sem resposta externa verificavel" in normalized:
@@ -780,12 +855,85 @@ def _modal_chain_beat(round_index: Any, agent: str, answer: str) -> tuple[int, s
     )
 
 
+def _norway_title_threshold_beat(round_index: Any, agent: str, answer: str) -> tuple[int, str] | None:
+    compact = " ".join(str(answer or "").split())
+    normalized = _normalize_beat(compact)
+    if not (
+        "noruega" in normalized
+        and "titulo" in normalized
+        and re.search(r"11[,.]7\s*%", compact)
+        and re.search(r"12[,.]7\s*%", compact)
+        and re.search(r"74[,.]1\s*%", compact)
+        and re.search(r"80[,.]4\s*%", compact)
+    ):
+        return None
+    return (
+        19,
+        f"Rodada {round_index} — {agent}: para subir o Hexa de 11,7% para 12,7%, "
+        "Brasil x Noruega teria que saltar de 74,1% para 80,4%; a sala recusou sem fato novo.",
+    )
+
+
+def _trigger_matrix_beat(round_index: Any, agent: str, answer: str) -> tuple[int, str] | None:
+    compact = " ".join(str(answer or "").split())
+    normalized = _normalize_beat(compact)
+    if not (
+        "matriz" in normalized
+        and "gatilh" in normalized
+        and ("brasil x noruega" in normalized or "noruega" in normalized)
+        and ("3 p.p" in normalized or "3pp" in normalized or "3 pontos" in normalized)
+    ):
+        return None
+    return (
+        18,
+        f"Rodada {round_index} — {agent}: gatilho duro: odds, lesão, escalação ou rating precisam mover 3 p.p.",
+    )
+
+
+def _haaland_sensitivity_beat(round_index: Any, agent: str, answer: str) -> tuple[int, str] | None:
+    compact = " ".join(str(answer or "").split())
+    normalized = _normalize_beat(compact)
+    if not ("haaland" in normalized and ("tornozelo" in normalized or "mobilidade" in normalized)):
+        return None
+    if not ("noruega" in normalized and ("rating" in normalized or "probabilidade" in normalized or "sensibilidade" in normalized)):
+        return None
+    return (
+        17,
+        f"Rodada {round_index} — {agent}: o tornozelo de Haaland virou teste de sensibilidade, "
+        "não palpite solto; a sala pediu medir quanto isso mexe em Brasil x Noruega.",
+    )
+
+
+def _norway_rating_quarantine_beat(round_index: Any, agent: str, answer: str) -> tuple[int, str] | None:
+    compact = " ".join(str(answer or "").split())
+    normalized = _normalize_beat(compact)
+    if not (
+        "rating da noruega" in normalized
+        and ("22.5" in compact or "22,5" in compact)
+        and ("quarentena" in normalized or "distor" in normalized)
+    ):
+        return None
+    return (
+        16,
+        f"Rodada {round_index} — {agent}: o maior risco de distorção foi o rating da Noruega (+22,5); "
+        "a sala tratou esse sinal como quarentena antes de mexer no Hexa.",
+    )
+
+
 def _valid_room_response(response: Any) -> bool:
     return not (response.get("removed_from_main") or response.get("used_fallback"))
 
 
 def _beat_semantic_key(beat: str) -> str:
     normalized = _normalize_beat(beat)
+    if "para subir o hexa" in normalized and "74,1%" in normalized and "80,4%" in normalized:
+        return "norway:title-threshold:74,1:80,4"
+    if "gatilho" in normalized and "3 p.p" in normalized:
+        return "norway:trigger-matrix"
+    if "tornozelo de haaland" in normalized:
+        return "norway:haaland-sensitivity"
+    if "rating da noruega" in normalized and "+22,5" in normalized:
+        return "norway:rating-quarantine"
     cauda = re.search(r"cauda\s+([a-z ]+?)\s+a\s+(\d+(?:,\d+)?)%", normalized)
     if cauda:
         return f"cauda:{cauda.group(1).strip()}:{cauda.group(2)}"
@@ -874,6 +1022,20 @@ def _extract_beats(bundle: Any) -> list[str]:
             ):
                 continue
             agent = str(response.get("agent") or "")
+            for specialized in (
+                _norway_title_threshold_beat,
+                _trigger_matrix_beat,
+                _haaland_sensitivity_beat,
+                _norway_rating_quarantine_beat,
+            ):
+                beat = specialized(round_index, agent, answer)
+                if beat:
+                    scored.append((beat[0], agent, beat[1]))
+                    break
+            else:
+                beat = None
+            if beat:
+                continue
             locked_crossing = _locked_crossing_sensitivity_beat(round_index, agent, answer)
             if locked_crossing:
                 scored.append((locked_crossing[0], agent, locked_crossing[1]))
@@ -1143,6 +1305,13 @@ def _most_likely_phase_match(bundle: Any, phase: str) -> Any | None:
     return None
 
 
+def _phase_index(phase: str) -> int:
+    try:
+        return PHASE_ORDER.index(str(phase or "").strip())
+    except ValueError:
+        return 0
+
+
 def _next_future_knockout_match(bundle: Any, *, run_date: date) -> Any | None:
     candidates: list[tuple[int, date, Any]] = []
     for order, phase in enumerate(PHASE_ORDER):
@@ -1157,6 +1326,71 @@ def _next_future_knockout_match(bundle: Any, *, run_date: date) -> Any | None:
         return None
     candidates.sort(key=lambda item: (item[1], item[0]))
     return candidates[0][2]
+
+
+def _active_path_phases(*, featured_is_knockout: bool, featured: Any) -> list[str]:
+    if not featured_is_knockout:
+        return PHASE_ORDER
+    start = _phase_index(str(getattr(featured, "phase", "") or ""))
+    return PHASE_ORDER[start:]
+
+
+JOURNEY_STAGE_LABELS = {
+    "16_avos": "nos 16 avos",
+    "oitavas": "nas oitavas",
+    "quartas": "quartas",
+    "semifinal": "na semifinal",
+    "final": "na final",
+}
+
+
+PHASE_TO_STAGE_KEY = {
+    "16 avos": "16_avos",
+    "Oitavas": "oitavas",
+    "Quartas": "quartas",
+    "Semifinal": "semifinal",
+    "Final": "final",
+}
+
+
+def _journey_summary(
+    bundle: Any,
+    *,
+    active_phases: list[str],
+    title_pct_text: str,
+) -> str:
+    metadata = getattr(bundle, "metadata", {}) or {}
+    monte_carlo = metadata.get("monte_carlo") if isinstance(metadata.get("monte_carlo"), dict) else {}
+    mc_stages = monte_carlo.get("stage_probabilities") if isinstance(monte_carlo, dict) else {}
+    stage = dict(getattr(bundle, "stage_probabilities", {}) or {})
+    items: list[str] = []
+    for phase in active_phases:
+        key = PHASE_TO_STAGE_KEY.get(phase)
+        if not key or key == "final":
+            continue
+        value = (mc_stages or {}).get(key, stage.get(key))
+        items.append(f"{JOURNEY_STAGE_LABELS[key]} em {_pct_int(value)}")
+    final_value = (mc_stages or {}).get("final", stage.get("final"))
+    items.append(f"{JOURNEY_STAGE_LABELS['final']} em {_pct_int(final_value)}")
+    if not items:
+        return f"RESUMO DA CAMINHADA: o Brasil levanta a taça em {title_pct_text} 🏆."
+    return (
+        "RESUMO DA CAMINHADA: o Brasil chega "
+        + ", ".join(items)
+        + f"... e levanta a taça em {title_pct_text} 🏆."
+    )
+
+
+def _title_suffix(bundle: Any, previous_bundle: Any | None) -> str:
+    if previous_bundle is None:
+        return ""
+    previous = _stage_number(previous_bundle, "titulo")
+    current = _stage_number(bundle, "titulo")
+    if previous is None or current is None:
+        return ""
+    if current - previous >= 2.0:
+        return " (estão deixando a gente sonhar cada vez mais...)"
+    return ""
 
 
 def _changed_stage_bullet(previous_bundle: Any, bundle: Any) -> str | None:
@@ -1249,7 +1483,7 @@ def render_template_post(
     featured_is_first = (not featured_is_knockout) and featured is group_matches[0]
 
     ordinal = ORDINAIS[post_index - 1] if 1 <= post_index <= len(ORDINAIS) else f"{post_index}º"
-    title = f"{ordinal} PALPITE DA SÉRIE: Brasil x {getattr(featured, 'opponent', '')}"
+    title = f"{ordinal} PALPITE DA SÉRIE: Brasil x {getattr(featured, 'opponent', '')}{_title_suffix(bundle, previous_bundle)}"
 
     weekday = WEEKDAYS_PT[featured_date.weekday()] if featured_date else "em breve"
     header_label = "A ESTREIA" if featured_is_first else "O PRÓXIMO JOGO"
@@ -1278,6 +1512,11 @@ def render_template_post(
     next_post_match = remaining[0] if remaining else featured
     first_place_pct = _first_place_pct(bundle)
     completed_context = _completed_group_context(bundle, before_date=featured_date)
+    completed_knockout_line = (
+        _completed_brazil_knockout_context(bundle, before_date=featured_date)
+        if featured_is_knockout
+        else ""
+    )
     if remaining:
         listed = " e ".join(
             f"{getattr(m, 'opponent', '')} ({_pct_int(getattr(m, 'brazil_pct', None))} de vitória)" for m in remaining
@@ -1307,8 +1546,9 @@ def render_template_post(
                 f"1º lugar projetado em {first_place_pct} dos cenários."
             )
 
+    active_phases = _active_path_phases(featured_is_knockout=featured_is_knockout, featured=featured)
     blocks: list[str] = []
-    for phase in PHASE_ORDER:
+    for phase in active_phases:
         pair = pairs.get(phase, {})
         ml, alt = pair.get("ml"), pair.get("alt")
         if ml is None:
@@ -1350,7 +1590,6 @@ def render_template_post(
             )
         )
 
-    mc_stages = ((getattr(bundle, "metadata", {}) or {}).get("monte_carlo") or {}).get("stage_probabilities") or {}
     stage = dict(getattr(bundle, "stage_probabilities", {}) or {})
     backstage = _backstage_section(_extract_beats(bundle))
 
@@ -1370,12 +1609,9 @@ def render_template_post(
         next_game_header=next_game_header,
         next_game_line=next_game_line,
         rest_group_line=rest_group_line,
+        completed_knockout_line=completed_knockout_line,
         path_blocks="".join(blocks),
-        r16_pct=_pct_int(mc_stages.get("16_avos")),
-        r8_pct=_pct_int(mc_stages.get("oitavas")),
-        qf_pct=_pct_int(stage.get("quartas")),
-        sf_pct=_pct_int(stage.get("semifinal")),
-        final_pct=_pct_int(stage.get("final")),
+        journey_summary=_journey_summary(bundle, active_phases=active_phases, title_pct_text=title_pct_text),
         title_pct=title_pct_text,
         change_section=_change_section(bundle, previous_bundle),
         backstage_section=backstage,
@@ -1442,9 +1678,8 @@ def validate_template_post(text: str, bundle: Any) -> None:
     stage = dict(getattr(bundle, "stage_probabilities", {}) or {})
     if stage and _pct(stage.get("titulo")) not in text:
         errors.append("percentual de título não bate com o bundle")
-    for phase in PHASE_ORDER:
-        if PHASE_HEADERS[phase] not in text:
-            errors.append(f"fase ausente do caminho: {phase}")
+    if not any(PHASE_HEADERS[phase] in text for phase in PHASE_ORDER):
+        errors.append("nenhuma fase do mata-mata presente no caminho")
     if "1️⃣" in text and "DOIS BASTIDORES DA REUNIÃO DE HOJE:" not in text:
         errors.append("bastidores presentes sem o cabeçalho fixo da seção")
     if errors:

@@ -122,24 +122,24 @@ def _metric_totals(bundles: list[Any]) -> dict[str, float]:
 
 
 def _locked_crossing(bundle: Any) -> str:
-    for match in getattr(bundle, "knockout_matches", []) or []:
-        phase = str(getattr(match, "phase", "") or "")
-        scenario = _num(getattr(match, "scenario_pct", None))
-        if phase == "16 avos" and bool(getattr(match, "most_likely", False)) and scenario >= 99.5:
-            opponent = str(getattr(match, "opponent", "") or "adversário")
-            brazil = _pct(getattr(match, "brazil_pct", None))
-            return f"{opponent} 100% no cruzamento; Brasil passa {brazil}"
+    generated = _parse_bundle_date(bundle)
+    generated_key = (generated.month, generated.day) if generated != datetime.min else (0, 0)
+    match = _next_future_knockout(bundle, generated_key)
+    if match is not None and _num(getattr(match, "scenario_pct", None)) >= 99.5:
+        opponent = str(getattr(match, "opponent", "") or "adversário")
+        brazil = _pct(getattr(match, "brazil_pct", None))
+        return f"{opponent} 100% no cruzamento; Brasil passa {brazil}"
     return "Cruzamentos recalculados em cada run"
 
 
 def _locked_crossing_short(bundle: Any) -> str:
-    for match in getattr(bundle, "knockout_matches", []) or []:
-        phase = str(getattr(match, "phase", "") or "")
-        scenario = _num(getattr(match, "scenario_pct", None))
-        if phase == "16 avos" and bool(getattr(match, "most_likely", False)) and scenario >= 99.5:
-            opponent = str(getattr(match, "opponent", "") or "adversário")
-            brazil = _pct(getattr(match, "brazil_pct", None))
-            return f"{opponent} 100%; Brasil {brazil}"
+    generated = _parse_bundle_date(bundle)
+    generated_key = (generated.month, generated.day) if generated != datetime.min else (0, 0)
+    match = _next_future_knockout(bundle, generated_key)
+    if match is not None and _num(getattr(match, "scenario_pct", None)) >= 99.5:
+        opponent = str(getattr(match, "opponent", "") or "adversário")
+        brazil = _pct(getattr(match, "brazil_pct", None))
+        return f"{opponent} 100%; Brasil {brazil}"
     return "Cruzamentos recalculados"
 
 
@@ -229,6 +229,8 @@ MONTHS_PT = {
     "dez": 12,
 }
 
+KNOCKOUT_PHASE_ORDER = ("16 avos", "Oitavas", "Quartas", "Semifinal", "Final")
+
 
 def _match_date_tuple(raw: Any) -> tuple[int, int] | None:
     value = str(raw or "").strip().lower()
@@ -245,21 +247,48 @@ def _match_date_tuple(raw: Any) -> tuple[int, int] | None:
     return month, day
 
 
+def _match_date_key(raw: Any) -> tuple[int, int] | None:
+    value = str(raw or "").strip()
+    iso = re.fullmatch(r"\d{4}-(\d{2})-(\d{2})", value)
+    if iso:
+        return int(iso.group(1)), int(iso.group(2))
+    return _match_date_tuple(raw)
+
+
+def _next_future_knockout(bundle: Any, generated_key: tuple[int, int]) -> Any | None:
+    candidates: list[tuple[tuple[int, int], int, Any]] = []
+    for match in getattr(bundle, "knockout_matches", []) or []:
+        if not bool(getattr(match, "most_likely", False)):
+            continue
+        date_key = _match_date_key(getattr(match, "match_date", None))
+        if date_key is None or date_key < generated_key:
+            continue
+        phase = str(getattr(match, "phase", "") or "")
+        try:
+            order = KNOCKOUT_PHASE_ORDER.index(phase)
+        except ValueError:
+            order = len(KNOCKOUT_PHASE_ORDER)
+        candidates.append((date_key, order, match))
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda item: (item[0], item[1]))[0][2]
+
+
 def _match_label(bundle: Any) -> str:
     generated = _parse_bundle_date(bundle)
     generated_key = (generated.month, generated.day) if generated != datetime.min else (0, 0)
     group_matches = list(getattr(bundle, "group_matches", []) or [])
     future_group_matches: list[tuple[tuple[int, int], Any]] = []
     for match in group_matches:
-        date_key = _match_date_tuple(getattr(match, "match_date", None))
+        date_key = _match_date_key(getattr(match, "match_date", None))
         if date_key is not None and date_key >= generated_key:
             future_group_matches.append((date_key, match))
     if future_group_matches:
         _, match = sorted(future_group_matches, key=lambda item: item[0])[0]
         return f"Brasil x {getattr(match, 'opponent', 'adversário')}"
-    for match in getattr(bundle, "knockout_matches", []) or []:
-        if str(getattr(match, "phase", "") or "") == "16 avos" and bool(getattr(match, "most_likely", False)):
-            return f"Brasil x {getattr(match, 'opponent', 'adversário')}"
+    knockout = _next_future_knockout(bundle, generated_key)
+    if knockout is not None:
+        return f"Brasil x {getattr(knockout, 'opponent', 'adversário')}"
     return "Brasil"
 
 

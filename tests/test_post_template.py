@@ -321,6 +321,8 @@ def test_template_post_skips_completed_knockout_and_uses_next_future_knockout_ma
         ],
     }
     bundle.metadata["monte_carlo"]["group_state"] = {"brazil_first_pct": 100.0}
+    bundle.metadata["monte_carlo"]["stage_probabilities"]["quartas"] = 73.0
+    bundle.stage_probabilities["quartas"] = 72.1
     for match in bundle.knockout_matches:
         if match.phase == "16 avos" and match.most_likely:
             match.opponent = "Japão"
@@ -336,6 +338,12 @@ def test_template_post_skips_completed_knockout_and_uses_next_future_knockout_ma
             match.opponent_pct = 27.0
             match.match_date = "2026-07-05"
             match.venue = "New York New Jersey Stadium"
+        if match.phase == "Quartas":
+            match.match_date = "2026-07-11"
+        if match.phase == "Semifinal":
+            match.match_date = "2026-07-15"
+        if match.phase == "Final":
+            match.match_date = "2026-07-19"
 
     text = render_template_post(bundle, post_index=13, run_date=date(2026, 7, 4))
 
@@ -343,6 +351,73 @@ def test_template_post_skips_completed_knockout_and_uses_next_future_knockout_ma
     assert "13º PALPITE DA SÉRIE: Brasil x Noruega" in text
     assert "BRASIL x NORUEGA — 73% Brasil passa | 27% Noruega passa" in text
     assert "Brasil x Japão" not in text.split("O CAMINHO", 1)[0]
+    assert "Avançou para as oitavas de final com a vitória nos 16 avos sobre o Japão por 2x1." in text
+    assert "➡️ 16 AVOS" not in text
+    assert "➡️ OITAVAS" in text
+    assert "quartas em 73%" in text
+    assert "quartas em 72%" not in text
+
+
+def test_backstage_uses_knockout_sensitivity_from_norway_debate_without_cross_unit_adjustment() -> None:
+    bundle = _bundle()
+    bundle.knockout_matches = [
+        _match("Oitavas", "Noruega", scenario=100.0, brazil=74.1, opp=25.9, venue="New York New Jersey Stadium", date_="2026-07-05", most_likely=True),
+        _match("Quartas", "Inglaterra", scenario=71.9, brazil=50.3, opp=49.7, venue="Miami Stadium", date_="2026-07-11", most_likely=True),
+        _match("Quartas", "México", scenario=28.1, brazil=71.7, opp=28.3, venue="Miami Stadium", date_="2026-07-11", most_likely=False),
+        _match("Semifinal", "Argentina", scenario=57.8, brazil=44.0, opp=56.0, venue="Atlanta Stadium", date_="2026-07-15", most_likely=True),
+        _match("Semifinal", "Colômbia", scenario=20.9, brazil=68.2, opp=31.8, venue="Atlanta Stadium", date_="2026-07-15", most_likely=False),
+        _match("Final", "França", scenario=32.6, brazil=41.1, opp=58.9, venue="New York New Jersey Stadium", date_="2026-07-19", most_likely=True),
+        _match("Final", "Espanha", scenario=24.7, brazil=46.5, opp=53.5, venue="New York New Jersey Stadium", date_="2026-07-19", most_likely=False),
+    ]
+    bundle.meeting_transcript = [
+        {
+            "round": 4,
+            "responses": [
+                {
+                    "agent": "GPT 5.5",
+                    "answer": (
+                        "Para elevar o título de 11.7% para 12.7% apenas pelo jogo contra a Noruega, "
+                        "mantendo o restante do caminho constante, a chance de passar da Noruega teria de "
+                        "subir aproximadamente de 74.1% para 80.4%, ou seja, um salto de cerca de 6.3 p.p. "
+                        "nesse confronto. A vitória por 2-1 sobre o Japão confirma resiliência, mas não é "
+                        "evidência nova suficiente para esse salto."
+                    ),
+                    "disagreed": True,
+                    "removed_from_main": False,
+                    "used_fallback": False,
+                }
+            ],
+        },
+        {
+            "round": 6,
+            "responses": [
+                {
+                    "agent": "GPT 5.5",
+                    "answer": (
+                        "A sala deve definir uma matriz objetiva de gatilhos: só reabrir o número se odds, "
+                        "ausência de titular, suspensão, escalação ou rating moverem Brasil x Noruega ou "
+                        "Brasil x Inglaterra em pelo menos 3 p.p."
+                    ),
+                    "disagreed": True,
+                    "removed_from_main": False,
+                    "used_fallback": False,
+                }
+            ],
+        },
+    ]
+
+    text = render_template_post(bundle, post_index=13, run_date=date(2026, 7, 4))
+
+    backstage = text.split("DOIS BASTIDORES DA REUNIÃO DE HOJE:\n\n", 1)[1].split("📊", 1)[0]
+    assert "11,7% para 12,7%" in backstage
+    assert "74,1% para 80,4%" in backstage
+    assert "gatilho" in backstage
+    assert "odds" in backstage
+    assert "lesão" in backstage
+    assert "escalação" in backstage
+    assert "rating" in backstage
+    assert "3 p.p." in backstage
+    assert "caiu de 11,7% para 74,1%" not in backstage
 
 
 def test_template_post_discloses_active_models_and_opponent_room_fallback() -> None:

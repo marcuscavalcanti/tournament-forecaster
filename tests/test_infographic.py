@@ -33,7 +33,14 @@ def _bundle(stamp: str, *, title: float, final: float, messages: int, valid: int
             SimpleNamespace(opponent="Escócia", brazil_pct=73.0, draw_pct=19.0, opponent_pct=8.0),
         ],
         knockout_matches=[
-            SimpleNamespace(phase="16 avos", opponent="Japão", scenario_pct=100.0, brazil_pct=69.8, most_likely=True)
+            SimpleNamespace(
+                phase="16 avos",
+                opponent="Japão",
+                scenario_pct=100.0,
+                brazil_pct=69.8,
+                most_likely=True,
+                match_date="2026-06-29",
+            )
         ],
         metadata={
             "market_title_challenge": {"status": "within_threshold"},
@@ -96,6 +103,29 @@ def test_render_simulation_review_infographic_html_prioritizes_model_ranking_and
     assert "2/3 direção" in html
     assert "Japão 100%" in html
     assert "Sem dados empilhados" not in html
+
+
+def test_infographic_uses_next_future_knockout_after_round_of_32_is_completed() -> None:
+    bundle = _bundle("2026-07-04", title=11.7, final=23.5, messages=28, valid=24, invalid=4)
+    bundle.group_matches = [
+        SimpleNamespace(opponent="Marrocos", match_date="13/jun"),
+        SimpleNamespace(opponent="Haiti", match_date="19/jun"),
+        SimpleNamespace(opponent="Escócia", match_date="24/jun"),
+    ]
+    bundle.knockout_matches = [
+        SimpleNamespace(phase="16 avos", opponent="Japão", scenario_pct=100.0, brazil_pct=100.0, most_likely=True, match_date="2026-06-29"),
+        SimpleNamespace(phase="Oitavas", opponent="Noruega", scenario_pct=100.0, brazil_pct=74.1, most_likely=True, match_date="2026-07-05"),
+        SimpleNamespace(phase="Quartas", opponent="Inglaterra", scenario_pct=71.9, brazil_pct=50.3, most_likely=True, match_date="2026-07-11"),
+    ]
+
+    html = render_simulation_review_infographic_html([bundle])
+    svg = render_simulation_review_infographic_svg([bundle])
+
+    assert "Brasil x Noruega" in html
+    assert "Noruega 100%; Brasil 74,1%" in html
+    assert "Brasil x Japão" not in html
+    assert "Japão 100%" not in html
+    assert "Noruega 100%; Brasil 74,1%" in svg
 
 
 def test_collect_recent_infographic_bundles_keeps_current_and_previous_history(tmp_path: Path) -> None:

@@ -14,6 +14,15 @@ def _fmt_pct(value: float) -> str:
     return f"{value:.1f}%"
 
 
+def _stage_reach_probability(bundle: ReportBundle, key: str) -> float:
+    monte_carlo = bundle.metadata.get("monte_carlo", {}) if isinstance(bundle.metadata, dict) else {}
+    if isinstance(monte_carlo, dict):
+        stages = monte_carlo.get("stage_probabilities")
+        if isinstance(stages, dict) and stages.get(key) is not None:
+            return float(stages[key])
+    return float(bundle.stage_probabilities.get(key, 0.0))
+
+
 def _invalid_title_number(
     *,
     title_pct_source: object = None,
@@ -551,7 +560,7 @@ def render_linkedin_post(bundle: ReportBundle) -> str:
     lines.append("")
     lines.append(
         "Probabilidade de Brasil chegar às quartas: "
-        f"{_fmt_pct(bundle.stage_probabilities.get('quartas', 0.0))} "
+        f"{_fmt_pct(_stage_reach_probability(bundle, 'quartas'))} "
         "- chance de sobreviver ao grupo, aos 16 avos e às oitavas. "
         "Método: odds/mercados, ratings e simulação de chave."
         f"{_stage_ci(bundle, 'quartas')}"
@@ -559,7 +568,7 @@ def render_linkedin_post(bundle: ReportBundle) -> str:
     lines.append("")
     lines.append(
         "Probabilidade de Brasil chegar à semifinal: "
-        f"{_fmt_pct(bundle.stage_probabilities.get('semifinal', 0.0))} "
+        f"{_fmt_pct(_stage_reach_probability(bundle, 'semifinal'))} "
         "- daqui em diante o peso do adversário elite começa a morder. "
         "Método: força relativa, descanso, cartões e risco de lesão."
         f"{_stage_ci(bundle, 'semifinal')}"
@@ -567,7 +576,7 @@ def render_linkedin_post(bundle: ReportBundle) -> str:
     lines.append("")
     lines.append(
         "Probabilidade de Brasil chegar à final: "
-        f"{_fmt_pct(bundle.stage_probabilities.get('final', 0.0))} "
+        f"{_fmt_pct(_stage_reach_probability(bundle, 'final'))} "
         "- aqui entra a parte cruel do mata-mata: um jogo ruim derruba um projeto bom. "
         "Método: rating + mercado + cenário de chave."
         f"{_stage_ci(bundle, 'final')}"
