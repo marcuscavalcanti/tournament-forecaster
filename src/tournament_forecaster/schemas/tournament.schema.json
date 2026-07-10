@@ -248,6 +248,21 @@
           "then": {
             "properties": {"away_goals_rule": {"const": false}}
           }
+        },
+        {
+          "if": {
+            "properties": {"terminal": {"const": "championship"}},
+            "required": ["terminal"]
+          },
+          "then": {
+            "properties": {
+              "pairing": {
+                "properties": {
+                  "ties": {"minItems": 1, "maxItems": 1}
+                }
+              }
+            }
+          }
         }
       ]
     },

@@ -68,7 +68,28 @@ def _representative_tournament_document() -> dict[str, object]:
             {
                 "id": "final",
                 "type": "knockout",
-                "pairing": {"mode": "fixed", "ties": []},
+                "pairing": {
+                    "mode": "fixed",
+                    "ties": [
+                        {
+                            "id": "final-1",
+                            "entrants": [
+                                {
+                                    "type": "group_rank",
+                                    "stage_id": "group-stage",
+                                    "group": "A",
+                                    "rank": 1,
+                                },
+                                {
+                                    "type": "group_rank",
+                                    "stage_id": "group-stage",
+                                    "group": "B",
+                                    "rank": 1,
+                                },
+                            ],
+                        }
+                    ],
+                },
                 "legs": 1,
                 "home_away_order": "listed_team_first_leg_home",
                 "aggregate_tiebreak": "extra_time_then_penalties",
@@ -203,6 +224,44 @@ def test_schema_requires_exactly_one_championship_terminal(
     validator = _draft_2020_validator()(_schema_resources()["tournament.schema.json"])
 
     assert list(validator.iter_errors(document))
+
+
+@pytest.mark.parametrize("tie_count", [0, 2])
+def test_schema_requires_exactly_one_tie_in_championship_terminal(
+    tie_count: int,
+) -> None:
+    document = _representative_tournament_document()
+    final = document["stages"][2]  # type: ignore[index]
+    ties = final["pairing"]["ties"]  # type: ignore[index]
+    assert isinstance(ties, list)
+    if tie_count == 0:
+        ties.clear()
+    else:
+        ties.append({**deepcopy(ties[0]), "id": "final-2"})
+    validator = _draft_2020_validator()(_schema_resources()["tournament.schema.json"])
+
+    assert list(validator.iter_errors(document))
+
+
+@pytest.mark.parametrize("tie_count", [0, 2])
+def test_schema_allows_placement_terminal_with_any_tie_count(tie_count: int) -> None:
+    document = _representative_tournament_document()
+    stages = document["stages"]
+    assert isinstance(stages, list)
+    placement = deepcopy(stages[2])
+    placement["id"] = "placement"
+    placement["terminal"] = "placement"
+    ties = placement["pairing"]["ties"]
+    assert isinstance(ties, list)
+    if tie_count == 0:
+        ties.clear()
+    else:
+        ties.append({**deepcopy(ties[0]), "id": "placement-2"})
+        ties[0]["id"] = "placement-1"
+    stages.append(placement)
+    validator = _draft_2020_validator()(_schema_resources()["tournament.schema.json"])
+
+    assert list(validator.iter_errors(document)) == []
 
 
 def test_knockout_tie_schema_matches_typed_loader_contract() -> None:

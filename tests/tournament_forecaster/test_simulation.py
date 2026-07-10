@@ -446,6 +446,67 @@ def test_placement_terminal_never_determines_the_champion() -> None:
     assert forecast.championship_probability == 1.0
 
 
+def test_simulation_rejects_corrupted_championship_without_exactly_one_tie() -> None:
+    document = _document()
+    tournament = load_tournament_document(document)
+    corrupted_stages = deepcopy(document["stages"])
+    championship = next(
+        stage
+        for stage in corrupted_stages
+        if isinstance(stage, dict) and stage.get("terminal") == "championship"
+    )
+    championship["pairing"]["ties"] = []  # type: ignore[index]
+    object.__setattr__(tournament, "stages", tuple(corrupted_stages))
+
+    with pytest.raises(
+        TournamentValidationError,
+        match="championship terminal must contain exactly one tie",
+    ):
+        simulate_tournament(
+            tournament,
+            options=SimulationOptions(seed=59, iterations=1),
+        )
+
+
+def test_simulation_rejects_championship_stage_without_exactly_one_winner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import tournament_forecaster.simulation as simulation_module
+    from tournament_forecaster.stages.knockout_stage import KnockoutStageResult
+
+    tournament = load_tournament_document(_document())
+    original = simulation_module.simulate_knockout_stage
+
+    def corrupted_terminal_result(*args: object, **kwargs: object) -> KnockoutStageResult:
+        result = original(*args, **kwargs)  # type: ignore[arg-type]
+        stage = args[0]
+        assert isinstance(stage, dict) or hasattr(stage, "get")
+        if stage.get("terminal") == "championship":  # type: ignore[union-attr]
+            return KnockoutStageResult(
+                stage_id=result.stage_id,
+                pairings=result.pairings,
+                matches=result.matches,
+                winners={},
+                entrant_team_ids=result.entrant_team_ids,
+            )
+        return result
+
+    monkeypatch.setattr(
+        simulation_module,
+        "simulate_knockout_stage",
+        corrupted_terminal_result,
+    )
+
+    with pytest.raises(
+        TournamentValidationError,
+        match="championship terminal must resolve exactly one winner",
+    ):
+        simulate_tournament(
+            tournament,
+            options=SimulationOptions(seed=61, iterations=1),
+        )
+
+
 def test_higher_focus_rating_increases_title_probability() -> None:
     high_document = _document()
     low_document = deepcopy(high_document)

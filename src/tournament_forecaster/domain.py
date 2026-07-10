@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import math
 import re
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from itertools import combinations
 from types import MappingProxyType
 from typing import ClassVar
 
@@ -645,6 +647,10 @@ def _validate_knockout_stage(
             raise TournamentValidationError(
                 "knockout terminal must be championship or placement"
             )
+        if terminal == "championship" and len(ties) != 1:
+            raise TournamentValidationError(
+                "championship terminal must contain exactly one tie"
+            )
     return int(legs), tie_ids, tuple(entrant_sources)
 
 
@@ -657,11 +663,16 @@ def _completed_knockout_winner(
     legs = stage.get("legs")
     assert isinstance(legs, int) and not isinstance(legs, bool)
     facts_by_leg = {match.leg: match for match in matches}
+    all_legs_present = all(leg in facts_by_leg for leg in range(1, legs + 1))
+    if any(match.winner_team_id is not None for match in matches) and not all_legs_present:
+        raise TournamentValidationError(
+            "explicit winner requires every configured leg to be completed"
+        )
     if any(match.winner_team_id is not None and match.leg != legs for match in matches):
         raise TournamentValidationError(
             "completed two-leg winner must be declared on the final leg"
         )
-    if any(leg not in facts_by_leg for leg in range(1, legs + 1)):
+    if not all_legs_present:
         return None
 
     first = facts_by_leg[1]
@@ -719,6 +730,38 @@ def _completed_knockout_winner(
             "completed aggregate draw requires explicit winner"
         )
     return declared_winner
+
+
+def _group_fixture_pair_counts(stage: Mapping[str, object]) -> Counter[frozenset[str]]:
+    groups = stage["groups"]
+    assert isinstance(groups, Mapping)
+    rounds = _integer(
+        stage.get("rounds_per_pair", 1),
+        "group rounds per pair",
+        minimum=1,
+    )
+    expected: Counter[frozenset[str]] = Counter()
+    for roster in groups.values():
+        assert isinstance(roster, Sequence)
+        for first_team_id, second_team_id in combinations(
+            sorted(str(team_id) for team_id in roster),
+            2,
+        ):
+            expected[frozenset((first_team_id, second_team_id))] = rounds
+    return expected
+
+
+def _group_fixtures_are_complete(
+    stage: Mapping[str, object],
+    completed_matches: Sequence[CompletedMatch],
+) -> bool:
+    stage_id = str(stage["id"])
+    actual: Counter[frozenset[str]] = Counter(
+        frozenset((match.home_team_id, match.away_team_id))
+        for match in completed_matches
+        if match.stage_id == stage_id
+    )
+    return actual == _group_fixture_pair_counts(stage)
 
 
 def validate_tournament(tournament: Tournament) -> None:
@@ -785,6 +828,7 @@ def validate_tournament(tournament: Tournament) -> None:
         raise TournamentValidationError(
             "tournament must define exactly one knockout championship terminal"
         )
+    championship_stage_id = championship_terminals[0]
     dependencies: dict[str, set[str]] = {stage_id: set() for stage_id in stage_ids}
     for target_stage_id, sources in knockout_sources.items():
         for source in sources:
@@ -834,6 +878,13 @@ def validate_tournament(tournament: Tournament) -> None:
                 if owner_stage_id is None:
                     raise TournamentValidationError("match_winner entrant references an unknown tie")
                 dependencies[target_stage_id].add(owner_stage_id)
+    if any(
+        championship_stage_id in required_stages
+        for required_stages in dependencies.values()
+    ):
+        raise TournamentValidationError(
+            "championship terminal must be a graph sink"
+        )
     completed_stage_ids: set[str] = set()
     while len(completed_stage_ids) < len(stage_ids):
         ready = {
@@ -857,6 +908,7 @@ def validate_tournament(tournament: Tournament) -> None:
     completed_keys: set[tuple[str, int]] = set()
     completed_identities: dict[str, tuple[str, frozenset[str]]] = {}
     completed_knockout_ties: dict[tuple[str, str], list[CompletedMatch]] = {}
+    completed_by_stage: dict[str, list[CompletedMatch]] = {}
     for match in tournament.completed_matches:
         if not isinstance(match, CompletedMatch):
             raise TournamentValidationError("completed matches must be CompletedMatch values")
@@ -877,6 +929,7 @@ def validate_tournament(tournament: Tournament) -> None:
                 raise TournamentValidationError("completed match legs must use the same team pair")
         else:
             completed_identities[match.match_id] = identity
+        completed_by_stage.setdefault(match.stage_id, []).append(match)
         if match.leg > stage_leg_limits[match.stage_id]:
             raise TournamentValidationError("completed match leg exceeds stage contract")
         stage = stages_by_id[match.stage_id]
@@ -938,6 +991,38 @@ def validate_tournament(tournament: Tournament) -> None:
             tie_sources[str(tie["id"])] = tuple(
                 entrant for entrant in entrants if isinstance(entrant, Mapping)
             )
+
+    for (stage_id, match_id), _matches in sorted(completed_knockout_ties.items()):
+        stage = stages_by_id[stage_id]
+        pairing = stage["pairing"]
+        assert isinstance(pairing, Mapping)
+        sources = (
+            tie_sources[match_id]
+            if pairing["mode"] == "fixed"
+            else knockout_sources[stage_id]
+        )
+        rank_stages = {
+            (
+                "league" if source.get("type") == "league_rank" else "group",
+                str(source["stage_id"]),
+            )
+            for source in sources
+            if source.get("type") in {"group_rank", "best_additional", "league_rank"}
+        }
+        for rank_stage_type, rank_stage_id in sorted(rank_stages):
+            source_stage = stages_by_id[rank_stage_id]
+            source_facts = completed_by_stage.get(rank_stage_id, [])
+            if rank_stage_type == "group":
+                if not _group_fixtures_are_complete(source_stage, source_facts):
+                    raise TournamentValidationError(
+                        "completed rank-fed tie requires every generated group fixture"
+                    )
+            elif {match.match_id for match in source_facts} != set(
+                league_fixtures[rank_stage_id]
+            ):
+                raise TournamentValidationError(
+                    "completed rank-fed tie requires every configured league fixture"
+                )
 
     for (_, match_id), matches in sorted(completed_knockout_ties.items()):
         required_winners: list[str] = []

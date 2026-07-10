@@ -84,9 +84,11 @@ def _stable_stage_order(stages: Sequence[Mapping[str, object]]) -> tuple[Mapping
     return tuple(ordered)
 
 
-def _terminal_knockout_stage_id(stages: Sequence[Mapping[str, object]]) -> str | None:
+def _terminal_knockout_contract(
+    stages: Sequence[Mapping[str, object]],
+) -> tuple[str, str]:
     championship_stages = [
-        str(stage["id"])
+        stage
         for stage in stages
         if stage.get("type") == "knockout" and stage.get("terminal") == "championship"
     ]
@@ -94,7 +96,29 @@ def _terminal_knockout_stage_id(stages: Sequence[Mapping[str, object]]) -> str |
         raise TournamentValidationError(
             "tournament must define exactly one knockout championship terminal"
         )
-    return championship_stages[0]
+    championship_stage = championship_stages[0]
+    pairing = championship_stage.get("pairing")
+    ties = pairing.get("ties") if isinstance(pairing, Mapping) else None
+    if (
+        not isinstance(ties, Sequence)
+        or isinstance(ties, (str, bytes))
+        or len(ties) != 1
+        or not isinstance(ties[0], Mapping)
+    ):
+        raise TournamentValidationError(
+            "championship terminal must contain exactly one tie"
+        )
+    championship_tie_id = str(ties[0]["id"])
+    if any(
+        source.get("type") == "match_winner"
+        and source.get("match_id") == championship_tie_id
+        for stage in stages
+        for source in _tie_sources(stage)
+    ):
+        raise TournamentValidationError(
+            "championship terminal must be a graph sink"
+        )
+    return str(championship_stage["id"]), championship_tie_id
 
 
 def _canonical_value(value: object) -> object:
@@ -210,7 +234,7 @@ def simulate_tournament(
     simulation_options = options or SimulationOptions()
     rng = random.Random(simulation_options.seed)
     stages = _stable_stage_order(tournament.stages)
-    terminal_stage_id = _terminal_knockout_stage_id(stages)
+    terminal_stage_id, terminal_tie_id = _terminal_knockout_contract(stages)
     reach_counts: Counter[str] = Counter()
     matchup_counts: Counter[tuple[str, str]] = Counter()
     championship_count = 0
@@ -270,10 +294,13 @@ def simulate_tournament(
             if selected_focus in entrants:
                 reach_counts[stage_id] += 1
 
-        if terminal_stage_id is not None:
-            terminal = knockout_results[terminal_stage_id]
-            if len(terminal.winners) == 1 and next(iter(terminal.winners.values())) == selected_focus:
-                championship_count += 1
+        terminal = knockout_results.get(terminal_stage_id)
+        if terminal is None or set(terminal.winners) != {terminal_tie_id}:
+            raise TournamentValidationError(
+                "championship terminal must resolve exactly one winner"
+            )
+        if terminal.winners[terminal_tie_id] == selected_focus:
+            championship_count += 1
 
     iterations = simulation_options.iterations
     stage_probabilities = {
