@@ -1,12 +1,15 @@
 from pathlib import Path
 
 
-def test_readme_documents_current_framework_with_technical_and_functional_diagrams() -> None:
+def test_readme_links_target_product_and_technical_diagrams() -> None:
     raw = Path("README.md").read_text(encoding="utf-8")
     readme = raw.lower()
 
-    assert "diagrama técnico" in readme
-    assert "diagrama funcional" in readme
+    assert "target architecture diagrams" in readme
+    assert "docs/assets/architecture/product-flow.svg" in readme
+    assert "docs/assets/architecture/technical-architecture.svg" in readme
+    assert Path("docs/assets/architecture/product-flow.svg").is_file()
+    assert Path("docs/assets/architecture/technical-architecture.svg").is_file()
     assert "mediador não faz fetch externo" in readme
     assert "contrato único" in readme
     assert "busca fresca própria" in readme
@@ -19,7 +22,7 @@ def test_readme_documents_current_framework_with_technical_and_functional_diagra
     assert "data/.run.lock" in readme
     assert "blind_peer_review_enabled=false" in readme
     assert "llm_council_fast_path_enabled=false" in readme
-    assert "numeric chairman" in readme
+    assert "numeric_chairman_enabled=true" in readme
     assert "prepayment credits are depleted" in readme
     assert "70/30" not in readme
     assert "70% números, 30% contexto" not in readme
