@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -13,6 +14,8 @@ from .errors import TournamentValidationError
 
 _STABLE_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 _OUTPUT_KEY = re.compile(r"[a-z0-9]+(?:[-_][a-z0-9]+)*\Z")
+_STAGE_TYPES = frozenset({"round_robin_groups", "league_table", "knockout"})
+_PAIRING_MODES = frozenset({"fixed", "seeded_draw", "open_draw"})
 
 
 def _stable_id(value: object, label: str) -> str:
@@ -48,6 +51,18 @@ def _probability(value: object, label: str) -> float:
     return probability
 
 
+def _sequence(value: object, label: str) -> tuple[object, ...]:
+    if isinstance(value, (str, bytes, bytearray)) or not isinstance(value, Sequence):
+        raise TournamentValidationError(f"{label} must be a sequence")
+    return tuple(value)
+
+
+def _mapping(value: object, label: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise TournamentValidationError(f"{label} must be a mapping")
+    return value
+
+
 def _freeze(value: object) -> object:
     if isinstance(value, Mapping):
         return MappingProxyType({str(key): _freeze(item) for key, item in value.items()})
@@ -80,7 +95,7 @@ class Team:
     def __post_init__(self) -> None:
         _stable_id(self.id, "team id")
         _text(self.display_name, "team display name")
-        aliases = tuple(self.aliases)
+        aliases = _sequence(self.aliases, "team aliases")
         for alias in aliases:
             _text(alias, "team alias")
         if not isinstance(self.metadata, Mapping):
@@ -128,6 +143,10 @@ class CompletedMatch:
             _stable_id(self.winner_team_id, "completed match winner team id")
             if self.winner_team_id not in {self.home_team_id, self.away_team_id}:
                 raise TournamentValidationError("completed match winner must be one of its teams")
+            if self.score.home != self.score.away:
+                score_winner = self.home_team_id if self.score.home > self.score.away else self.away_team_id
+                if self.winner_team_id != score_winner:
+                    raise TournamentValidationError("completed match winner contradicts score")
         if not isinstance(self.metadata, Mapping):
             raise TournamentValidationError("completed match metadata must be a mapping")
         object.__setattr__(self, "metadata", _freeze_mapping(self.metadata))
@@ -149,12 +168,13 @@ class Tournament:
     schema_version: int = 2
 
     def __post_init__(self) -> None:
-        if not isinstance(self.teams, tuple):
-            object.__setattr__(self, "teams", tuple(self.teams))
-        if not isinstance(self.stages, tuple):
-            object.__setattr__(self, "stages", tuple(self.stages))
-        if not isinstance(self.completed_matches, tuple):
-            object.__setattr__(self, "completed_matches", tuple(self.completed_matches))
+        object.__setattr__(self, "teams", _sequence(self.teams, "teams"))
+        object.__setattr__(self, "stages", _sequence(self.stages, "stages"))
+        object.__setattr__(
+            self,
+            "completed_matches",
+            _sequence(self.completed_matches, "completed matches"),
+        )
         if not isinstance(self.ratings, Mapping):
             raise TournamentValidationError("ratings must be a mapping")
         if not isinstance(self.metadata, Mapping):
@@ -238,7 +258,7 @@ class Forecast:
             normalized_stage_probabilities[_stable_id(stage_id, "forecast stage id")] = _probability(
                 value, "forecast stage probability"
             )
-        matchups = tuple(self.matchup_probabilities)
+        matchups = _sequence(self.matchup_probabilities, "forecast matchup probabilities")
         if not all(isinstance(matchup, MatchupProbability) for matchup in matchups):
             raise TournamentValidationError("forecast matchup probabilities must be MatchupProbability values")
         object.__setattr__(self, "matchup_probabilities", matchups)
@@ -260,10 +280,10 @@ class Forecast:
             if lower > upper:
                 raise TournamentValidationError("confidence interval lower bound cannot exceed upper bound")
             normalized_intervals[label] = (lower, upper)
-        provenance = tuple(self.input_provenance)
+        provenance = _sequence(self.input_provenance, "forecast input provenance")
         if not all(isinstance(record, Mapping) for record in provenance):
             raise TournamentValidationError("forecast input provenance must contain mappings")
-        warnings = tuple(self.warnings)
+        warnings = _sequence(self.warnings, "forecast warnings")
         for warning in warnings:
             _text(warning, "forecast warning")
         if self.council is not None and not isinstance(self.council, Mapping):
@@ -293,6 +313,79 @@ class Forecast:
         }
 
 
+def _validate_group_stage(
+    stage: Mapping[str, object],
+    team_ids: set[str],
+) -> dict[str, str]:
+    stage_id = str(stage["id"])
+    groups = _mapping(stage.get("groups"), f"group stage {stage_id} groups")
+    if not groups:
+        raise TournamentValidationError("round-robin group stage must define groups")
+    memberships: dict[str, str] = {}
+    for group_id_value, roster_value in groups.items():
+        group_id = _stable_id(group_id_value, "group id")
+        roster = _sequence(roster_value, f"group {group_id} roster")
+        if len(roster) < 2:
+            raise TournamentValidationError("group roster must contain at least two teams")
+        local_ids: set[str] = set()
+        for team_id_value in roster:
+            team_id = _stable_id(team_id_value, "group team id")
+            if team_id not in team_ids:
+                raise TournamentValidationError("group rosters must reference configured teams")
+            if team_id in local_ids:
+                raise TournamentValidationError("group roster contains a duplicate team")
+            if team_id in memberships:
+                raise TournamentValidationError("a team cannot appear in multiple groups")
+            local_ids.add(team_id)
+            memberships[team_id] = group_id
+    return memberships
+
+
+def _validate_league_stage(
+    stage: Mapping[str, object],
+    team_ids: set[str],
+) -> dict[str, frozenset[str]]:
+    stage_id = str(stage["id"])
+    fixtures = _sequence(stage.get("fixtures"), f"league stage {stage_id} fixtures")
+    fixture_teams: dict[str, frozenset[str]] = {}
+    for fixture_value in fixtures:
+        fixture = _mapping(fixture_value, "league fixture")
+        match_id = _stable_id(fixture.get("match_id"), "league fixture match id")
+        home_team_id = _stable_id(fixture.get("home_team_id"), "league fixture home team id")
+        away_team_id = _stable_id(fixture.get("away_team_id"), "league fixture away team id")
+        if home_team_id == away_team_id:
+            raise TournamentValidationError("league fixture teams must be distinct")
+        if home_team_id not in team_ids or away_team_id not in team_ids:
+            raise TournamentValidationError("league fixtures must reference configured teams")
+        if match_id in fixture_teams:
+            raise TournamentValidationError("league fixture match ids must be unique")
+        fixture_teams[match_id] = frozenset({home_team_id, away_team_id})
+    return fixture_teams
+
+
+def _validate_knockout_stage(stage: Mapping[str, object]) -> int:
+    stage_id = str(stage["id"])
+    pairing = _mapping(stage.get("pairing"), f"knockout stage {stage_id} pairing")
+    mode = pairing.get("mode")
+    if mode not in _PAIRING_MODES:
+        raise TournamentValidationError("knockout pairing mode must be fixed, seeded_draw, or open_draw")
+    ties = _sequence(pairing.get("ties"), "knockout pairing ties")
+    tie_ids: set[str] = set()
+    for tie_value in ties:
+        tie = _mapping(tie_value, "knockout tie")
+        tie_id_value = tie.get("id", tie.get("match_id"))
+        if tie_id_value is None:
+            continue
+        tie_id = _stable_id(tie_id_value, "knockout tie id")
+        if tie_id in tie_ids:
+            raise TournamentValidationError("knockout tie ids must be unique")
+        tie_ids.add(tie_id)
+    legs = stage.get("legs")
+    if isinstance(legs, bool) or legs not in {1, 2}:
+        raise TournamentValidationError("knockout stage must use one or two legs")
+    return int(legs)
+
+
 def validate_tournament(tournament: Tournament) -> None:
     """Validate cross-object invariants after a tournament has been normalized."""
 
@@ -309,36 +402,80 @@ def validate_tournament(tournament: Tournament) -> None:
         raise TournamentValidationError("tournament must define at least one team")
     if not all(isinstance(team, Team) for team in tournament.teams):
         raise TournamentValidationError("tournament teams must be Team values")
-    team_ids = [team.id for team in tournament.teams]
-    if len(team_ids) != len(set(team_ids)):
+    team_id_list = [team.id for team in tournament.teams]
+    team_ids = set(team_id_list)
+    if len(team_id_list) != len(team_ids):
         raise TournamentValidationError("tournament team ids must be unique")
-    if tournament.focus_team_id not in set(team_ids):
+    if tournament.focus_team_id not in team_ids:
         raise TournamentValidationError("focus team id must reference a configured team")
     if not tournament.stages:
         raise TournamentValidationError("tournament must define at least one stage")
     stage_ids: list[str] = []
+    stages_by_id: dict[str, Mapping[str, object]] = {}
+    group_memberships: dict[str, dict[str, str]] = {}
+    league_fixtures: dict[str, dict[str, frozenset[str]]] = {}
+    stage_leg_limits: dict[str, int] = {}
     for stage in tournament.stages:
         stage_id = stage.get("id")
-        stage_type = stage.get("type")
-        stage_ids.append(_stable_id(stage_id, "stage id"))
-        _text(stage_type, "stage type")
+        stable_stage_id = _stable_id(stage_id, "stage id")
+        stage_type = _text(stage.get("type"), "stage type")
+        if stage_type not in _STAGE_TYPES:
+            raise TournamentValidationError("stage type must be a recognized stage type")
+        stage_ids.append(stable_stage_id)
+        stages_by_id[stable_stage_id] = stage
+        if stage_type == "round_robin_groups":
+            group_memberships[stable_stage_id] = _validate_group_stage(stage, team_ids)
+            stage_leg_limits[stable_stage_id] = 1
+        elif stage_type == "league_table":
+            league_fixtures[stable_stage_id] = _validate_league_stage(stage, team_ids)
+            stage_leg_limits[stable_stage_id] = 1
+        else:
+            stage_leg_limits[stable_stage_id] = _validate_knockout_stage(stage)
     if len(stage_ids) != len(set(stage_ids)):
         raise TournamentValidationError("tournament stage ids must be unique")
     for team_id, rating in tournament.ratings.items():
         _stable_id(team_id, "rating team id")
-        if team_id not in set(team_ids):
+        if team_id not in team_ids:
             raise TournamentValidationError("ratings must reference configured teams")
-        if isinstance(rating, bool) or not isinstance(rating, (int, float)):
-            raise TournamentValidationError("ratings must be numeric")
+        if (
+            isinstance(rating, bool)
+            or not isinstance(rating, (int, float))
+            or not math.isfinite(float(rating))
+        ):
+            raise TournamentValidationError("ratings must be finite numeric values")
     completed_keys: set[tuple[str, int]] = set()
+    completed_identities: dict[str, tuple[str, frozenset[str]]] = {}
     for match in tournament.completed_matches:
         if not isinstance(match, CompletedMatch):
             raise TournamentValidationError("completed matches must be CompletedMatch values")
-        if match.stage_id not in set(stage_ids):
+        if match.stage_id not in stages_by_id:
             raise TournamentValidationError("completed matches must reference configured stages")
-        if match.home_team_id not in set(team_ids) or match.away_team_id not in set(team_ids):
+        if match.home_team_id not in team_ids or match.away_team_id not in team_ids:
             raise TournamentValidationError("completed matches must reference configured teams")
         key = (match.match_id, match.leg)
         if key in completed_keys:
             raise TournamentValidationError("duplicate completed result for match id and leg")
         completed_keys.add(key)
+        identity = (match.stage_id, frozenset({match.home_team_id, match.away_team_id}))
+        previous_identity = completed_identities.get(match.match_id)
+        if previous_identity is not None:
+            if previous_identity[0] != identity[0]:
+                raise TournamentValidationError("completed match legs must use the same stage")
+            if previous_identity[1] != identity[1]:
+                raise TournamentValidationError("completed match legs must use the same team pair")
+        else:
+            completed_identities[match.match_id] = identity
+        if match.leg > stage_leg_limits[match.stage_id]:
+            raise TournamentValidationError("completed match leg exceeds stage contract")
+        if match.stage_id in group_memberships:
+            membership = group_memberships[match.stage_id]
+            if (
+                match.home_team_id not in membership
+                or match.away_team_id not in membership
+                or membership[match.home_team_id] != membership[match.away_team_id]
+            ):
+                raise TournamentValidationError("completed group match teams must share the same configured group")
+        if match.stage_id in league_fixtures:
+            configured_pair = league_fixtures[match.stage_id].get(match.match_id)
+            if configured_pair != identity[1]:
+                raise TournamentValidationError("completed league match must reference a configured league fixture")

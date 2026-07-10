@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping
 from pathlib import Path
 
 from .domain import CompletedMatch, Score, Team, Tournament
 from .errors import TournamentValidationError
+
+
+def _reject_non_finite_json_constant(value: str) -> object:
+    raise TournamentValidationError(f"JSON number {value} must be finite")
 
 
 def _mapping(value: object, label: str) -> Mapping[str, object]:
@@ -84,8 +89,12 @@ def load_tournament_document(document: Mapping[str, object]) -> Tournament:
     ratings_document = _mapping(root.get("ratings", {}), "ratings")
     ratings: dict[str, float] = {}
     for team_id, rating in ratings_document.items():
-        if isinstance(rating, bool) or not isinstance(rating, (int, float)):
-            raise TournamentValidationError("ratings must contain numeric values")
+        if (
+            isinstance(rating, bool)
+            or not isinstance(rating, (int, float))
+            or not math.isfinite(float(rating))
+        ):
+            raise TournamentValidationError("ratings must contain finite numeric values")
         ratings[team_id] = float(rating)
     completed_matches = tuple(
         _completed_match(_mapping(value, f"completed_matches[{index}]"), index)
@@ -113,7 +122,10 @@ def load_tournament(path: Path) -> Tournament:
     """Load one UTF-8 JSON tournament document from ``path``."""
 
     try:
-        document = json.loads(path.read_text(encoding="utf-8"))
+        document = json.loads(
+            path.read_text(encoding="utf-8"),
+            parse_constant=_reject_non_finite_json_constant,
+        )
     except json.JSONDecodeError as error:
         raise TournamentValidationError(f"invalid tournament JSON: {error.msg}") from error
     return load_tournament_document(_mapping(document, "tournament document"))

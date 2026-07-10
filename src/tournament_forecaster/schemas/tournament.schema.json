@@ -2,13 +2,209 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://tournament-forecaster.example/schemas/tournament.schema.json",
   "title": "Tournament Forecaster tournament document",
+  "$defs": {
+    "stable_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "probability": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "score": {
+      "type": "object",
+      "required": ["home", "away"],
+      "properties": {
+        "home": {"type": "integer", "minimum": 0},
+        "away": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "team": {
+      "type": "object",
+      "required": ["id", "display_name"],
+      "properties": {
+        "id": {"$ref": "#/$defs/stable_id"},
+        "display_name": {"type": "string", "minLength": 1},
+        "aliases": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "metadata": {"$ref": "#/$defs/metadata"}
+      },
+      "additionalProperties": false
+    },
+    "points": {
+      "type": "object",
+      "required": ["win", "draw", "loss"],
+      "properties": {
+        "win": {"type": "integer"},
+        "draw": {"type": "integer"},
+        "loss": {"type": "integer"}
+      },
+      "additionalProperties": false
+    },
+    "tiebreakers": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "points",
+          "goal_difference",
+          "goals_for",
+          "wins",
+          "rating",
+          "team_id"
+        ]
+      }
+    },
+    "team_roster": {
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/stable_id"}
+    },
+    "fixture": {
+      "type": "object",
+      "required": ["match_id", "home_team_id", "away_team_id"],
+      "properties": {
+        "match_id": {"$ref": "#/$defs/stable_id"},
+        "home_team_id": {"$ref": "#/$defs/stable_id"},
+        "away_team_id": {"$ref": "#/$defs/stable_id"},
+        "metadata": {"$ref": "#/$defs/metadata"}
+      },
+      "additionalProperties": false
+    },
+    "round_robin_stage": {
+      "type": "object",
+      "required": ["id", "type", "groups"],
+      "properties": {
+        "id": {"$ref": "#/$defs/stable_id"},
+        "type": {"const": "round_robin_groups"},
+        "groups": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {"$ref": "#/$defs/stable_id"},
+          "additionalProperties": {"$ref": "#/$defs/team_roster"}
+        },
+        "rounds_per_pair": {"type": "integer", "minimum": 1},
+        "points": {"$ref": "#/$defs/points"},
+        "tiebreakers": {"$ref": "#/$defs/tiebreakers"},
+        "qualification": {
+          "type": "object",
+          "required": ["direct_per_group", "best_additional"],
+          "properties": {
+            "direct_per_group": {"type": "integer", "minimum": 0},
+            "best_additional": {"type": "integer", "minimum": 0}
+          },
+          "additionalProperties": false
+        },
+        "metadata": {"$ref": "#/$defs/metadata"}
+      },
+      "additionalProperties": false
+    },
+    "qualification_band": {
+      "type": "object",
+      "required": ["ranks", "destination"],
+      "properties": {
+        "ranks": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {"type": "integer", "minimum": 1}
+        },
+        "destination": {"$ref": "#/$defs/stable_id"}
+      },
+      "additionalProperties": false
+    },
+    "league_stage": {
+      "type": "object",
+      "required": ["id", "type", "fixtures"],
+      "properties": {
+        "id": {"$ref": "#/$defs/stable_id"},
+        "type": {"const": "league_table"},
+        "fixtures": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/fixture"}
+        },
+        "points": {"$ref": "#/$defs/points"},
+        "tiebreakers": {"$ref": "#/$defs/tiebreakers"},
+        "qualification_bands": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/qualification_band"}
+        },
+        "metadata": {"$ref": "#/$defs/metadata"}
+      },
+      "additionalProperties": false
+    },
+    "knockout_pairing": {
+      "type": "object",
+      "required": ["mode", "ties"],
+      "properties": {
+        "mode": {"enum": ["fixed", "seeded_draw", "open_draw"]},
+        "ties": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "knockout_stage": {
+      "type": "object",
+      "required": ["id", "type", "pairing", "legs"],
+      "properties": {
+        "id": {"$ref": "#/$defs/stable_id"},
+        "type": {"const": "knockout"},
+        "pairing": {"$ref": "#/$defs/knockout_pairing"},
+        "legs": {"type": "integer", "enum": [1, 2]},
+        "home_away_order": {"type": "string", "minLength": 1},
+        "aggregate_tiebreak": {"type": "string", "minLength": 1},
+        "away_goals_rule": {"type": "boolean"},
+        "metadata": {"$ref": "#/$defs/metadata"}
+      },
+      "additionalProperties": false
+    },
+    "completed_match": {
+      "type": "object",
+      "required": [
+        "match_id",
+        "stage_id",
+        "home_team_id",
+        "away_team_id",
+        "score"
+      ],
+      "properties": {
+        "match_id": {"$ref": "#/$defs/stable_id"},
+        "stage_id": {"$ref": "#/$defs/stable_id"},
+        "home_team_id": {"$ref": "#/$defs/stable_id"},
+        "away_team_id": {"$ref": "#/$defs/stable_id"},
+        "score": {"$ref": "#/$defs/score"},
+        "leg": {"type": "integer", "minimum": 1, "maximum": 2},
+        "winner_team_id": {"$ref": "#/$defs/stable_id"},
+        "metadata": {"$ref": "#/$defs/metadata"}
+      },
+      "additionalProperties": false
+    }
+  },
   "type": "object",
   "required": [
     "schema_version",
     "tournament",
     "focus_team_id",
     "teams",
-    "stages"
+    "stages",
+    "ratings",
+    "completed_matches"
   ],
   "properties": {
     "schema_version": {"const": 2},
@@ -16,26 +212,39 @@
       "type": "object",
       "required": ["id", "display_name"],
       "properties": {
-        "id": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+        "id": {"$ref": "#/$defs/stable_id"},
         "display_name": {"type": "string", "minLength": 1},
         "season": {"type": "string", "minLength": 1}
-      }
+      },
+      "additionalProperties": false
     },
-    "focus_team_id": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+    "focus_team_id": {"$ref": "#/$defs/stable_id"},
     "teams": {
       "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/team"}
+    },
+    "stages": {
+      "type": "array",
+      "minItems": 1,
       "items": {
-        "type": "object",
-        "required": ["id", "display_name"],
-        "properties": {
-          "id": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
-          "display_name": {"type": "string", "minLength": 1},
-          "aliases": {"type": "array", "items": {"type": "string", "minLength": 1}}
-        }
+        "oneOf": [
+          {"$ref": "#/$defs/round_robin_stage"},
+          {"$ref": "#/$defs/league_stage"},
+          {"$ref": "#/$defs/knockout_stage"}
+        ]
       }
     },
-    "stages": {"type": "array", "minItems": 1, "items": {"type": "object"}},
-    "ratings": {"type": "object", "additionalProperties": {"type": "number"}},
-    "completed_matches": {"type": "array", "items": {"type": "object"}}
-  }
+    "ratings": {
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/stable_id"},
+      "additionalProperties": {"type": "number"}
+    },
+    "completed_matches": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/completed_match"}
+    },
+    "metadata": {"$ref": "#/$defs/metadata"}
+  },
+  "additionalProperties": false
 }

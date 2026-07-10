@@ -44,5 +44,11 @@ def _json_value(value: object) -> object:
 def atomic_write_json(path: Path, value: Mapping[str, object]) -> None:
     """Atomically write an indented, deterministically ordered JSON mapping."""
 
-    text = json.dumps(_json_value(value), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    text = json.dumps(
+        _json_value(value),
+        allow_nan=False,
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    ) + "\n"
     atomic_write_text(path, text)

@@ -2,6 +2,55 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://tournament-forecaster.example/schemas/forecast.schema.json",
   "title": "Tournament Forecaster forecast artifact",
+  "$defs": {
+    "stable_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "output_key": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:[-_][a-z0-9]+)*$"
+    },
+    "probability": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "matchup": {
+      "type": "object",
+      "required": ["stage_id", "opponent_team_id", "probability"],
+      "properties": {
+        "stage_id": {"$ref": "#/$defs/stable_id"},
+        "opponent_team_id": {"$ref": "#/$defs/stable_id"},
+        "probability": {"$ref": "#/$defs/probability"}
+      },
+      "additionalProperties": false
+    },
+    "confidence_interval": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {"$ref": "#/$defs/probability"}
+    },
+    "provenance": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {"type": "string", "minLength": 1},
+        "name": {"type": "string", "minLength": 1},
+        "source": {"type": "string", "minLength": 1},
+        "source_id": {"$ref": "#/$defs/stable_id"},
+        "uri": {"type": "string", "minLength": 1},
+        "retrieved_at": {"type": "string", "minLength": 1},
+        "metadata": {"$ref": "#/$defs/metadata"}
+      },
+      "additionalProperties": false
+    }
+  },
   "type": "object",
   "required": [
     "schema_version",
@@ -19,16 +68,39 @@
   ],
   "properties": {
     "schema_version": {"const": 2},
-    "run_id": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+    "run_id": {"$ref": "#/$defs/stable_id"},
     "generated_at": {"type": "string", "minLength": 1},
-    "tournament_id": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
-    "focus_team_id": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
-    "stage_probabilities": {"type": "object", "additionalProperties": {"type": "number", "minimum": 0, "maximum": 1}},
-    "matchup_probabilities": {"type": "array", "items": {"type": "object"}},
-    "championship_probability": {"type": "number", "minimum": 0, "maximum": 1},
-    "confidence_intervals": {"type": "object"},
-    "input_provenance": {"type": "array"},
-    "warnings": {"type": "array", "items": {"type": "string"}},
-    "council": {"type": ["object", "null"]}
-  }
+    "tournament_id": {"$ref": "#/$defs/stable_id"},
+    "focus_team_id": {"$ref": "#/$defs/stable_id"},
+    "stage_probabilities": {
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/stable_id"},
+      "additionalProperties": {"$ref": "#/$defs/probability"}
+    },
+    "matchup_probabilities": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/matchup"}
+    },
+    "championship_probability": {"$ref": "#/$defs/probability"},
+    "confidence_intervals": {
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/output_key"},
+      "additionalProperties": {"$ref": "#/$defs/confidence_interval"}
+    },
+    "input_provenance": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/provenance"}
+    },
+    "warnings": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "council": {
+      "oneOf": [
+        {"$ref": "#/$defs/metadata"},
+        {"type": "null"}
+      ]
+    }
+  },
+  "additionalProperties": false
 }
