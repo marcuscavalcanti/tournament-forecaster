@@ -121,6 +121,13 @@ The `worldcup_brazil` package becomes a deprecated shim. It delegates to the gen
 
 The existing 9,613-line `pipeline.py` is not split as a preliminary cleanup. Behavior is extracted behind tested interfaces in small increments. Unrelated refactoring is excluded from the migration.
 
+Two canonical diagrams accompany this design:
+
+- [`docs/PRODUCT_FLOW.md`](../../PRODUCT_FLOW.md) explains the user journey from zero-key quickstart through recurring forecast updates.
+- [`docs/ARCHITECTURE.md`](../../ARCHITECTURE.md) explains technical components, trust boundaries, ownership, failure behavior, and one complete run.
+
+The README includes condensed versions and links to these detailed diagrams. The diagrams describe the target architecture until migration is complete; they must not be presented as current implementation status before the corresponding release gates pass.
+
 ## 4. Tournament Schema
 
 Every tournament document declares `schema_version`, metadata, teams, stages, transitions, ratings, completed results, and the focus team.
@@ -534,8 +541,9 @@ Network integration tests are opt-in and never required for pull requests from f
 The public repository includes:
 
 - `README.md`: value proposition, clone-to-first-output commands at the top, architecture summary, three competition examples, output example, limitations, and links.
+- `docs/PRODUCT_FLOW.md`: product journey, simple and advanced paths, outputs, and the result-to-rerun feedback loop.
 - `docs/CONFIGURATION.md`: complete schema reference.
-- `docs/ARCHITECTURE.md`: stage engine, simulation flow, council boundary, and compatibility model.
+- `docs/ARCHITECTURE.md`: component diagram, execution sequence, stage engine, trust boundaries, council ownership limits, and compatibility model.
 - `docs/ADDING_A_COMPETITION.md`: authoring and validating a preset.
 - `docs/PROVIDERS.md`: obtaining credentials, discovering competition identifiers, configuring result and odds providers, and running safe dry-runs.
 - `docs/ADDING_A_PROVIDER.md`: provider protocol, normalization, redaction, fixtures, and contract tests.
@@ -563,6 +571,7 @@ The repository may become public only when all of these conditions hold:
 12. Provider documentation covers credential acquisition, secure storage, dry-run validation, rotation, and revocation.
 13. FIFA result synchronization passes offline contract fixtures for both group and knockout matches, including penalties and conflict rejection.
 14. README claims match implemented formats; no roadmap feature is presented as available.
+15. Product and technical Mermaid diagrams render on GitHub, match the implemented CLI and schemas, and clearly label any remaining target-state behavior.
 
 ## 16. Migration Sequence
 
