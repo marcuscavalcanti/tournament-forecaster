@@ -39,9 +39,14 @@ def test_example_config_uses_three_agent_source_quorum_and_repair_attempts() -> 
     assert config["source_planning_repair_attempts"] >= 1
     assert config["repair_format_removals_with_quorum"] is True
     assert config["source_planning_format_repair_timeout_seconds"] == 60
+    assert config["repair_reentry_eligible_removals_before_meeting"] is True
+    assert config["source_planning_floor_repair_timeout_seconds"] == 120
     assert config["blind_peer_review_enabled"] is False
     assert config["blind_peer_review_shadow_only"] is True
+    assert config["blind_peer_review_on_consensus_exit"] is True
     assert config["blind_peer_review_timeout_seconds"] == 90
+    assert config["blind_peer_review_acceptance_threshold"] == 0.72
+    assert config["blind_peer_review_max_self_preference_leakage"] == 0.2
     assert config["numeric_chairman_enabled"] is True
     assert config["llm_council_fast_path_enabled"] is False
     assert config["llm_council_fast_path_shadow_only"] is True
@@ -67,11 +72,20 @@ def test_example_config_uses_three_agent_source_quorum_and_repair_attempts() -> 
     assert config["monte_carlo"]["prior_rating_sigma"] == 150.0
     assert len(teams) == 48
     assert configured_rating_teams == teams
+    assert config["completed_group_matches"][0]["team_a"] == "Brasil"
+    assert config["completed_group_matches"][0]["score_a"] == 1
+    assert config["completed_group_matches"][0]["score_b"] == 1
+    perplexity = next(agent for agent in config["agents"] if agent["slot"] == "Perplexity Pro")
+    role_budgets = perplexity["max_output_tokens_by_role"]
+    assert role_budgets["preflight"] <= 1200
+    assert role_budgets["meeting_response"] <= 1800
+    assert role_budgets["agent_reentry_probe"] <= 2200
+    assert role_budgets["meeting_response"] < perplexity["max_output_tokens"]
 
 
 def test_load_config_watchdog_payload_exposes_safe_operational_config() -> None:
     config = {
-        "custom_hashtag": "#copaComAchismo",
+        "custom_hashtag": "#CopaComAchismo",
         "baseline_title_pct": 11.0,
         "group_name": "GRUPO C",
         "brazil_group": "C",
@@ -90,9 +104,14 @@ def test_load_config_watchdog_payload_exposes_safe_operational_config() -> None:
         "source_planning_repair_attempts": 2,
         "repair_format_removals_with_quorum": True,
         "source_planning_format_repair_timeout_seconds": 60,
+        "repair_reentry_eligible_removals_before_meeting": True,
+        "source_planning_floor_repair_timeout_seconds": 120,
         "blind_peer_review_enabled": False,
         "blind_peer_review_shadow_only": True,
+        "blind_peer_review_on_consensus_exit": True,
         "blind_peer_review_timeout_seconds": 90,
+        "blind_peer_review_acceptance_threshold": 0.72,
+        "blind_peer_review_max_self_preference_leakage": 0.2,
         "numeric_chairman_enabled": True,
         "llm_council_fast_path_enabled": False,
         "llm_council_fast_path_shadow_only": True,
@@ -134,6 +153,7 @@ def test_load_config_watchdog_payload_exposes_safe_operational_config() -> None:
     assert "rating_uncertainty=True" in detail
     assert "quorum_min=3" in detail
     assert "repair_attempts=2" in detail
+    assert "pre_meeting_repair=True" in detail
     assert "meeting_min_participants=3" in detail
     assert "meeting_quorum_rule=maioria simples" in detail
     assert "full_path_coverage=True" in detail
@@ -153,9 +173,14 @@ def test_load_config_watchdog_payload_exposes_safe_operational_config() -> None:
     assert extra["watchdog_config"]["source_planning_repair_attempts"] == 2
     assert extra["watchdog_config"]["repair_format_removals_with_quorum"] is True
     assert extra["watchdog_config"]["source_planning_format_repair_timeout_seconds"] == 60
+    assert extra["watchdog_config"]["repair_reentry_eligible_removals_before_meeting"] is True
+    assert extra["watchdog_config"]["source_planning_floor_repair_timeout_seconds"] == 120
     assert extra["watchdog_config"]["blind_peer_review_enabled"] is False
     assert extra["watchdog_config"]["blind_peer_review_shadow_only"] is True
+    assert extra["watchdog_config"]["blind_peer_review_on_consensus_exit"] is True
     assert extra["watchdog_config"]["blind_peer_review_timeout_seconds"] == 90
+    assert extra["watchdog_config"]["blind_peer_review_acceptance_threshold"] == 0.72
+    assert extra["watchdog_config"]["blind_peer_review_max_self_preference_leakage"] == 0.2
     assert extra["watchdog_config"]["numeric_chairman_enabled"] is True
     assert extra["watchdog_config"]["llm_council_fast_path_enabled"] is False
     assert extra["watchdog_config"]["llm_council_fast_path_shadow_only"] is True

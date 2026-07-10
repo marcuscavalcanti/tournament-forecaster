@@ -6,7 +6,7 @@ import asyncio
 import json
 
 from worldcup_brazil import cli
-from worldcup_brazil.agents import AgentPreflightResult
+from worldcup_brazil.agents import AgentPreflightResult, render_agent_preflight_stdout
 from worldcup_brazil.consensus import AgentOpinion
 from worldcup_brazil.pipeline import ReportCoherenceError, SourcePlanningQuorumError
 import scripts.run_agent_source_harness as source_harness
@@ -41,6 +41,49 @@ def test_agent_source_harness_entrypoint_can_be_invoked_directly() -> None:
     assert "Diagnose agent source-planning quorum" in result.stdout
 
 
+def test_update_group_results_entrypoint_can_be_invoked_directly() -> None:
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, "scripts/update_group_results.py", "--help"],
+        cwd=root,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Validate and merge completed group results" in result.stdout
+
+
+def test_update_market_odds_entrypoint_can_be_invoked_directly() -> None:
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, "scripts/update_market_odds.py", "--help"],
+        cwd=root,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Validate and merge outright market odds" in result.stdout
+
+
+def test_opponent_room_contract_validator_passes() -> None:
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, "scripts/validate_opponent_room_contract.py"],
+        cwd=root,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+
+
 def test_cli_reports_source_quorum_failure_without_python_stacktrace(
     tmp_path: Path,
     monkeypatch,
@@ -66,6 +109,8 @@ def test_cli_reports_source_quorum_failure_without_python_stacktrace(
             str(tmp_path / "outputs"),
             "--watchdog-log",
             str(tmp_path / "watchdog.jsonl"),
+            "--lock-file",
+            str(tmp_path / ".run.lock"),
             "--force",
             "--no-watchdog",
             "--no-model-preflight",
@@ -103,6 +148,8 @@ def test_cli_reports_report_coherence_failure_without_python_stacktrace(
             str(tmp_path / "outputs"),
             "--watchdog-log",
             str(tmp_path / "watchdog.jsonl"),
+            "--lock-file",
+            str(tmp_path / ".run.lock"),
             "--force",
             "--no-watchdog",
             "--no-model-preflight",
@@ -183,6 +230,8 @@ def test_cli_prints_model_preflight_before_report_outputs(
             str(tmp_path / "outputs"),
             "--watchdog-log",
             str(tmp_path / "watchdog.jsonl"),
+            "--lock-file",
+            str(tmp_path / ".run.lock"),
             "--force",
             "--no-watchdog",
         ]
@@ -385,3 +434,117 @@ def test_agent_source_harness_excludes_failed_preflight_slots_before_planning(tm
     assert report["preflight_failed_slots"] == ["Gemini Pro"]
     assert report["active_agent_slots_after_preflight"] == ["GPT 5.5", "DeepSeek V4 Pro", "Perplexity Pro"]
     assert report["ready_count"] == 3
+
+
+def test_agent_source_harness_keeps_recoverable_preflight_contract_warning(
+    tmp_path: Path, monkeypatch
+) -> None:
+    async def fake_preflights(specs, *, timeout, contract):
+        return [
+            AgentPreflightResult(
+                slot=spec.slot,
+                provider=spec.provider,
+                configured_model=spec.model,
+                runtime_model=spec.model,
+                method="mock",
+                ok=spec.slot != "Perplexity Pro",
+                message=(
+                    "Planejamento de fontes configurado para checar Brasil, odds e chaveamento"
+                    if spec.slot == "Perplexity Pro"
+                    else "Contrato mínimo OK"
+                ),
+                error=(
+                    "contrato mínimo incompleto: sem source_urls/source_queries não-Opta"
+                    if spec.slot == "Perplexity Pro"
+                    else ""
+                ),
+            )
+            for spec in specs
+        ]
+
+    async def fake_call_all_agents(prompt, *, specs, baseline_title_pct, timeout, allow_local_fallback, progress_callback=None):
+        assert [spec.slot for spec in specs] == ["GPT 5.5", "Perplexity Pro", "DeepSeek V4 Pro"]
+        return [
+            AgentOpinion(
+                agent=spec.slot,
+                title_pct=8.0,
+                summary="Plano com fonte verificável.",
+                source_urls=[f"https://example.com/{spec.slot.lower().split()[0]}"],
+            )
+            for spec in specs
+        ]
+
+    config = tmp_path / "config.json"
+    config.write_text(
+        json.dumps(
+            {
+                "baseline_title_pct": 8.0,
+                "model_preflight_enabled": True,
+                "model_preflight_contract_enabled": True,
+                "doctor_preflight_timeout_seconds": 30,
+                "exclude_slots_failing_preflight": True,
+                "minimum_source_ready_agents": 3,
+                "require_agent_source_plan": True,
+                "agents": [
+                    {"slot": "GPT 5.5", "provider": "openai", "model": "gpt-5.5", "env_api_key": None, "endpoint": "x"},
+                    {
+                        "slot": "Perplexity Pro",
+                        "provider": "openai-compatible",
+                        "model": "sonar-pro",
+                        "env_api_key": None,
+                        "endpoint": "x",
+                    },
+                    {
+                        "slot": "DeepSeek V4 Pro",
+                        "provider": "openai-compatible",
+                        "model": "deepseek-v4-pro",
+                        "env_api_key": None,
+                        "endpoint": "x",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(source_harness, "run_agent_preflights", fake_preflights)
+    monkeypatch.setattr(source_harness, "call_all_agents", fake_call_all_agents)
+    args = argparse.Namespace(
+        config=config,
+        env_file=tmp_path / ".env",
+        shell_env_file=tmp_path / ".zshrc",
+        output=tmp_path / "report.json",
+        strict_agents=False,
+        no_model_preflight=False,
+        now="2026-06-20T10:00:00+00:00",
+        json=False,
+    )
+
+    result = asyncio.run(source_harness.run_harness(args))
+    report = json.loads(args.output.read_text(encoding="utf-8"))
+
+    assert result == 0
+    assert report["preflight_failed_slots"] == []
+    assert report["preflight_warning_slots"] == ["Perplexity Pro"]
+    assert report["active_agent_slots_after_preflight"] == ["GPT 5.5", "Perplexity Pro", "DeepSeek V4 Pro"]
+    assert report["ready_count"] == 3
+
+
+def test_preflight_stdout_marks_recoverable_contract_miss_as_warning() -> None:
+    output = render_agent_preflight_stdout(
+        [
+            AgentPreflightResult(
+                slot="Perplexity Pro",
+                provider="openai-compatible",
+                configured_model="sonar-pro",
+                runtime_model="sonar-pro",
+                method="api:openai-compatible",
+                ok=False,
+                message="Planejamento parcial retornado.",
+                error="contrato mínimo incompleto: sem source_urls/source_queries não-Opta",
+                elapsed_ms=9417,
+            )
+        ]
+    )
+
+    assert "[WARN] Perplexity Pro" in output
+    assert "0/1 OK; 1 aviso(s) recuperável(eis); 0 falha(s) dura(s)" in output

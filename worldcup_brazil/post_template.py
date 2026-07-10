@@ -10,10 +10,6 @@ from typing import Any
 
 MAX_POST_CHARS = 3000
 
-ORDINAIS = [
-    "PRIMEIRO", "SEGUNDO", "TERCEIRO", "QUARTO", "QUINTO", "SEXTO", "SÉTIMO", "OITAVO",
-]
-
 WEEKDAYS_PT = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"]
 MONTHS_PT = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"]
 
@@ -33,7 +29,7 @@ TEMPLATE = """{round_header}
 
 {title}
 
-Como prometi: na véspera de cada jogo do Brasil, os 5 modelos de IA (Opus, GPT, Gemini, DeepSeek e Perplexity) se reúnem, pesquisam casas de apostas, rankings de força e notícias do dia, e saem com uma decisão em grupo.
+{model_intro}
 
 👉 {next_game_header}
 
@@ -41,15 +37,17 @@ Como prometi: na véspera de cada jogo do Brasil, os 5 modelos de IA (Opus, GPT,
 
 {rest_group_line}
 
+{completed_knockout_line}
+
 O CAMINHO ATÉ O HEXA, adversário por adversário (no mata-mata não tem empate: ou passa, ou volta pra casa):
 
-{path_blocks}RESUMO DA CAMINHADA: o Brasil chega nos 16 avos em {r16_pct} dos cenários, oitavas em {r8_pct}, quartas em {qf_pct}, na semifinal em {sf_pct}, na final em {final_pct}... e levanta a taça em {title_pct} 🏆.
+{path_blocks}{journey_summary}
 
-Esse mapa MUDA a cada rodada, pois o modelo calcula o resultado dos outros grupos e troca os adversários pelo caminho. Por isso o modelo roda de novo na véspera/dia de cada jogo e eu posto o mapa atualizado.
-
+{change_section}
 {backstage_section}📊 NÚMEROS DA RODADA:
 {round_stats}
 
+{run_note}
 ⚠️ Propositalmente, o modelo da OPTA, que fez 350K simulações para chegar nos resultados e favoritos da Copa, é a única fonte não permitida dos modelos consultarem.
 
 Chegou agora? O post #1 explica tudo:
@@ -57,14 +55,17 @@ https://www.linkedin.com/posts/marcuscavalcanti_copacomachismo-brasil-brazil-sha
 
 Próximo post: véspera/dia de Brasil x {next_post_game}, com o mapa recalculado.
 
-Galera do bolão: {palpite_bolao}. Usem com moderação.
-
-#CopaComAchismo #Brasil #Brazil #WorldCup2026 #Futebol #Football #Soccer #Hexa
+#CopaComAchismo #Brasil #Brazil #WorldCup2026 #Futebol #Football #Soccer #Hexa #WorldCup #CopaDoMundo
 """
 
 PHASE_BLOCK = """➡️ {header} ({phase_date}){phase_venue}
 • Mais provável: {ml_opp} ({ml_scn} de chance desse cruzamento) → {ml_label}: {ml_br} | {ml_opp}: {ml_opp_pct}
 • Alternativa: {alt_opp} ({alt_scn}) → {alt_label}: {alt_br} | {alt_opp}: {alt_opp_pct}
+
+"""
+
+PHASE_BLOCK_LOCKED = """➡️ {header} ({phase_date}){phase_venue}
+• Definido: {ml_opp} ({ml_scn} de chance desse cruzamento) → {ml_label}: {ml_br} | {ml_opp}: {ml_opp_pct}
 
 """
 
@@ -87,12 +88,427 @@ def _pct_int(value: Any) -> str:
         return "—"
 
 
+def _pct_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _short_date(raw: Any) -> str:
     text = str(raw or "").strip()
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
         parsed = date.fromisoformat(text)
         return f"{parsed.day}/{MONTHS_PT[parsed.month - 1]}"
     return text or "data a definir"
+
+
+def _post_game_label(match: Any) -> str:
+    return f"{getattr(match, 'opponent', '')} ({_short_date(getattr(match, 'match_date', ''))})"
+
+
+def _group_state(bundle: Any) -> dict[str, Any]:
+    metadata = getattr(bundle, "metadata", {}) or {}
+    direct = metadata.get("group_state")
+    if isinstance(direct, dict) and direct:
+        return direct
+    monte_carlo = metadata.get("monte_carlo") if isinstance(metadata.get("monte_carlo"), dict) else {}
+    state = monte_carlo.get("group_state") if isinstance(monte_carlo, dict) else {}
+    return state if isinstance(state, dict) else {}
+
+
+def _first_place_pct(bundle: Any) -> str:
+    state = _group_state(bundle)
+    if state.get("brazil_first_pct") is not None:
+        return _pct_int(state.get("brazil_first_pct"))
+    group_summary = str(getattr(bundle, "group_summary", "") or "")
+    first_place = re.search(r"1º:\s*~?(\d+(?:[,.]\d+)?)%", group_summary)
+    if first_place:
+        return _pct_int(first_place.group(1).replace(",", "."))
+    return "—"
+
+
+def _completed_group_context(bundle: Any, *, before_date: date | None = None) -> str:
+    scores = _completed_group_scores(bundle, before_date=before_date)
+    if not scores:
+        return ""
+    if len(scores) == 1:
+        return f"Com {scores[0]}, "
+    return f"Com {_join_pt(scores)}, "
+
+
+def _completed_knockout_payload(bundle: Any) -> dict[str, Any]:
+    metadata = getattr(bundle, "metadata", {}) or {}
+    if not isinstance(metadata, dict):
+        return {}
+    direct = metadata.get("completed_knockout_matches")
+    if isinstance(direct, dict) and direct:
+        return direct
+    monte_carlo = metadata.get("monte_carlo")
+    if isinstance(monte_carlo, dict):
+        nested = monte_carlo.get("completed_knockout_matches")
+        if isinstance(nested, dict):
+            return nested
+    return {}
+
+
+def _completed_knockout_items(bundle: Any) -> list[dict[str, Any]]:
+    payload = _completed_knockout_payload(bundle)
+    matches = payload.get("matches") if isinstance(payload, dict) else []
+    return [item for item in matches or [] if isinstance(item, dict)]
+
+
+def _parse_brazil_knockout_score(score: Any) -> tuple[str, int, int] | None:
+    match = re.match(r"^\s*(.+?)\s+(\d+)-(\d+)\s+(.+?)\s*$", str(score or ""))
+    if not match:
+        return None
+    team_a, score_a_raw, score_b_raw, team_b = match.groups()
+    score_a = int(score_a_raw)
+    score_b = int(score_b_raw)
+    if _normalize_beat(team_a) == "brasil":
+        return str(team_b).strip(), score_a, score_b
+    if _normalize_beat(team_b) == "brasil":
+        return str(team_a).strip(), score_b, score_a
+    return None
+
+
+def _next_phase_label_from_completed(phase: str) -> str:
+    normalized = str(phase or "").strip()
+    return {
+        "16 avos": "oitavas de final",
+        "Oitavas": "quartas de final",
+        "Quartas": "semifinal",
+        "Semifinal": "final",
+    }.get(normalized, "próxima fase")
+
+
+def _completed_brazil_knockout_context(bundle: Any, *, before_date: date | None = None) -> str:
+    year = _bundle_year(bundle)
+    candidates: list[tuple[date, int, dict[str, Any], tuple[str, int, int]]] = []
+    for index, item in enumerate(_completed_knockout_items(bundle)):
+        parsed = _parse_brazil_knockout_score(item.get("score"))
+        if parsed is None:
+            continue
+        winner = _normalize_beat(item.get("winner", ""))
+        if winner and winner != "brasil":
+            continue
+        played_at = _parse_completed_match_date(item.get("date"), year=year)
+        if before_date is not None and played_at is not None and played_at >= before_date:
+            continue
+        sort_date = played_at or date.min
+        candidates.append((sort_date, index, item, parsed))
+    if not candidates:
+        return ""
+    _played_at, _index, item, (opponent, brazil_goals, opponent_goals) = sorted(candidates)[-1]
+    phase = str(item.get("phase") or "").strip()
+    score = f"{brazil_goals}x{opponent_goals}"
+    return (
+        f"Avançou para as {_next_phase_label_from_completed(phase)} com a vitória "
+        f"nos {phase} sobre o {opponent} por {score}."
+    )
+
+
+def _brazil_group_is_complete(bundle: Any) -> bool:
+    return len(_completed_group_scores(bundle)) >= 6
+
+
+def _completed_group_scores(bundle: Any, *, before_date: date | None = None) -> list[str]:
+    metadata = getattr(bundle, "metadata", {}) or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    completed_matches = metadata.get("completed_group_matches") or []
+    if isinstance(completed_matches, list) and completed_matches:
+        return _scores_from_completed_group_matches(bundle, completed_matches, before_date=before_date)
+
+    state = _group_state(bundle)
+    results = state.get("completed_results") or []
+    if not isinstance(results, list):
+        return []
+    scores = [
+        str(item.get("score") or "").strip()
+        for item in results
+        if isinstance(item, dict) and str(item.get("score") or "").strip()
+    ]
+    return scores
+
+
+def _scores_from_completed_group_matches(
+    bundle: Any,
+    completed_matches: list[Any],
+    *,
+    before_date: date | None = None,
+) -> list[str]:
+    group_matches = list(getattr(bundle, "group_matches", []) or [])
+    group_teams = {"brasil"}
+    group_teams.update(_normalize_beat(getattr(match, "opponent", "")) for match in group_matches)
+    state = _group_state(bundle)
+    brazil_group = str(state.get("brazil_group") or "").strip()
+    for item in completed_matches:
+        if not isinstance(item, dict):
+            continue
+        if "brasil" in {
+            _normalize_beat(item.get("team_a", "")),
+            _normalize_beat(item.get("team_b", "")),
+        }:
+            brazil_group = brazil_group or str(item.get("group") or "").strip()
+            break
+
+    dated_scores: list[tuple[date, int, str]] = []
+    undated_scores: list[tuple[int, str]] = []
+    year = _bundle_year(bundle)
+    for index, item in enumerate(completed_matches):
+        if not isinstance(item, dict):
+            continue
+        item_group = str(item.get("group") or "").strip()
+        if brazil_group and item_group and item_group != brazil_group:
+            continue
+        team_a = str(item.get("team_a") or "").strip()
+        team_b = str(item.get("team_b") or "").strip()
+        if group_teams and not ({_normalize_beat(team_a), _normalize_beat(team_b)} <= group_teams):
+            continue
+        score = _completed_match_score(item)
+        if not score:
+            continue
+        played_at = _parse_completed_match_date(item.get("date"), year=year)
+        if before_date is not None and played_at is not None and played_at >= before_date:
+            continue
+        if played_at is None:
+            undated_scores.append((index, score))
+        else:
+            dated_scores.append((played_at, index, score))
+    ordered = [score for _played_at, _index, score in sorted(dated_scores)] + [
+        score for _index, score in sorted(undated_scores)
+    ]
+    deduped: list[str] = []
+    for score in ordered:
+        if score not in deduped:
+            deduped.append(score)
+    return deduped
+
+
+def _completed_match_score(item: dict[str, Any]) -> str:
+    score = str(item.get("score") or "").strip()
+    if score:
+        return score
+    team_a = str(item.get("team_a") or "").strip()
+    team_b = str(item.get("team_b") or "").strip()
+    if not team_a or not team_b:
+        return ""
+    try:
+        score_a = int(item.get("score_a"))
+        score_b = int(item.get("score_b"))
+    except (TypeError, ValueError):
+        return ""
+    return f"{team_a} {score_a}-{score_b} {team_b}"
+
+
+def _parse_completed_match_date(raw: Any, *, year: int) -> date | None:
+    text = str(raw or "").strip()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        return date.fromisoformat(text)
+    return _parse_group_date(text, year=year)
+
+
+def _group_match_has_completed_score(bundle: Any, match: Any) -> bool:
+    opponent = _normalize_beat(getattr(match, "opponent", ""))
+    if not opponent:
+        return False
+    for score in _completed_group_scores(bundle):
+        normalized = _normalize_beat(score)
+        if "brasil" in normalized and opponent in normalized:
+            return True
+    return False
+
+
+def _group_loss_pct(match: Any) -> float | None:
+    try:
+        brazil_pct = float(getattr(match, "brazil_pct", 0.0) or 0.0)
+        draw_pct = getattr(match, "draw_pct", None)
+        if draw_pct is None:
+            opponent_pct = getattr(match, "opponent_pct", None)
+            return None if opponent_pct is None else max(0.0, float(opponent_pct))
+        return round(max(0.0, 100.0 - brazil_pct - float(draw_pct)), 1)
+    except (TypeError, ValueError):
+        return getattr(match, "opponent_pct", None)
+
+
+def _join_pt(items: list[str]) -> str:
+    clean = [item.strip() for item in items if item and item.strip()]
+    if not clean:
+        return ""
+    if len(clean) == 1:
+        return clean[0]
+    return ", ".join(clean[:-1]) + f" e {clean[-1]}"
+
+
+def _active_model_names(bundle: Any, removed: list[str]) -> list[str]:
+    removed_set = {name.strip() for name in removed if name and name.strip()}
+    source_plans = getattr(bundle, "source_plan_by_model", None)
+    if isinstance(source_plans, dict) and source_plans:
+        return [str(name) for name in source_plans if str(name).strip() and str(name) not in removed_set]
+
+    participation = getattr(bundle, "model_participation", {}) or {}
+    if not isinstance(participation, dict):
+        return []
+    consensus_participants = participation.get("last_consensus_participants")
+    if isinstance(consensus_participants, list) and consensus_participants:
+        return [
+            str(name)
+            for name in consensus_participants
+            if str(name).strip() and str(name).strip() not in removed_set
+        ]
+    protagonists = participation.get("protagonist_counts")
+    if isinstance(protagonists, dict):
+        return [str(name) for name in protagonists if str(name).strip() and str(name) not in removed_set]
+    return []
+
+
+def _compact_removed_reason(reason: str) -> str:
+    normalized = _normalize_beat(reason)
+    if "fallback operacional" in normalized or "busca/fetch" in normalized or "fetch externo" in normalized:
+        return "fallback operacional de busca/fetch"
+    if "fora do escopo" in normalized and "futebol competitivo" in normalized:
+        return "fontes fora do escopo competitivo"
+    if "falha operacional" in normalized and "sem resposta externa verificavel" in normalized:
+        return "falha operacional sem fonte verificável"
+    if "sem fonte" in normalized or "fonte verificavel" in normalized:
+        return "sem fonte verificável"
+    if "quota" in normalized or "429" in normalized or "credit" in normalized:
+        return "limite/quota de API"
+    text = str(reason or "").strip()
+    return _truncate_words(text, 90) if text else "motivo operacional"
+
+
+def _removed_models_clause(removed: list[str], reasons: dict[str, Any]) -> str:
+    if not removed:
+        return ""
+    removed_names = _join_pt([str(name) for name in removed])
+    verb = "saiu" if len(removed) == 1 else "saíram"
+    reason_values = []
+    for name in removed:
+        reason = _compact_removed_reason(str(reasons.get(name, "") if isinstance(reasons, dict) else ""))
+        if reason and reason not in reason_values:
+            reason_values.append(reason)
+    reason_text = f" por {'; '.join(reason_values[:2])}" if reason_values else ""
+    return f"; {removed_names} {verb} no planejamento{reason_text}"
+
+
+def _model_intro(bundle: Any) -> str:
+    metadata = getattr(bundle, "metadata", {}) or {}
+    removed = list(metadata.get("removed_agent_slots") or [])
+    reasons = metadata.get("removed_agent_reasons") if isinstance(metadata, dict) else {}
+    active_names = _active_model_names(bundle, [str(item) for item in removed])
+    active_count = len(active_names)
+    if active_count:
+        names = f" ({_join_pt(active_names)})" if active_names else ""
+        return (
+            f"Como prometi: {active_count} modelos ativos{names} pesquisaram odds, rankings e notícias"
+            f"{_removed_models_clause([str(item) for item in removed], reasons)}."
+        )
+    return (
+        "Como prometi: na véspera de cada jogo, os modelos pesquisam odds, rankings e notícias, "
+        "debatem e fecham uma decisão em grupo."
+    )
+
+
+def _run_note(bundle: Any) -> str:
+    metadata = getattr(bundle, "metadata", {}) or {}
+    notes: list[str] = []
+    opponent_room = metadata.get("parallel_opponent_debriefing") or {}
+    if opponent_room.get("enabled") and not bool(opponent_room.get("usable_for_main_room", True)):
+        notes.append("cruzamentos sem consenso lateral; usei Monte Carlo/bracket oficial")
+    if (
+        opponent_room.get("enabled")
+        and bool(opponent_room.get("usable_for_main_room", False))
+        and opponent_room.get("phase_coverage_sufficient") is False
+    ):
+        notes.append("sala lateral validou o mapa, mas o ranking de adversários por fase segue ancorado no Monte Carlo")
+    market_challenge = metadata.get("market_title_challenge") or {}
+    if isinstance(market_challenge, dict) and bool(market_challenge.get("triggered")):
+        low = market_challenge.get("market_low_pct")
+        high = market_challenge.get("market_high_pct", low)
+        if low is not None and high is not None and abs(float(high) - float(low)) >= 0.05:
+            market = f"{_pct(low)}-{_pct(high)}"
+        else:
+            market = _pct(low)
+        notes.append(
+            "Mercado desafia o Hexa: "
+            f"funil 60/40 {_pct(market_challenge.get('model_title_pct'))}; mercado {market}. Mantive funil"
+        )
+    context_warning_teams: list[str] = []
+    for warning in getattr(bundle, "warnings", []) or []:
+        warning_text = str(warning or "")
+        if not (
+            "Ajuste contextual fora da faixa de revisão" in warning_text
+            or "Ajuste contextual pode estar subagrupado" in warning_text
+            or "team_context_model_match_shock_without_calendar_anchor" in warning_text
+        ):
+            continue
+        team_match = re.search(r":\s*([^:;]+?)\s+(?:teve|ficou|com|sem|gerou)", warning_text)
+        if not team_match:
+            team_match = re.search(r"\bpara\s+([^:;]+):", warning_text)
+        team = team_match.group(1).strip() if team_match else ""
+        if team and team not in context_warning_teams:
+            context_warning_teams.append(team)
+    if context_warning_teams:
+        teams = ", ".join(context_warning_teams[:3])
+        extra = " e outros" if len(context_warning_teams) > 3 else ""
+        notes.append(f"ajustes contextuais em revisão ({teams}{extra})")
+    if not notes:
+        return ""
+    return "⚠️ Nota do run: " + "; ".join(notes) + ".\n\n"
+
+
+def _analysis_short_date(bundle: Any) -> str:
+    raw = str(getattr(bundle, "generated_at_iso", "") or "")
+    try:
+        parsed = datetime.fromisoformat(raw).date()
+        return _short_date(parsed.isoformat()).upper()
+    except ValueError:
+        return "ÚLTIMA ANÁLISE"
+
+
+def _bundle_date(bundle: Any) -> date | None:
+    raw = str(getattr(bundle, "generated_at_iso", "") or "")
+    try:
+        return datetime.fromisoformat(raw).date()
+    except ValueError:
+        return None
+
+
+def _bundle_year(bundle: Any) -> int:
+    parsed = _bundle_date(bundle)
+    return parsed.year if parsed is not None else date.today().year
+
+
+def _match_reference_label(match: Any, index: int, played_at: date) -> str:
+    when = f"{played_at.day:02d}/{played_at.month:02d}"
+    if index == 0:
+        return f"A ESTREIA ({when})"
+    opponent = str(getattr(match, "opponent", "") or "adversário").strip()
+    return f"BRASIL x {opponent.upper()} ({when})"
+
+
+def _change_reference_label(bundle: Any) -> str:
+    reference_date = _bundle_date(bundle)
+    if reference_date is not None:
+        try:
+            match, match_date, is_knockout = _select_featured_match(bundle, run_date=reference_date)
+        except ValueError:
+            match = match_date = None
+            is_knockout = False
+        if match is not None and match_date is not None:
+            if is_knockout:
+                when = f"{match_date.day:02d}/{match_date.month:02d}"
+                opponent = str(getattr(match, "opponent", "") or "adversário").strip()
+                return f"BRASIL x {opponent.upper()} ({when})"
+            group_matches = list(getattr(bundle, "group_matches", []) or [])
+            try:
+                index = group_matches.index(match)
+            except ValueError:
+                index = 1
+            return _match_reference_label(match, index, match_date)
+    return _analysis_short_date(bundle)
 
 
 def _parse_group_date(raw: Any, *, year: int) -> date | None:
@@ -108,6 +524,13 @@ def _parse_group_date(raw: Any, *, year: int) -> date | None:
     return date(year, months_ascii.index(month_token) + 1, day)
 
 
+def _parse_template_match_date(raw: Any, *, year: int) -> date | None:
+    text = str(raw or "").strip()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        return date.fromisoformat(text)
+    return _parse_group_date(text, year=year)
+
+
 def _venue_suffix(value: Any) -> str:
     text = str(value or "").strip()
     return f" - {text}" if text else ""
@@ -117,12 +540,19 @@ def _normalize_beat(text: str) -> str:
     return unicodedata.normalize("NFKD", str(text or "")).encode("ascii", "ignore").decode("ascii").strip().lower()
 
 
+def _last_sentence_boundary(text: str) -> int:
+    matches = list(re.finditer(r"(?<!\d)[.!?]\s+", text))
+    if not matches:
+        return -1
+    return matches[-1].start()
+
+
 def _truncate_words(text: str, limit: int) -> str:
     clean = " ".join(str(text or "").split())
     if len(clean) <= limit:
         return clean
     window = clean[:limit]
-    sentence_end = max(window.rfind(". "), window.rfind("! "), window.rfind("? "))
+    sentence_end = _last_sentence_boundary(window)
     if sentence_end >= int(limit * 0.45):
         return window[: sentence_end + 1]
     clause_end = max(window.rfind("; "), window.rfind(" — "), window.rfind(", mas "))
@@ -130,7 +560,9 @@ def _truncate_words(text: str, limit: int) -> str:
         return window[:clause_end].rstrip(",;") + "."
     and_end = window.rfind(" e ")
     if and_end >= int(limit * 0.6):
-        return window[:and_end].rstrip(",;") + "."
+        before_and = window[:and_end].rstrip(",; ")
+        if not re.search(r"\d\.?$", before_and):
+            return before_and + "."
     cut = window.rsplit(" ", 1)[0]
     return cut.rstrip(",;:.") + "…"
 
@@ -151,13 +583,30 @@ JARGON_GLOSSARY = [
     ("monte carlo", "simulação"),
     ("weak_prior", "modo cauteloso"),
     ("prior", "ponto de partida"),
+    ("de-vigado", "sem margem das casas"),
+    ("de-vig", "sem margem das casas"),
+    ("overround", "margem total das casas"),
+    ("prediction market", "mercado de previsão"),
+    ("prior_rating_sigma", "incerteza da nota"),
+    ("ci", "intervalo"),
 ]
 
 # Comparados em forma normalizada (sem acento, minúsculas) — ver _normalize_beat.
 EVENT_HINTS = (
     "lesao", "lesion", "fora da copa", "fora do ano", "corte", "cortado", "suspens",
     "stale", "fantasma", "errado", "errada", "apto", "duvida", "desfalque",
-    "mercado", "odds", "cotac", "titular",
+    "mercado", "odds", "cotac", "titular", "upset", "mata-mata", "tatico",
+    "tatica", "coesao", "resiliencia", "superestim", "subestim", "japao",
+    "holanda", "cauda", "risco ponderado",
+)
+
+BEHAVIOR_HINTS = (
+    "erro de fonte", "fonte nova", "verificacao fresca", "nao sustenta", "grupo c",
+    "nao titulo", "disputo a lideranca", "assumo o protagonismo", "rejeito",
+)
+
+ABSTRACT_HINTS = (
+    "convergencia auditavel", "simulacao configurad", "premissa", "central de consenso",
 )
 
 
@@ -171,10 +620,14 @@ def _plain_language(sentence: str) -> str:
 def _sentence_score(sentence: str) -> int:
     lowered = _normalize_beat(sentence)
     score = 0
+    if any(hint in lowered for hint in BEHAVIOR_HINTS):
+        score += 4
     if any(hint in lowered for hint in EVENT_HINTS):
         score += 2
     if re.search(r"\d", sentence):
         score += 1
+    if any(hint in lowered for hint in ABSTRACT_HINTS) and not any(hint in lowered for hint in BEHAVIOR_HINTS):
+        score -= 2
     if lowered.startswith(("concordo", "discordo", "sim,")):
         score -= 1
     return score
@@ -183,7 +636,7 @@ def _sentence_score(sentence: str) -> int:
 def _best_sentence(answer: str) -> tuple[int, str]:
     """Sentença com mais substância: evento concreto vale 2, número vale 1."""
     best_score, best = 0, ""
-    for sentence in re.split(r"(?<=[.!?])\s+|;\s+", " ".join(str(answer or "").split())):
+    for sentence in re.split(r"(?<=[!?])\s+|(?<!\d\.)(?<=[.])\s+|;\s+", " ".join(str(answer or "").split())):
         if len(sentence) < 25:
             continue
         score = _sentence_score(sentence)
@@ -197,30 +650,418 @@ def _best_sentence(answer: str) -> tuple[int, str]:
     return best_score, best
 
 
+def _display_pct_token(raw: str) -> str:
+    return f"{raw.replace('.', ',')}%"
+
+
+def _matchup_label(answer: str) -> str:
+    match = re.search(
+        r"\bBrasil\s+x\s+([A-ZÁÉÍÓÚÂÊÔÃÕÇ][A-Za-zÀ-ÿ' -]{1,28}?)(?=[\s,.;:!?]|$)",
+        answer,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return "A chance debatida"
+    opponent = " ".join(match.group(1).split()).strip(" ,.;:!?")
+    return f"Brasil x {opponent}"
+
+
+TEAM_BEAT_PATTERN = r"Holanda|Japão|Japao|Suécia|Suecia|Inglaterra|França|Franca|Argentina|Portugal"
+
+
+def _display_team_token(raw: str) -> str:
+    return raw.replace("Japao", "Japão").replace("Suecia", "Suécia").replace("Franca", "França")
+
+
+def _tactical_reason_bits(answer: str) -> list[str]:
+    normalized = _normalize_beat(answer)
+    bits: list[str] = []
+    if "neymar" in normalized and "raphinha" in normalized:
+        bits.append("Neymar/Raphinha reduziram a criação")
+    elif "neymar" in normalized:
+        bits.append("Neymar pesou na criação")
+    elif "raphinha" in normalized:
+        bits.append("Raphinha pesou no corredor direito")
+    if "coesao" in normalized or "criacao lenta" in normalized:
+        bits.append("criação lenta entrou na conta")
+    if "upset plaus" in normalized:
+        bits.append("Japão virou upset plausível")
+    elif "resiliencia" in normalized and "japao" in normalized:
+        bits.append("Japão mostrou resiliência")
+    return bits
+
+
+def _weighted_pair_branch(compact: str) -> tuple[str, str] | None:
+    pairs: list[tuple[str, float, str]] = []
+    for match in re.finditer(
+        rf"\b({TEAM_BEAT_PATTERN})\b\s+(\d{{1,3}}(?:[,.]\d+)?)\s*%\s*[x×]\s*(\d{{1,3}}(?:[,.]\d+)?)\s*%",
+        compact,
+        flags=re.IGNORECASE,
+    ):
+        win_raw = match.group(3)
+        try:
+            win_value = float(win_raw.replace(",", "."))
+        except ValueError:
+            continue
+        pairs.append((_display_team_token(match.group(1)), win_value, win_raw))
+    if not pairs:
+        return None
+    team, _value, raw = min(pairs, key=lambda item: item[1])
+    return team, raw
+
+
+def _branch_probability(compact: str) -> tuple[str, str] | None:
+    pair = _weighted_pair_branch(compact)
+    if pair:
+        return pair
+    cauda = re.search(
+        rf"cauda[^.?!]{{0,90}}?\b({TEAM_BEAT_PATTERN})\b[^%]{{0,55}}?(\d{{1,3}}(?:[,.]\d+)?)\s*%",
+        compact,
+        flags=re.IGNORECASE,
+    )
+    if cauda:
+        return _display_team_token(cauda.group(1)), cauda.group(2)
+    direct = re.search(
+        rf"\b({TEAM_BEAT_PATTERN})\b\s*(?:\(|em\s+)?(\d{{1,3}}(?:[,.]\d+)?)\s*%",
+        compact,
+        flags=re.IGNORECASE,
+    )
+    if direct:
+        return _display_team_token(direct.group(1)), direct.group(2)
+    return None
+
+
+def _weighted_path_beat(round_index: Any, agent: str, answer: str) -> tuple[int, str] | None:
+    compact = " ".join(str(answer or "").split())
+    normalized = _normalize_beat(compact)
+    weighted_frame = any(
+        hint in normalized
+        for hint in (
+            "risco ponderado", "avanco ponderado", "bloco 2f", "essa media",
+            "conta ponderada", "calculo ponderado",
+        )
+    )
+    headline_frame = "headline" in normalized
+    if not (weighted_frame or headline_frame) or "cauda" not in normalized:
+        return None
+    weighted = re.search(
+        r"(?:risco\s+ponderad\w*|avan[cç]o\s+ponderad\w*|m[eé]dia|conta\s+ponderad\w*)"
+        r"[^%]{0,60}?(\d{1,3}(?:[,.]\d+)?)\s*%",
+        compact,
+        flags=re.IGNORECASE,
+    )
+    if weighted is None:
+        weighted = re.search(
+            r"result\w*\s+em\s+(\d{1,3}(?:[,.]\d+)?)\s*%",
+            compact,
+            flags=re.IGNORECASE,
+        )
+    branch = _branch_probability(compact)
+    if weighted_frame and weighted and branch:
+        team, branch_pct = branch
+        return (
+            12,
+            f"Rodada {round_index} — {agent}: 16 avos virou risco ponderado de "
+            f"{_display_pct_token(weighted.group(1))}; cauda {team} a {_display_pct_token(branch_pct)}.",
+        )
+    headline = re.search(
+        r"\bBrasil\s+(\d{1,3}(?:[,.]\d+)?)\s*%\s+vs\s+"
+        rf"({TEAM_BEAT_PATTERN})\b",
+        compact,
+        flags=re.IGNORECASE,
+    )
+    if headline_frame and headline and branch:
+        modal = _display_team_token(headline.group(2))
+        team, branch_pct = branch
+        return (
+            11,
+            f"Rodada {round_index} — {agent}: {modal} a {_display_pct_token(headline.group(1))} era headline; "
+            f"cauda {team} a {_display_pct_token(branch_pct)}.",
+        )
+    return None
+
+
+def _tactical_adjustment_beat(round_index: Any, agent: str, answer: str) -> tuple[int, str] | None:
+    compact = " ".join(str(answer or "").split())
+    normalized = _normalize_beat(compact)
+    if not any(hint in normalized for hint in ("ajust", "reduz", "baix", "cai", "superestim", "subestim", "comprim")):
+        return None
+    percentages = re.findall(r"\b(\d{1,3}(?:[.,]\d+)?)\s*%", compact)
+    if len(percentages) < 2:
+        return None
+    matchup = _matchup_label(compact)
+    first, second = (_display_pct_token(percentages[0]), _display_pct_token(percentages[1]))
+    direction = "caiu" if any(hint in normalized for hint in ("reduz", "baix", "cai", "superestim", "comprim")) else "foi ajustada"
+    bits = _tactical_reason_bits(compact)
+    reason = ""
+    if bits:
+        reason = "; " + "; ".join(bits[:3]) + "."
+    else:
+        score, sentence = _best_sentence(compact)
+        if score >= 2 and sentence:
+            reason = ": " + _truncate_words(_plain_language(sentence), 95)
+            if not reason.endswith((".", "!", "?", "…")):
+                reason += "."
+    return (
+        10 + len(bits),
+        f"Rodada {round_index} — {agent}: {matchup} {direction} de {first} para {second}{reason}",
+    )
+
+
+def _locked_crossing_sensitivity_beat(round_index: Any, agent: str, answer: str) -> tuple[int, str] | None:
+    compact = " ".join(str(answer or "").split())
+    normalized = _normalize_beat(compact)
+    if not (
+        "japao" in normalized
+        and ("cenario 100%" in normalized or "100% no cruzamento" in normalized or "2f = japao" in normalized)
+        and ("+1pp" in normalized or "1 p.p" in normalized or "1 ponto" in normalized)
+        and "titulo" in normalized
+    ):
+        return None
+    shift = re.search(
+        r"(\d{1,3}(?:[,.]\d+)?)\s*(?:->|→)\s*(\d{1,3}(?:[,.]\d+)?)\s*%",
+        compact,
+    )
+    if shift:
+        range_text = f" de {_display_pct_token(shift.group(1))} para {_display_pct_token(shift.group(2))}"
+    else:
+        pct = re.search(r"Jap[aã]o[^\d%]{0,90}(\d{1,3}(?:[,.]\d+)?)\s*%", compact, flags=re.IGNORECASE)
+        range_text = f" de {_display_pct_token(pct.group(1))}" if pct else ""
+    return (
+        16,
+        f"Rodada {round_index} — {agent}: Japão 100% no cruzamento; "
+        f"para +1pp no título, Brasil teria que sair{range_text} contra o Japão.",
+    )
+
+
+def _modal_chain_beat(round_index: Any, agent: str, answer: str) -> tuple[int, str] | None:
+    compact = " ".join(str(answer or "").split())
+    normalized = _normalize_beat(compact)
+    if not (
+        "multiplic" in normalized
+        and "cadeia" in normalized
+        and ("ramos alternativos" in normalized or "todos os oponentes" in normalized or "todo o bracket" in normalized)
+    ):
+        return None
+    product = re.search(r"(?:daria|dava|aprox\w*)[^\d%]{0,25}(\d{1,3}(?:[,.]\d+)?)\s*%", compact, flags=re.IGNORECASE)
+    if product is None:
+        product = re.search(r"(?:≈|~|cerca\s+de)\s*(\d{1,3}(?:[,.]\d+)?)\s*%", compact, flags=re.IGNORECASE)
+    title = re.search(r"\b(7[,.]8)\s*%", compact)
+    product_text = _display_pct_token(product.group(1)) if product else "bem menos"
+    title_text = _display_pct_token(title.group(1)) if title else "o título"
+    return (
+        15,
+        f"Rodada {round_index} — {agent}: multiplicar só a cadeia mais provável dava {product_text}; "
+        f"{title_text} vem dos ramos alternativos do bracket.",
+    )
+
+
+def _norway_title_threshold_beat(round_index: Any, agent: str, answer: str) -> tuple[int, str] | None:
+    compact = " ".join(str(answer or "").split())
+    normalized = _normalize_beat(compact)
+    if not (
+        "noruega" in normalized
+        and "titulo" in normalized
+        and re.search(r"11[,.]7\s*%", compact)
+        and re.search(r"12[,.]7\s*%", compact)
+        and re.search(r"74[,.]1\s*%", compact)
+        and re.search(r"80[,.]4\s*%", compact)
+    ):
+        return None
+    return (
+        19,
+        f"Rodada {round_index} — {agent}: para subir o Hexa de 11,7% para 12,7%, "
+        "Brasil x Noruega teria que saltar de 74,1% para 80,4%; a sala recusou sem fato novo.",
+    )
+
+
+def _trigger_matrix_beat(round_index: Any, agent: str, answer: str) -> tuple[int, str] | None:
+    compact = " ".join(str(answer or "").split())
+    normalized = _normalize_beat(compact)
+    if not (
+        "matriz" in normalized
+        and "gatilh" in normalized
+        and ("brasil x noruega" in normalized or "noruega" in normalized)
+        and ("3 p.p" in normalized or "3pp" in normalized or "3 pontos" in normalized)
+    ):
+        return None
+    return (
+        18,
+        f"Rodada {round_index} — {agent}: gatilho duro: odds, lesão, escalação ou rating precisam mover 3 p.p.",
+    )
+
+
+def _haaland_sensitivity_beat(round_index: Any, agent: str, answer: str) -> tuple[int, str] | None:
+    compact = " ".join(str(answer or "").split())
+    normalized = _normalize_beat(compact)
+    if not ("haaland" in normalized and ("tornozelo" in normalized or "mobilidade" in normalized)):
+        return None
+    if not ("noruega" in normalized and ("rating" in normalized or "probabilidade" in normalized or "sensibilidade" in normalized)):
+        return None
+    return (
+        17,
+        f"Rodada {round_index} — {agent}: o tornozelo de Haaland virou teste de sensibilidade, "
+        "não palpite solto; a sala pediu medir quanto isso mexe em Brasil x Noruega.",
+    )
+
+
+def _norway_rating_quarantine_beat(round_index: Any, agent: str, answer: str) -> tuple[int, str] | None:
+    compact = " ".join(str(answer or "").split())
+    normalized = _normalize_beat(compact)
+    if not (
+        "rating da noruega" in normalized
+        and ("22.5" in compact or "22,5" in compact)
+        and ("quarentena" in normalized or "distor" in normalized)
+    ):
+        return None
+    return (
+        16,
+        f"Rodada {round_index} — {agent}: o maior risco de distorção foi o rating da Noruega (+22,5); "
+        "a sala tratou esse sinal como quarentena antes de mexer no Hexa.",
+    )
+
+
+def _valid_room_response(response: Any) -> bool:
+    return not (response.get("removed_from_main") or response.get("used_fallback"))
+
+
+def _beat_semantic_key(beat: str) -> str:
+    normalized = _normalize_beat(beat)
+    if "para subir o hexa" in normalized and "74,1%" in normalized and "80,4%" in normalized:
+        return "norway:title-threshold:74,1:80,4"
+    if "gatilho" in normalized and "3 p.p" in normalized:
+        return "norway:trigger-matrix"
+    if "tornozelo de haaland" in normalized:
+        return "norway:haaland-sensitivity"
+    if "rating da noruega" in normalized and "+22,5" in normalized:
+        return "norway:rating-quarantine"
+    cauda = re.search(r"cauda\s+([a-z ]+?)\s+a\s+(\d+(?:,\d+)?)%", normalized)
+    if cauda:
+        return f"cauda:{cauda.group(1).strip()}:{cauda.group(2)}"
+    ajuste = re.search(r"(brasil x [a-z ]+?)\s+(?:caiu|foi ajustada)\s+de\s+(\d+(?:,\d+)?)%\s+para\s+(\d+(?:,\d+)?)%", normalized)
+    if ajuste:
+        return f"ajuste:{ajuste.group(1).strip()}:{ajuste.group(2)}:{ajuste.group(3)}"
+    return normalized
+
+
+def _source_correction_beat(bundle: Any) -> str | None:
+    for turn in getattr(bundle, "meeting_transcript", []) or []:
+        if not isinstance(turn, dict):
+            continue
+        round_index = turn.get("round")
+        for response in turn.get("responses", []) or []:
+            if not _valid_room_response(response):
+                continue
+            answer = str(response.get("answer") or "")
+            normalized = _normalize_beat(answer)
+            if "polymarket" in normalized and "grupo c" in normalized and "titulo" in normalized:
+                return (
+                    f"Rodada {round_index} — {response.get('agent')} travou o consenso: "
+                    "Polymarket 72% era Grupo C, não título; a sala rejeitou usar essa leitura para derrubar o Hexa."
+                )
+            if "erro de fonte" in normalized and ("nao sustenta" in normalized or "seleção de âncora" in answer.lower()):
+                score, sentence = _best_sentence(answer)
+                if score >= 3 and sentence:
+                    fact = _truncate_words(_plain_language(sentence), 125)
+                    if not fact.endswith((".", "!", "?", "…")):
+                        fact += "."
+                    return f"Rodada {round_index} — {response.get('agent')} travou o consenso: {fact}"
+    return None
+
+
+def _protagonist_behavior_beat(bundle: Any) -> str | None:
+    participation = getattr(bundle, "model_participation", {}) or {}
+    protagonist_counts = participation.get("protagonist_counts") or {}
+    if not protagonist_counts:
+        return None
+    agent, count = max(protagonist_counts.items(), key=lambda kv: kv[1])
+    try:
+        count_int = int(count)
+    except (TypeError, ValueError):
+        return None
+    if count_int < 2:
+        return None
+    unit = "vez" if count_int == 1 else "vezes"
+    final_agent = participation.get("last_consensus_protagonist")
+    if final_agent == agent:
+        return (
+            f"{agent} virou protagonista {count_int} {unit}; "
+            "a pergunta final combinou simulação, apostas e mercado."
+        )
+    return (
+        f"{agent} virou protagonista {count_int} {unit}: a sala trocou liderança por mérito, "
+        "não por ordem fixa."
+    )
+
+
+def _curated_behavior_beats(bundle: Any) -> list[str]:
+    beats = [_source_correction_beat(bundle), _protagonist_behavior_beat(bundle)]
+    return [beat for beat in beats if beat]
+
+
 def _extract_beats(bundle: Any) -> list[str]:
     """Bastidores com a substância minerada das falas válidas da sala.
 
     Cada bastidor carrega o fato concreto (jogador, evento, número) da sentença
     mais rica da fala, com jargão traduzido. Regra do Marcus (11/jun): bastidor
     sem substância não vale a tinta — sem 2 lances fortes, a seção sai do post."""
+    source_correction = _source_correction_beat(bundle)
+    behavior = _protagonist_behavior_beat(bundle)
     scored: list[tuple[int, str, str]] = []
     for turn in getattr(bundle, "meeting_transcript", []) or []:
         if not isinstance(turn, dict):
             continue
         round_index = turn.get("round")
         for response in turn.get("responses", []) or []:
-            if response.get("removed_from_main") or response.get("used_fallback"):
+            if not _valid_room_response(response):
+                continue
+            answer = str(response.get("answer", ""))
+            normalized_answer = _normalize_beat(answer)
+            if source_correction and (
+                ("polymarket" in normalized_answer and "grupo c" in normalized_answer and "titulo" in normalized_answer)
+                or ("erro de fonte" in normalized_answer and "nao sustenta" in normalized_answer)
+            ):
+                continue
+            agent = str(response.get("agent") or "")
+            for specialized in (
+                _norway_title_threshold_beat,
+                _trigger_matrix_beat,
+                _haaland_sensitivity_beat,
+                _norway_rating_quarantine_beat,
+            ):
+                beat = specialized(round_index, agent, answer)
+                if beat:
+                    scored.append((beat[0], agent, beat[1]))
+                    break
+            else:
+                beat = None
+            if beat:
+                continue
+            locked_crossing = _locked_crossing_sensitivity_beat(round_index, agent, answer)
+            if locked_crossing:
+                scored.append((locked_crossing[0], agent, locked_crossing[1]))
+                continue
+            modal_chain = _modal_chain_beat(round_index, agent, answer)
+            if modal_chain:
+                scored.append((modal_chain[0], agent, modal_chain[1]))
                 continue
             if not response.get("disagreed"):
                 continue
-            score, sentence = _best_sentence(response.get("answer", ""))
+            weighted_path = _weighted_path_beat(round_index, agent, answer)
+            if weighted_path:
+                scored.append((weighted_path[0], agent, weighted_path[1]))
+                continue
+            tactical = _tactical_adjustment_beat(round_index, agent, answer)
+            if tactical:
+                scored.append((tactical[0], agent, tactical[1]))
+                continue
+            score, sentence = _best_sentence(answer)
             if score < 2:
                 continue
             fact = _truncate_words(_plain_language(sentence), 130)
             if not fact.endswith((".", "!", "?", "…")):
                 fact += "."
-            agent = str(response.get("agent") or "")
-            if _normalize_beat(response.get("answer", "")).startswith("concordo"):
+            if normalized_answer.startswith("concordo"):
                 scored.append((score, agent, f"Rodada {round_index} — {agent} foi conferir antes: {fact}"))
             else:
                 scored.append((score + 1, agent, f"Rodada {round_index} — {agent} bateu de frente: {fact}"))
@@ -236,12 +1077,43 @@ def _extract_beats(bundle: Any) -> list[str]:
             )
     scored.sort(key=lambda item: -item[0])
     if not scored:
-        return []
-    top_score, top_agent, top_beat = scored[0]
-    second = next((beat for _, agent, beat in scored[1:] if agent != top_agent), None)
-    if second is None and len(scored) > 1:
-        second = scored[1][2]
-    return [top_beat, second] if second else [top_beat]
+        return [beat for beat in (source_correction, behavior) if beat][:2]
+    fallback: list[str] = []
+    fallback_keys: set[str] = set()
+    fallback_agents: set[str] = set()
+    for _score, agent, beat in scored:
+        key = _beat_semantic_key(beat)
+        if key in fallback_keys:
+            continue
+        if (
+            fallback
+            and agent in fallback_agents
+            and _score < 12
+            and any(other_agent != agent for _s, other_agent, _b in scored)
+        ):
+            continue
+        fallback.append(beat)
+        fallback_keys.add(key)
+        fallback_agents.add(agent)
+        if len(fallback) >= 2:
+            break
+
+    beats: list[str] = []
+    seen: set[str] = set()
+    preferred = ([source_correction] if source_correction else []) + fallback
+    if len([beat for beat in preferred if beat]) < 2 and behavior:
+        preferred.append(behavior)
+    for beat in preferred:
+        if not beat:
+            continue
+        key = _beat_semantic_key(beat)
+        if key in seen:
+            continue
+        seen.add(key)
+        beats.append(beat)
+        if len(beats) >= 2:
+            break
+    return beats
 
 
 def _backstage_section(beats: list[str]) -> str:
@@ -257,10 +1129,63 @@ def _backstage_section(beats: list[str]) -> str:
 QUANTI_HINTS = ("rating", "odds", "bet", "mercado", "sofascore", "desempenho", "performance", "elo")
 
 
+def _numeric_decision_label(bundle: Any) -> str:
+    metadata = getattr(bundle, "metadata", {}) or {}
+    monte_carlo = metadata.get("monte_carlo") if isinstance(metadata.get("monte_carlo"), dict) else {}
+    mc_title = ((monte_carlo.get("stage_probabilities") or {}) if isinstance(monte_carlo, dict) else {}).get("titulo")
+    model_title = metadata.get("agent_title_consensus_pct")
+    blend = metadata.get("numeric_chairman", {}).get("stage_probability_blend", {}) if isinstance(metadata, dict) else {}
+    mc_weight = float(blend.get("monte_carlo_weight", 0.6) or 0.6)
+    model_weight = float(blend.get("model_weight", 0.4) or 0.4)
+    rule = f"{round(mc_weight * 100):.0f}% Monte Carlo, {round(model_weight * 100):.0f}% modelos"
+    if mc_title is None or model_title is None:
+        return f"🧮 regra numérica: {rule}"
+    try:
+        mc_value = float(mc_title)
+        model_value = float(model_title)
+    except (TypeError, ValueError):
+        return f"🧮 regra numérica: {rule}"
+    if abs(mc_value - model_value) <= 0.15:
+        return f"🧮 regra numérica: {rule}; hoje os modelos ratificaram o Monte Carlo"
+    return f"🧮 regra numérica: {rule}; hoje os modelos moveram o funil antes da publicação"
+
+
 def _build_round_stats(bundle: Any, *, slots: int = 3) -> str:
     """Números da rodada: pool ponderado, bullets densos, sem dado repetido."""
     candidates: list[tuple[float, str, str]] = []
     metadata = getattr(bundle, "metadata", {}) or {}
+    candidates.append((109, "regra_numerica", _numeric_decision_label(bundle)))
+
+    influence = getattr(bundle, "model_influence_pct", {}) or {}
+    valid_influence = {k: float(v) for k, v in influence.items() if v is not None}
+    participation = getattr(bundle, "model_participation", {}) or {}
+    messages = participation.get("total_messages")
+    valid_messages = participation.get("valid_messages")
+    invalid_responses = participation.get("invalid_responses")
+    rounds = participation.get("total_rounds")
+    if messages and rounds and len(valid_influence) >= 3:
+        top_agent, top_value = max(valid_influence.items(), key=lambda kv: kv[1])
+        low_agent, low_value = min(valid_influence.items(), key=lambda kv: kv[1])
+        tied = [k for k, v in valid_influence.items() if k != top_agent and abs(v - top_value) < 0.05]
+        message_text = f"{messages} mensagens"
+        if invalid_responses:
+            message_text += f" ({valid_messages or messages} válidas, {invalid_responses} removidas)"
+        low_fragment = (
+            f"{low_agent.split()[0]} quase não moveu ({_pct(low_value)})"
+            if low_value < 5.0
+            else f"{low_agent.split()[0]} teve menor influência ({_pct(low_value)})"
+        )
+        if tied:
+            influence_text = (
+                f"{top_agent.split()[0]} e {tied[0].split()[0]} lideraram ({_pct(top_value)}); "
+                f"{low_fragment}"
+            )
+        else:
+            influence_text = (
+                f"{top_agent.split()[0]} liderou ({_pct(top_value)}); "
+                f"{low_fragment}"
+            )
+        candidates.append((110, "perfil_sala", f"💬 {message_text} em {rounds} rodadas; {influence_text}"))
 
     costs = (getattr(bundle, "model_token_costs", {}) or {}).get("total") or {}
     cost_usd = costs.get("cost_usd")
@@ -269,38 +1194,38 @@ def _build_round_stats(bundle: Any, *, slots: int = 3) -> str:
     if cost_usd and calls and tokens_k:
         usd = f"{float(cost_usd):.2f}".replace(".", ",")
         candidates.append(
-            (95, "custo", f"💰 US$ {usd} a reunião — {calls} chamadas, {tokens_k} mil tokens")
+            (55, "custo", f"💰 US$ {usd} a reunião — {calls} chamadas, {tokens_k} mil tokens")
         )
     elif cost_usd:
         usd = f"{float(cost_usd):.2f}".replace(".", ",")
-        candidates.append((90, "custo", f"💰 reunião inteira: US$ {usd} de IA"))
+        candidates.append((50, "custo", f"💰 reunião inteira: US$ {usd} de IA"))
     if tokens_k >= 350:
         candidates.append(
-            (85, "custo", f"📚 {tokens_k} mil tokens lidos e escritos — um 'Senhor dos Anéis' por reunião")
+            (45, "custo", f"📚 {tokens_k} mil tokens lidos e escritos — um 'Senhor dos Anéis' por reunião")
         )
 
-    influence = getattr(bundle, "model_influence_pct", {}) or {}
-    valid_influence = {k: float(v) for k, v in influence.items() if v is not None}
     if len(valid_influence) >= 3:
         top_agent, top_value = max(valid_influence.items(), key=lambda kv: kv[1])
         low_agent, low_value = min(valid_influence.items(), key=lambda kv: kv[1])
         gap_weight = 60 + min(30.0, top_value - low_value)
         tied = [k for k, v in valid_influence.items() if k != top_agent and abs(v - top_value) < 0.05]
+        low_fragment = (
+            f"{low_agent.split()[0]} quase não pesou ({_pct(low_value)})"
+            if low_value < 5.0
+            else f"{low_agent.split()[0]} teve menor influência ({_pct(low_value)})"
+        )
         if tied:
             line = (
                 f"🧭 {top_agent.split()[0]} e {tied[0].split()[0]} empataram como voz mais forte "
-                f"({_pct(top_value)}); {low_agent.split()[0]} quase não pesou ({_pct(low_value)})"
+                f"({_pct(top_value)}); {low_fragment}"
             )
         else:
             line = (
                 f"🧭 {top_agent.split()[0]} mandou no número final ({_pct(top_value)}); "
-                f"{low_agent.split()[0]} quase não pesou ({_pct(low_value)})"
+                f"{low_fragment}"
             )
         candidates.append((gap_weight, "influencia", line))
 
-    participation = getattr(bundle, "model_participation", {}) or {}
-    messages = participation.get("total_messages")
-    rounds = participation.get("total_rounds")
     sources = getattr(bundle, "sources", None) or []
     if messages and rounds and sources:
         candidates.append(
@@ -367,7 +1292,222 @@ def _knockout_pairs(bundle: Any) -> dict[str, dict[str, Any]]:
     return pairs
 
 
-def render_template_post(bundle: Any, *, post_index: int, run_date: date | None = None) -> str:
+def _stage_number(bundle: Any, key: str) -> float | None:
+    try:
+        return float((getattr(bundle, "stage_probabilities", {}) or {}).get(key))
+    except (TypeError, ValueError):
+        return None
+
+
+def _most_likely_phase_match(bundle: Any, phase: str) -> Any | None:
+    for match in getattr(bundle, "knockout_matches", []) or []:
+        if str(getattr(match, "phase", "")).strip() == phase and bool(getattr(match, "most_likely", False)):
+            return match
+    return None
+
+
+def _phase_index(phase: str) -> int:
+    try:
+        return PHASE_ORDER.index(str(phase or "").strip())
+    except ValueError:
+        return 0
+
+
+def _next_future_knockout_match(bundle: Any, *, run_date: date) -> Any | None:
+    candidates: list[tuple[int, date, Any]] = []
+    for order, phase in enumerate(PHASE_ORDER):
+        match = _most_likely_phase_match(bundle, phase)
+        if match is None:
+            continue
+        match_date = _parse_template_match_date(getattr(match, "match_date", ""), year=run_date.year)
+        if match_date is None or match_date < run_date:
+            continue
+        candidates.append((order, match_date, match))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (item[1], item[0]))
+    return candidates[0][2]
+
+
+def _select_featured_match(bundle: Any, *, run_date: date) -> tuple[Any, date | None, bool]:
+    group_matches = list(getattr(bundle, "group_matches", []) or [])
+    if not group_matches:
+        raise ValueError("template post requer group_matches no bundle")
+    pairs = _knockout_pairs(bundle)
+    dated = [(m, _parse_template_match_date(getattr(m, "match_date", ""), year=run_date.year)) for m in group_matches]
+    upcoming = [(m, d) for m, d in dated if d is not None and d >= run_date]
+    if upcoming:
+        featured, featured_date = upcoming[0]
+        return featured, featured_date, False
+    knockout_featured = _next_future_knockout_match(bundle, run_date=run_date)
+    if knockout_featured is None:
+        knockout_featured = pairs.get("16 avos", {}).get("ml")
+    if knockout_featured is not None:
+        featured_date = _parse_template_match_date(getattr(knockout_featured, "match_date", ""), year=run_date.year)
+        return knockout_featured, featured_date, True
+    featured, featured_date = dated[0]
+    return featured, featured_date, False
+
+
+def infer_series_post_index(bundle: Any, *, run_date: date | None = None) -> int:
+    """Numero da serie por jogo oficial do Brasil, não por quantidade de arquivos gerados."""
+    if run_date is None:
+        raw = str(getattr(bundle, "generated_at_iso", "") or "")
+        run_date = datetime.fromisoformat(raw).date()
+
+    featured, featured_date, _is_knockout = _select_featured_match(bundle, run_date=run_date)
+    cutoff = featured_date or run_date
+    year = cutoff.year
+
+    previous_matches = 0
+    for match in getattr(bundle, "group_matches", []) or []:
+        played_at = _parse_template_match_date(getattr(match, "match_date", ""), year=year)
+        if played_at is not None and played_at < cutoff:
+            previous_matches += 1
+
+    for item in _completed_knockout_items(bundle):
+        parsed = _parse_brazil_knockout_score(item.get("score"))
+        if parsed is None:
+            continue
+        winner = _normalize_beat(item.get("winner", ""))
+        if winner and winner != "brasil":
+            continue
+        played_at = _parse_completed_match_date(item.get("date"), year=year)
+        if played_at is not None and played_at < cutoff:
+            previous_matches += 1
+
+    return max(1, previous_matches + 1)
+
+
+def _active_path_phases(*, featured_is_knockout: bool, featured: Any) -> list[str]:
+    if not featured_is_knockout:
+        return PHASE_ORDER
+    start = _phase_index(str(getattr(featured, "phase", "") or ""))
+    return PHASE_ORDER[start:]
+
+
+JOURNEY_STAGE_LABELS = {
+    "16_avos": "nos 16 avos",
+    "oitavas": "nas oitavas",
+    "quartas": "quartas",
+    "semifinal": "na semifinal",
+    "final": "na final",
+}
+
+
+PHASE_TO_STAGE_KEY = {
+    "16 avos": "16_avos",
+    "Oitavas": "oitavas",
+    "Quartas": "quartas",
+    "Semifinal": "semifinal",
+    "Final": "final",
+}
+
+
+def _journey_summary(
+    bundle: Any,
+    *,
+    active_phases: list[str],
+    title_pct_text: str,
+) -> str:
+    metadata = getattr(bundle, "metadata", {}) or {}
+    monte_carlo = metadata.get("monte_carlo") if isinstance(metadata.get("monte_carlo"), dict) else {}
+    mc_stages = monte_carlo.get("stage_probabilities") if isinstance(monte_carlo, dict) else {}
+    stage = dict(getattr(bundle, "stage_probabilities", {}) or {})
+    items: list[str] = []
+    for phase in active_phases:
+        key = PHASE_TO_STAGE_KEY.get(phase)
+        if not key or key == "final":
+            continue
+        value = (mc_stages or {}).get(key, stage.get(key))
+        items.append(f"{JOURNEY_STAGE_LABELS[key]} em {_pct_int(value)}")
+    final_value = (mc_stages or {}).get("final", stage.get("final"))
+    items.append(f"{JOURNEY_STAGE_LABELS['final']} em {_pct_int(final_value)}")
+    if not items:
+        return f"RESUMO DA CAMINHADA: o Brasil levanta a taça em {title_pct_text} 🏆."
+    return (
+        "RESUMO DA CAMINHADA: o Brasil chega "
+        + ", ".join(items)
+        + f"... e levanta a taça em {title_pct_text} 🏆."
+    )
+
+
+def _title_suffix(bundle: Any, previous_bundle: Any | None) -> str:
+    if previous_bundle is None:
+        return ""
+    previous = _stage_number(previous_bundle, "titulo")
+    current = _stage_number(bundle, "titulo")
+    if previous is None or current is None:
+        return ""
+    if current - previous >= 2.0:
+        return " (estão deixando a gente sonhar cada vez mais...)"
+    return ""
+
+
+def _changed_stage_bullet(previous_bundle: Any, bundle: Any) -> str | None:
+    prev_title, title = _stage_number(previous_bundle, "titulo"), _stage_number(bundle, "titulo")
+    prev_final, final = _stage_number(previous_bundle, "final"), _stage_number(bundle, "final")
+    if prev_title is None or title is None or prev_final is None or final is None:
+        return None
+    return f"• Hexa {_pct(prev_title)}→{_pct(title)}; final {_pct_int(prev_final)}→{_pct_int(final)}."
+
+
+def _changed_quarter_bullet(previous_bundle: Any, bundle: Any) -> str | None:
+    previous = _most_likely_phase_match(previous_bundle, "Quartas")
+    current = _most_likely_phase_match(bundle, "Quartas")
+    if previous is None or current is None:
+        return None
+    prev_opp = str(getattr(previous, "opponent", "") or "adversário")
+    curr_opp = str(getattr(current, "opponent", "") or "adversário")
+    prev_scn, curr_scn = getattr(previous, "scenario_pct", None), getattr(current, "scenario_pct", None)
+    prev_br, curr_br = getattr(previous, "brazil_pct", None), getattr(current, "brazil_pct", None)
+    if prev_opp == curr_opp:
+        return (
+            f"• Quartas: {curr_opp} {_pct_int(prev_scn)}→{_pct_int(curr_scn)}; "
+            f"Brasil {_pct_int(prev_br)}→{_pct_int(curr_br)}."
+        )
+    return (
+        f"• Quartas: {prev_opp} ({_pct_int(prev_scn)}) → {curr_opp} ({_pct_int(curr_scn)}); "
+        f"Brasil {_pct_int(prev_br)}→{_pct_int(curr_br)}."
+    )
+
+
+def _changed_reason_bullet(bundle: Any) -> str:
+    correction = _source_correction_beat(bundle)
+    if correction and "Polymarket 72%" in correction:
+        return "• Por quê: Polymarket era Grupo C; caminho recalculado."
+    return "• Por quê: cruzamentos, notícias e mercados foram reponderados."
+
+
+def _change_section(bundle: Any, previous_bundle: Any | None) -> str:
+    if previous_bundle is None:
+        return (
+            "Mapa muda: recalculo grupos, cruzamentos e mercados antes de cada post.\n\n"
+        )
+    bullets = [
+        bullet
+        for bullet in (
+            _changed_stage_bullet(previous_bundle, bundle),
+            _changed_quarter_bullet(previous_bundle, bundle),
+            _changed_reason_bullet(bundle),
+        )
+        if bullet
+    ]
+    if not bullets:
+        return (
+            "O QUE MUDOU DESDE A ÚLTIMA ANÁLISE:\n"
+            "• O mapa foi recalculado, mas sem mudança material suficiente para virar headline.\n\n"
+        )
+    return f"O QUE MUDOU DESDE {_change_reference_label(previous_bundle)}:\n" + "\n".join(bullets[:3]) + "\n\n"
+
+
+def render_template_post(
+    bundle: Any,
+    *,
+    post_index: int,
+    run_date: date | None = None,
+    previous_bundle: Any | None = None,
+) -> str:
     if run_date is None:
         run_date = datetime.fromisoformat(str(bundle.generated_at_iso)).date()
 
@@ -375,13 +1515,13 @@ def render_template_post(bundle: Any, *, post_index: int, run_date: date | None 
     if not group_matches:
         raise ValueError("template post requer group_matches no bundle")
 
-    dated = [(m, _parse_group_date(getattr(m, "match_date", ""), year=run_date.year)) for m in group_matches]
-    upcoming = [(m, d) for m, d in dated if d is not None and d >= run_date]
-    featured, featured_date = (upcoming[0] if upcoming else dated[0])
-    featured_is_first = featured is group_matches[0]
+    pairs = _knockout_pairs(bundle)
+    dated = [(m, _parse_template_match_date(getattr(m, "match_date", ""), year=run_date.year)) for m in group_matches]
+    featured, featured_date, featured_is_knockout = _select_featured_match(bundle, run_date=run_date)
+    featured_is_first = (not featured_is_knockout) and featured is group_matches[0]
 
-    ordinal = ORDINAIS[post_index - 1] if 1 <= post_index <= len(ORDINAIS) else f"{post_index}º"
-    title = f"{ordinal} PALPITE DA SÉRIE: Brasil x {getattr(featured, 'opponent', '')}"
+    ordinal = f"{post_index}º"
+    title = f"{ordinal} PALPITE DA SÉRIE: Brasil x {getattr(featured, 'opponent', '')}{_title_suffix(bundle, previous_bundle)}"
 
     weekday = WEEKDAYS_PT[featured_date.weekday()] if featured_date else "em breve"
     header_label = "A ESTREIA" if featured_is_first else "O PRÓXIMO JOGO"
@@ -389,36 +1529,87 @@ def render_template_post(bundle: Any, *, post_index: int, run_date: date | None 
 
     win = _pct_int(getattr(featured, "brazil_pct", None))
     draw_value = getattr(featured, "draw_pct", None)
-    loss_value = getattr(featured, "opponent_pct", None)
-    parts = [f"{win} vitória"]
-    if draw_value:
-        parts.append(f"{_pct_int(draw_value)} empate")
-    if loss_value:
-        parts.append(f"{_pct_int(loss_value)} derrota")
+    loss_value = _group_loss_pct(featured)
+    if featured_is_knockout:
+        parts = [f"{win} Brasil passa"]
+        if loss_value:
+            parts.append(f"{_pct_int(loss_value)} {getattr(featured, 'opponent', '')} passa")
+    else:
+        parts = [f"{win} vitória"]
+        if draw_value:
+            parts.append(f"{_pct_int(draw_value)} empate")
+        if loss_value:
+            parts.append(f"{_pct_int(loss_value)} derrota")
     next_game_line = f"BRASIL x {str(getattr(featured, 'opponent', '')).upper()} — " + " | ".join(parts)
 
-    remaining = [m for m, d in dated if m is not featured and d is not None and d > (featured_date or run_date)]
-    group_summary = str(getattr(bundle, "group_summary", "") or "")
-    first_place = re.search(r"1º:\s*~?(\d+)%", group_summary)
-    first_place_pct = f"{first_place.group(1)}%" if first_place else "—"
+    remaining = [
+        m
+        for m, d in dated
+        if (not featured_is_knockout) and m is not featured and d is not None and d > (featured_date or run_date)
+    ]
+    next_post_match = remaining[0] if remaining else featured
+    first_place_pct = _first_place_pct(bundle)
+    completed_context = _completed_group_context(bundle, before_date=featured_date)
+    completed_knockout_line = (
+        _completed_brazil_knockout_context(bundle, before_date=featured_date)
+        if featured_is_knockout
+        else ""
+    )
     if remaining:
         listed = " e ".join(
             f"{getattr(m, 'opponent', '')} ({_pct_int(getattr(m, 'brazil_pct', None))} de vitória)" for m in remaining
         )
+        lead = f"{completed_context}depois" if completed_context else "Depois"
         rest_group_line = (
-            f"Depois vêm {listed}. Brasil termina em 1º do grupo em {first_place_pct} dos cenários."
+            f"{lead} vêm {listed}. Brasil termina em 1º do grupo em {first_place_pct} dos cenários."
+        )
+    elif (
+        not featured_is_knockout
+        and featured_date is not None
+        and featured_date >= run_date
+        and not _group_match_has_completed_score(bundle, featured)
+    ):
+        lead = f"{completed_context}ainda" if completed_context else "Ainda"
+        rest_group_line = (
+            f"{lead} falta Brasil x {getattr(featured, 'opponent', '')}. "
+            f"Brasil termina em 1º do grupo em {first_place_pct} dos cenários."
         )
     else:
-        rest_group_line = f"Fase de grupos encerrada. Brasil terminou o grupo com 1º lugar projetado em {first_place_pct} dos cenários."
+        lead = f"{completed_context}fase" if completed_context else "Fase"
+        if _brazil_group_is_complete(bundle):
+            rest_group_line = f"{lead} de grupos encerrada. Brasil terminou em 1º do grupo."
+        else:
+            rest_group_line = (
+                f"{lead} de grupos encerrada. Brasil terminou o grupo com "
+                f"1º lugar projetado em {first_place_pct} dos cenários."
+            )
 
-    pairs = _knockout_pairs(bundle)
+    active_phases = _active_path_phases(featured_is_knockout=featured_is_knockout, featured=featured)
     blocks: list[str] = []
-    for phase in PHASE_ORDER:
+    for phase in active_phases:
         pair = pairs.get(phase, {})
         ml, alt = pair.get("ml"), pair.get("alt")
-        if ml is None or alt is None:
-            raise ValueError(f"template post requer cenário mais provável e alternativa para {phase}")
+        if ml is None:
+            raise ValueError(f"template post requer cenário mais provável para {phase}")
         is_final = phase == "Final"
+        ml_scenario_value = _pct_float(getattr(ml, "scenario_pct", None))
+        alt_scenario_value = _pct_float(getattr(alt, "scenario_pct", None)) if alt is not None else None
+        if ml_scenario_value is not None and ml_scenario_value >= 99.95:
+            blocks.append(
+                PHASE_BLOCK_LOCKED.format(
+                    header=PHASE_HEADERS[phase],
+                    phase_date=_short_date(getattr(ml, "match_date", "")),
+                    phase_venue=_venue_suffix(getattr(ml, "venue", "")),
+                    ml_opp=getattr(ml, "opponent", ""),
+                    ml_scn=_pct_int(getattr(ml, "scenario_pct", None)),
+                    ml_label="Brasil HEXA" if is_final else "Brasil passa",
+                    ml_br=_pct_int(getattr(ml, "brazil_pct", None)),
+                    ml_opp_pct=_pct_int(getattr(ml, "opponent_pct", None)),
+                )
+            )
+            continue
+        if alt is None:
+            raise ValueError(f"template post requer alternativa para {phase}")
         blocks.append(
             PHASE_BLOCK.format(
                 header=PHASE_HEADERS[phase],
@@ -430,23 +1621,15 @@ def render_template_post(bundle: Any, *, post_index: int, run_date: date | None 
                 ml_br=_pct_int(getattr(ml, "brazil_pct", None)),
                 ml_opp_pct=_pct_int(getattr(ml, "opponent_pct", None)),
                 alt_opp=getattr(alt, "opponent", ""),
-                alt_scn=_pct_int(getattr(alt, "scenario_pct", None)),
+                alt_scn=_pct_int(alt_scenario_value),
                 alt_label="Brasil HEXA" if is_final else "Brasil",
                 alt_br=_pct_int(getattr(alt, "brazil_pct", None)),
                 alt_opp_pct=_pct_int(getattr(alt, "opponent_pct", None)),
             )
         )
 
-    mc_stages = ((getattr(bundle, "metadata", {}) or {}).get("monte_carlo") or {}).get("stage_probabilities") or {}
     stage = dict(getattr(bundle, "stage_probabilities", {}) or {})
     backstage = _backstage_section(_extract_beats(bundle))
-
-    bolao = [win]
-    if draw_value:
-        bolao.append(_pct_int(draw_value))
-    if loss_value:
-        bolao.append(_pct_int(loss_value))
-    palpite = " / ".join(value.rstrip("%") for value in bolao)
 
     title_pct_text = _pct(stage.get("titulo"))
     round_header = (
@@ -458,20 +1641,19 @@ def render_template_post(bundle: Any, *, post_index: int, run_date: date | None 
     text = TEMPLATE.format(
         round_header=round_header,
         round_stats=round_stats,
+        run_note=_run_note(bundle),
+        model_intro=_model_intro(bundle),
         title=title,
         next_game_header=next_game_header,
         next_game_line=next_game_line,
         rest_group_line=rest_group_line,
+        completed_knockout_line=completed_knockout_line,
         path_blocks="".join(blocks),
-        r16_pct=_pct_int(mc_stages.get("16_avos")),
-        r8_pct=_pct_int(mc_stages.get("oitavas")),
-        qf_pct=_pct_int(stage.get("quartas")),
-        sf_pct=_pct_int(stage.get("semifinal")),
-        final_pct=_pct_int(stage.get("final")),
+        journey_summary=_journey_summary(bundle, active_phases=active_phases, title_pct_text=title_pct_text),
         title_pct=title_pct_text,
+        change_section=_change_section(bundle, previous_bundle),
         backstage_section=backstage,
-        next_post_game=f"{getattr(featured, 'opponent', '')} ({_short_date(getattr(featured, 'match_date', ''))})",
-        palpite_bolao=palpite,
+        next_post_game=_post_game_label(next_post_match),
     )
 
     text = re.sub(r"(?<=\S)  +(?=\S)", " ", text)
@@ -502,8 +1684,16 @@ def _trim_to_limit(text: str, bundle: Any) -> str:
     no_venues = re.sub(r"(➡️ [^\n(]+\([^)]*\)) - [^\n]+", r"\1", trimmed)
     if len(no_venues) <= MAX_POST_CHARS:
         return no_venues
+    no_backstage = re.sub(
+        r"\n\nDOIS BASTIDORES DA REUNIÃO DE HOJE:\n\n.*?(?=\n\n📊 NÚMEROS DA RODADA:)",
+        "\n\n",
+        no_venues,
+        flags=re.S,
+    )
+    if len(no_backstage) <= MAX_POST_CHARS:
+        return no_backstage
     raise ValueError(
-        f"post de template excede {MAX_POST_CHARS} caracteres mesmo após cortes ({len(no_venues)}); revisar conteúdo dinâmico"
+        f"post de template excede {MAX_POST_CHARS} caracteres mesmo após cortes ({len(no_backstage)}); revisar conteúdo dinâmico"
     )
 
 
@@ -526,9 +1716,8 @@ def validate_template_post(text: str, bundle: Any) -> None:
     stage = dict(getattr(bundle, "stage_probabilities", {}) or {})
     if stage and _pct(stage.get("titulo")) not in text:
         errors.append("percentual de título não bate com o bundle")
-    for phase in PHASE_ORDER:
-        if PHASE_HEADERS[phase] not in text:
-            errors.append(f"fase ausente do caminho: {phase}")
+    if not any(PHASE_HEADERS[phase] in text for phase in PHASE_ORDER):
+        errors.append("nenhuma fase do mata-mata presente no caminho")
     if "1️⃣" in text and "DOIS BASTIDORES DA REUNIÃO DE HOJE:" not in text:
         errors.append("bastidores presentes sem o cabeçalho fixo da seção")
     if errors:
@@ -561,8 +1750,10 @@ def bundle_from_json(path: Path | str) -> Any:
         group_summary=payload.get("group_summary", ""),
         metadata=payload.get("metadata", {}),
         meeting_transcript=payload.get("meeting_transcript", []),
+        source_plan_by_model=payload.get("source_plan_by_model", {}),
         model_participation=payload.get("model_participation", {}),
         model_influence_pct=payload.get("model_influence_pct", {}),
         model_token_costs=payload.get("model_token_costs", {}),
+        agent_effort_profiles=payload.get("agent_effort_profiles", {}),
         sources=payload.get("sources", []),
     )

@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from worldcup_brazil import cli
 
@@ -49,6 +50,8 @@ def _base_argv(tmp_path: Path) -> list[str]:
         str(tmp_path / "watchdog.jsonl"),
         "--calibration-log",
         str(tmp_path / "calibration.json"),
+        "--lock-file",
+        str(tmp_path / ".run.lock"),
         "--force",
         "--no-watchdog",
         "--no-model-preflight",
@@ -87,6 +90,21 @@ def test_bundle_json_is_written_even_when_a_render_raises(tmp_path, monkeypatch,
     assert payload["bundle"]["model_influence_pct"] == {"GPT 5.5": 40.0}
 
 
+def test_successful_run_writes_infographic_html_and_svg_debug_artifact(tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(cli, "build_report_bundle_sync", lambda **kwargs: _FakeArtifacts())
+    monkeypatch.setattr(cli, "render_html_to_png_with_chrome", lambda *args, **kwargs: False)
+
+    rc = cli.main(_base_argv(tmp_path))
+
+    assert rc == 0
+    infographic_html_path = tmp_path / "outputs" / "infographic_brazil_2026-06-13.html"
+    infographic_svg_path = tmp_path / "outputs" / "infographic_brazil_2026-06-13.svg"
+    assert infographic_html_path.exists()
+    assert infographic_svg_path.exists()
+    assert "Ranking geral dos modelos" in infographic_html_path.read_text(encoding="utf-8")
+    assert f"infographic: {infographic_html_path}" in capsys.readouterr().out
+
+
 def test_acquire_run_lock_second_acquisition_returns_none(tmp_path) -> None:
     """Bug histórico (ITEM 6): não existia lock; 3 runs no mesmo dia dobravam o
     gasto e rasgavam o read-modify-write da calibração. O fix adquire um flock
@@ -109,6 +127,59 @@ def test_acquire_run_lock_second_acquisition_returns_none(tmp_path) -> None:
         import os
 
         os.close(first)
+
+
+def test_previous_template_bundle_ignores_current_run_json(tmp_path) -> None:
+    output_dir = tmp_path / "outputs"
+    output_dir.mkdir()
+    previous = output_dir / "linkedin_brazil_2026-06-11.json"
+    current = output_dir / "linkedin_brazil_2026-06-13.json"
+    previous.write_text(
+        json.dumps({"bundle": {"generated_at_iso": "2026-06-11T12:00:00+00:00"}}),
+        encoding="utf-8",
+    )
+    current.write_text(
+        json.dumps({"bundle": {"generated_at_iso": "2026-06-13T12:00:00+00:00"}}),
+        encoding="utf-8",
+    )
+
+    bundle = cli._previous_template_bundle(output_dir, current)
+
+    assert bundle is not None
+    assert bundle.generated_at_iso == "2026-06-11T12:00:00+00:00"
+
+
+def test_previous_template_bundle_prefers_latest_brazil_matchday_over_latest_file(tmp_path) -> None:
+    output_dir = tmp_path / "outputs"
+    output_dir.mkdir()
+    june24 = output_dir / "linkedin_brazil_2026-06-24.json"
+    june27 = output_dir / "linkedin_brazil_2026-06-27.json"
+    current = output_dir / "linkedin_brazil_2026-06-28.json"
+    june24.write_text(
+        json.dumps({"bundle": {"generated_at_iso": "2026-06-24T10:00:00+00:00"}}),
+        encoding="utf-8",
+    )
+    june27.write_text(
+        json.dumps({"bundle": {"generated_at_iso": "2026-06-27T10:00:00+00:00"}}),
+        encoding="utf-8",
+    )
+    current.write_text(
+        json.dumps({"bundle": {"generated_at_iso": "2026-06-28T10:00:00+00:00"}}),
+        encoding="utf-8",
+    )
+    current_bundle = SimpleNamespace(
+        generated_at_iso="2026-06-28T10:00:00+00:00",
+        group_matches=[
+            SimpleNamespace(match_date="13/jun"),
+            SimpleNamespace(match_date="19/jun"),
+            SimpleNamespace(match_date="24/jun"),
+        ],
+    )
+
+    bundle = cli._previous_template_bundle(output_dir, current, current_bundle=current_bundle)
+
+    assert bundle is not None
+    assert bundle.generated_at_iso == "2026-06-24T10:00:00+00:00"
 
 
 def test_calibration_append_failure_does_not_block_mark_success(tmp_path, monkeypatch, capsys) -> None:

@@ -118,6 +118,29 @@ def test_build_consensus_uses_structured_removed_flag_not_only_text_markers() ->
     assert consensus.dispersion_pct == 0.0
 
 
+def test_build_consensus_excludes_missing_title_pct_from_numeric_vote() -> None:
+    opinions = [
+        AgentOpinion(agent="Opus 4.8", title_pct=5.7, summary="protagonista"),
+        AgentOpinion(agent="GPT 5.5", title_pct=5.7, summary="mantém o consenso"),
+        AgentOpinion(
+            agent="Perplexity Pro",
+            title_pct=None,
+            title_pct_source="missing",
+            summary="Concordo integralmente e não proponho correção externa.",
+            answer="Concordo integralmente com o racional; não proponho correção externa.",
+            agrees_with_protagonist=True,
+        ),
+        AgentOpinion(agent="DeepSeek V4 Pro", title_pct=5.7, summary="mantém"),
+        AgentOpinion(agent="Gemini Pro", title_pct=5.7, summary="mantém"),
+    ]
+
+    consensus = build_consensus(opinions)
+
+    assert consensus.title_pct == 5.7
+    assert consensus.dispersion_pct == 0.0
+    assert consensus.raw_opinions[2].title_pct is None
+
+
 def test_parse_agent_opinion_does_not_treat_unlabeled_percent_as_title_probability() -> None:
     opinion = parse_agent_opinion(
         "Perplexity Pro",
@@ -125,7 +148,8 @@ def test_parse_agent_opinion_does_not_treat_unlabeled_percent_as_title_probabili
         fallback_title_pct=11.0,
     )
 
-    assert opinion.title_pct == 11.0
+    assert opinion.title_pct is None
+    assert opinion.title_pct_source == "missing"
     assert "52% nas quartas" in opinion.summary
 
 
@@ -137,6 +161,18 @@ def test_parse_agent_opinion_accepts_explicit_title_probability() -> None:
     )
 
     assert opinion.title_pct == 8.5
+    assert opinion.title_pct_source == "explicit"
+
+
+def test_parse_agent_opinion_accepts_explicit_eleven_without_confusing_parser_default() -> None:
+    opinion = parse_agent_opinion(
+        "GPT 5.5",
+        "Minha chance de título é 11.0% porque o mercado subiu.",
+        fallback_title_pct=11.0,
+    )
+
+    assert opinion.title_pct == 11.0
+    assert opinion.title_pct_source == "explicit"
 
 
 def test_parse_agent_opinion_reads_explicit_protagonist_agreement() -> None:
@@ -215,7 +251,8 @@ def test_parse_agent_opinion_ignores_non_numeric_json_title_pct() -> None:
         fallback_title_pct=11.0,
     )
 
-    assert opinion.title_pct == 11.0
+    assert opinion.title_pct is None
+    assert opinion.title_pct_source == "parser_default_rejected"
     assert opinion.summary == "buscaria odds e Elo"
 
 
@@ -235,7 +272,8 @@ def test_parse_agent_opinion_reuses_title_pct_object_as_match_probabilities() ->
         fallback_title_pct=11.0,
     )
 
-    assert opinion.title_pct == 11.0
+    assert opinion.title_pct is None
+    assert opinion.title_pct_source == "parser_default_rejected"
     assert opinion.match_probabilities == {"Grupo: Marrocos": 59.0, "Oitavas: Uruguai": 56.0}
 
 
@@ -310,7 +348,8 @@ def test_parse_agent_opinion_sanitizes_partial_json_instead_of_leaking_it() -> N
         fallback_title_pct=11.0,
     )
 
-    assert opinion.title_pct == 11.0
+    assert opinion.title_pct is None
+    assert opinion.title_pct_source == "missing"
     assert opinion.match_probabilities["Grupo: Marrocos"] == 60.0
     assert opinion.match_probabilities["Grupo: Haiti"] == 93.0
     assert opinion.match_probabilities["Quartas: Adversário"] == 51.0
@@ -325,7 +364,8 @@ def test_parse_agent_opinion_sanitizes_fenced_partial_json_and_scratch_text() ->
         fallback_title_pct=11.0,
     )
 
-    assert opinion.title_pct == 11.0
+    assert opinion.title_pct is None
+    assert opinion.title_pct_source == "missing"
     assert "JSON parcial" in opinion.answer
     assert "```json" not in opinion.answer
     assert "Wait" not in opinion.answer

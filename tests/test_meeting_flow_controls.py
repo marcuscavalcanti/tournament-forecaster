@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -175,10 +176,7 @@ def test_blind_peer_review_public_text_masks_partial_provider_and_model_tokens()
             "anthropic",
             "gemini-flash-latest",
             "deepseek-v4-pro",
-        "sonar-pro",
-        "5.5",
-        "4.8",
-        "V4 Pro",
+            "sonar-pro",
         ],
     ).lower()
 
@@ -335,6 +333,10 @@ def test_blind_peer_review_self_preference_leakage_handles_asymmetric_bias() -> 
     metadata = _aggregate_blind_peer_reviews(reviews, positions=positions, config={"blind_peer_review_enabled": True})
 
     assert metadata["self_preference_leakage"]["value"] == 0.1
+    assert metadata["self_preference_by_reviewer"]["GPT 5.5"]["leakage"] == 0.5
+    assert metadata["self_preference_by_reviewer"]["Perplexity Pro"]["leakage"] == 0.0
+    assert metadata["self_preference_by_author"]["GPT 5.5"]["self_mean"] == 1.0
+    assert metadata["self_preference_by_author"]["GPT 5.5"]["external_mean"] == 0.75
     assert metadata["blind_review_score"] == {
         "position_1": 0.75,
         "position_2": 0.6,
@@ -647,18 +649,19 @@ def test_llm_council_fast_path_shadow_records_candidate_without_shortening_meeti
     assert fast_path["acted_on_decision"] is False
 
 
-def test_blind_peer_review_runs_once_when_meeting_continues_after_round_one(monkeypatch) -> None:
+def test_blind_peer_review_runs_on_round_one_and_consensus_exit_candidate(monkeypatch) -> None:
     config = {
         **_base_config(),
-        "meeting_min_rounds": 6,
+        "meeting_min_rounds": 3,
         "meeting_max_rounds": 3,
         "meeting_consensus_threshold_pct": 2.5,
         "meeting_require_peer_acceptance": True,
         "meeting_require_full_path_coverage": False,
         "blind_peer_review_enabled": True,
         "blind_peer_review_shadow_only": True,
+        "blind_peer_review_on_consensus_exit": True,
         "blind_peer_review_timeout_seconds": 12,
-        "llm_council_fast_path_enabled": True,
+        "llm_council_fast_path_enabled": False,
         "llm_council_fast_path_shadow_only": True,
         "llm_council_fast_path_min_participants": 3,
     }
@@ -707,10 +710,223 @@ def test_blind_peer_review_runs_once_when_meeting_continues_after_round_one(monk
     )
 
     assert len(transcript) == 3
-    assert len(blind_prompts) == 1
+    assert len(blind_prompts) == 2
     assert "blind_peer_review" in transcript[0]
     assert "blind_peer_review" not in transcript[1]
-    assert "blind_peer_review" not in transcript[2]
+    assert "blind_peer_review" in transcript[2]
+    assert transcript[0]["blind_peer_review"]["mode"] == "shadow"
+    assert transcript[2]["blind_peer_review"]["mode"] == "consensus_exit_candidate"
+
+
+def test_meeting_round_budget_exhaustion_preserves_partial_consensus(monkeypatch) -> None:
+    config = {
+        **_base_config(),
+        "meeting_min_rounds": 99,
+        "meeting_max_rounds": 5,
+        "meeting_round_budget_seconds": 0.001,
+        "meeting_stability_rounds": 99,
+    }
+
+    async def fake_call_agent(spec, prompt, **kwargs):
+        await asyncio.sleep(0.003)
+        return _healthy_question_opinion(spec.slot)
+
+    async def fake_call_all_agents(prompt, *, specs, baseline_title_pct, **kwargs):
+        return [_healthy_response(spec.slot, 10.0) for spec in specs]
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_agent", fake_call_agent)
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+
+    consensus, _opinions, transcript, _all = asyncio.run(
+        _run_model_meeting(
+            config=config,
+            planning_opinions=_planning_opinions(),
+            generated_at=datetime(2026, 6, 14, tzinfo=timezone.utc),
+            agent_specs=_specs(),
+            baseline_title_pct=11.0,
+            allow_agent_fallback=True,
+            watchdog=None,
+        )
+    )
+
+    assert len(transcript) == 1
+    assert getattr(consensus, "exit_status") == "round_budget_exhausted"
+    assert "orçamento acumulado" in getattr(consensus, "exit_warning")
+
+
+def test_blind_peer_review_non_shadow_blocks_consensus_exit_when_acceptance_fails(monkeypatch, tmp_path) -> None:
+    config = {
+        **_base_config(),
+        "meeting_min_rounds": 2,
+        "meeting_max_rounds": 3,
+        "meeting_consensus_threshold_pct": 2.5,
+        "meeting_require_peer_acceptance": True,
+        "meeting_require_full_path_coverage": False,
+        "blind_peer_review_enabled": True,
+        "blind_peer_review_shadow_only": False,
+        "blind_peer_review_on_consensus_exit": True,
+        "blind_peer_review_timeout_seconds": 12,
+        "llm_council_fast_path_enabled": False,
+        "llm_council_fast_path_shadow_only": True,
+        "llm_council_fast_path_min_participants": 3,
+    }
+
+    async def fake_call_agent(spec, prompt, **kwargs):
+        return _healthy_question_opinion(spec.slot)
+
+    async def fake_call_all_agents(prompt, *, specs, baseline_title_pct, **kwargs):
+        if kwargs.get("call_role") == "blind_peer_review":
+            payload = {
+                "scores": [
+                    {"position_id": "position_1", "score": 0.30, "accepted": False},
+                    {"position_id": "position_2", "score": 0.25, "accepted": False},
+                    {"position_id": "position_3", "score": 0.20, "accepted": False},
+                ]
+            }
+            return [
+                AgentOpinion(
+                    agent=spec.slot,
+                    title_pct=10.0,
+                    summary="Revisão cega rejeita.",
+                    answer=json.dumps(payload),
+                    raw_text=json.dumps(payload),
+                    source_urls=["https://example.com/blind-review"],
+                )
+                for spec in specs
+            ]
+        return [_healthy_response(spec.slot, 10.0) for spec in specs]
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_agent", fake_call_agent)
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+    watchdog_path = tmp_path / "watchdog.jsonl"
+
+    consensus, _opinions, transcript, _all = asyncio.run(
+        _run_model_meeting(
+            config=config,
+            planning_opinions=_planning_opinions(),
+            generated_at=datetime(2026, 6, 14, tzinfo=timezone.utc),
+            agent_specs=_specs(),
+            baseline_title_pct=11.0,
+            allow_agent_fallback=True,
+            watchdog=RunWatchdog(path=watchdog_path, verbose=False),
+        )
+    )
+
+    assert getattr(consensus, "exit_status") == "max_rounds_no_consensus"
+    assert len(transcript) == 3
+    review = transcript[1]["blind_peer_review"]
+    assert review["mode"] == "consensus_exit_candidate"
+    assert review["shadow_only"] is False
+    assert review["gate_blocked"] is True
+    assert "blind_acceptance_missing" in review["gate_blocked_reasons"]
+    events = [json.loads(line) for line in watchdog_path.read_text(encoding="utf-8").splitlines()]
+    assert any(
+        event["step"] == "blind_peer_review"
+        and event["status"] == "blocked"
+        and "blind_acceptance_missing" in event["extra"]["blocked_reasons"]
+        for event in events
+    )
+
+
+def test_blind_peer_review_non_shadow_blocks_consensus_exit_when_self_preference_leaks(monkeypatch) -> None:
+    generated_at = datetime(2026, 6, 14, tzinfo=timezone.utc)
+    config = {
+        **_base_config(),
+        "meeting_min_rounds": 2,
+        "meeting_max_rounds": 3,
+        "meeting_consensus_threshold_pct": 2.5,
+        "meeting_require_peer_acceptance": True,
+        "meeting_require_full_path_coverage": False,
+        "blind_peer_review_enabled": True,
+        "blind_peer_review_shadow_only": False,
+        "blind_peer_review_on_consensus_exit": True,
+        "blind_peer_review_timeout_seconds": 12,
+        "blind_peer_review_max_self_preference_leakage": 0.20,
+        "llm_council_fast_path_enabled": False,
+        "llm_council_fast_path_shadow_only": True,
+        "llm_council_fast_path_min_participants": 3,
+    }
+
+    async def fake_call_agent(spec, prompt, **kwargs):
+        return _healthy_question_opinion(spec.slot)
+
+    async def fake_call_all_agents(prompt, *, specs, baseline_title_pct, **kwargs):
+        if kwargs.get("call_role") == "blind_peer_review":
+            round_match = re.search(r"Rodada:\s*(\d+)", prompt)
+            round_index = int(round_match.group(1)) if round_match else 1
+            position_opinions = [
+                AgentOpinion(
+                    agent=spec.slot,
+                    title_pct=10.0,
+                    summary="Posição para revisão cega.",
+                    source_urls=["https://example.com/blind-review"],
+                )
+                for spec in specs
+            ]
+            positions = _blind_peer_review_positions(
+                position_opinions,
+                agent_slots=[spec.slot for spec in specs],
+                round_index=round_index,
+                shuffle_seed=f"{generated_at.isoformat()}|room=main_brazil|round={round_index}",
+            )
+            position_author = {position["position_id"]: position["_agent"] for position in positions}
+            # Cada modelo infla sua própria posição e aceita as demais, produzindo
+            # blind_acceptance_count suficiente, mas vazamento claro de autopreferência.
+            return [
+                AgentOpinion(
+                    agent=spec.slot,
+                    title_pct=10.0,
+                    summary="Revisão cega aceita com viés próprio.",
+                    answer=json.dumps(
+                        {
+                            "scores": [
+                                {
+                                    "position_id": position_id,
+                                    "score": 1.0 if author == spec.slot else 0.72,
+                                    "accepted": True,
+                                }
+                                for position_id, author in position_author.items()
+                            ]
+                        }
+                    ),
+                    raw_text=json.dumps(
+                        {
+                            "scores": [
+                                {
+                                    "position_id": position_id,
+                                    "score": 1.0 if author == spec.slot else 0.72,
+                                    "accepted": True,
+                                }
+                                for position_id, author in position_author.items()
+                            ]
+                        }
+                    ),
+                    source_urls=["https://example.com/blind-review"],
+                )
+                for spec in specs
+            ]
+        return [_healthy_response(spec.slot, 10.0) for spec in specs]
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_agent", fake_call_agent)
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+
+    consensus, _opinions, transcript, _all = asyncio.run(
+        _run_model_meeting(
+            config=config,
+            planning_opinions=_planning_opinions(),
+            generated_at=generated_at,
+            agent_specs=_specs(),
+            baseline_title_pct=11.0,
+            allow_agent_fallback=True,
+            watchdog=None,
+        )
+    )
+
+    assert getattr(consensus, "exit_status") == "max_rounds_no_consensus"
+    review = transcript[1]["blind_peer_review"]
+    assert review["gate_blocked"] is True
+    assert "self_preference_leakage_high" in review["gate_blocked_reasons"]
+    assert review["self_preference_leakage"]["exceeds_threshold"] is True
 
 
 def test_llm_council_fast_path_blocks_when_report_coherence_would_fail(monkeypatch) -> None:
@@ -782,6 +998,101 @@ def test_llm_council_fast_path_blocks_when_report_coherence_would_fail(monkeypat
     assert fast_path["acted_on_decision"] is False
     assert "report_coherence_failed" in fast_path["blocked_reasons"]
     assert "funil incoerente" in fast_path["report_coherence_error"]
+
+
+def test_llm_council_fast_path_blocks_when_blind_review_self_preference_leaks(monkeypatch) -> None:
+    generated_at = datetime(2026, 6, 14, tzinfo=timezone.utc)
+    config = {
+        **_base_config(),
+        "meeting_min_rounds": 6,
+        "meeting_max_rounds": 2,
+        "meeting_consensus_threshold_pct": 2.5,
+        "meeting_require_peer_acceptance": True,
+        "meeting_require_full_path_coverage": False,
+        "blind_peer_review_enabled": True,
+        "blind_peer_review_shadow_only": True,
+        "blind_peer_review_timeout_seconds": 12,
+        "blind_peer_review_max_self_preference_leakage": 0.20,
+        "llm_council_fast_path_enabled": True,
+        "llm_council_fast_path_shadow_only": False,
+        "llm_council_fast_path_min_participants": 3,
+    }
+
+    async def fake_call_agent(spec, prompt, **kwargs):
+        return _healthy_question_opinion(spec.slot)
+
+    async def fake_call_all_agents(prompt, *, specs, baseline_title_pct, **kwargs):
+        if kwargs.get("call_role") == "blind_peer_review":
+            positions = _blind_peer_review_positions(
+                [
+                    AgentOpinion(
+                        agent=spec.slot,
+                        title_pct=10.0,
+                        summary="Posição para revisão cega.",
+                        source_urls=["https://example.com/blind-review"],
+                    )
+                    for spec in specs
+                ],
+                agent_slots=[spec.slot for spec in specs],
+                round_index=1,
+                shuffle_seed=f"{generated_at.isoformat()}|room=main_brazil|round=1",
+            )
+            position_author = {position["position_id"]: position["_agent"] for position in positions}
+            return [
+                AgentOpinion(
+                    agent=spec.slot,
+                    title_pct=10.0,
+                    summary="Revisão cega aceita com viés próprio.",
+                    answer=json.dumps(
+                        {
+                            "scores": [
+                                {
+                                    "position_id": position_id,
+                                    "score": 1.0 if author == spec.slot else 0.72,
+                                    "accepted": True,
+                                }
+                                for position_id, author in position_author.items()
+                            ]
+                        }
+                    ),
+                    raw_text=json.dumps(
+                        {
+                            "scores": [
+                                {
+                                    "position_id": position_id,
+                                    "score": 1.0 if author == spec.slot else 0.72,
+                                    "accepted": True,
+                                }
+                                for position_id, author in position_author.items()
+                            ]
+                        }
+                    ),
+                    source_urls=["https://example.com/blind-review"],
+                )
+                for spec in specs
+            ]
+        return [_healthy_response(spec.slot, 10.0) for spec in specs]
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_agent", fake_call_agent)
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+
+    consensus, _opinions, transcript, _all = asyncio.run(
+        _run_model_meeting(
+            config=config,
+            planning_opinions=_planning_opinions(),
+            generated_at=generated_at,
+            agent_specs=_specs(),
+            baseline_title_pct=11.0,
+            allow_agent_fallback=True,
+            watchdog=None,
+        )
+    )
+
+    assert getattr(consensus, "exit_status") == "max_rounds_no_consensus"
+    fast_path = transcript[0]["llm_council_fast_path"]
+    assert fast_path["eligible"] is False
+    assert fast_path["acted_on_decision"] is False
+    assert "self_preference_leakage_high" in fast_path["blocked_reasons"]
 
 
 def test_llm_council_fast_path_uses_full_report_coherence_callback_before_exit(monkeypatch) -> None:
@@ -872,7 +1183,13 @@ def test_llm_council_fast_path_rejects_unusable_parallel_opponent_room(monkeypat
         "llm_council_fast_path_enabled": True,
         "llm_council_fast_path_shadow_only": False,
         "llm_council_fast_path_min_participants": 3,
-        "_parallel_opponent_briefing": {"enabled": True, "failed": True, "usable_for_main_room": False},
+        "_parallel_opponent_briefing": {
+            "enabled": True,
+            "failed": False,
+            "rounds": 3,
+            "exit_status": "max_rounds_no_consensus",
+            "usable_for_main_room": False,
+        },
     }
 
     async def fake_call_agent(spec, prompt, **kwargs):
@@ -1239,7 +1556,7 @@ def test_slot_broken_twice_stays_out_for_rest_of_run(monkeypatch) -> None:
     assert rounds_with_perplexity[-1] < len(transcript) - 2, "após a segunda quebra o slot não pode voltar"
 
 
-def test_reentry_probe_attempts_are_capped(monkeypatch) -> None:
+def test_reentry_probe_stops_after_429_quota_failure(monkeypatch, tmp_path) -> None:
     config = {
         **_base_config(),
         "meeting_min_rounds": 1,
@@ -1272,6 +1589,8 @@ def test_reentry_probe_attempts_are_capped(monkeypatch) -> None:
     monkeypatch.setattr("worldcup_brazil.pipeline.call_agent", fake_call_agent)
     monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
 
+    watchdog_path = tmp_path / "watchdog.jsonl"
+
     asyncio.run(
         _run_model_meeting(
             config=config,
@@ -1280,11 +1599,15 @@ def test_reentry_probe_attempts_are_capped(monkeypatch) -> None:
             agent_specs=_specs(),
             baseline_title_pct=11.0,
             allow_agent_fallback=True,
-            watchdog=None,
+            watchdog=RunWatchdog(path=watchdog_path, verbose=False),
         )
     )
 
-    assert probe_calls.count("Perplexity Pro") == 2
+    assert probe_calls.count("Perplexity Pro") == 1
+    events = [json.loads(line) for line in watchdog_path.read_text(encoding="utf-8").splitlines()]
+    failure = [event for event in events if event["step"] == "agent_reentry_probe" and event["status"] == "fail"][0]
+    assert failure["extra"]["validation_issue"]["matched_rule"] == "provider_rate_limit_or_quota"
+    assert failure["extra"]["reentry_eligible"] is False
 
 
 def test_reentry_probe_quorum_risk_policy_skips_when_active_room_is_healthy(monkeypatch) -> None:
@@ -1341,6 +1664,163 @@ def test_reentry_probe_quorum_risk_policy_skips_when_active_room_is_healthy(monk
     )
 
     assert probe_calls == []
+
+
+def test_format_reentry_uses_short_timeout_rejoins_and_recalculates_quorum(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    config = {
+        **_base_config(),
+        "meeting_min_rounds": 3,
+        "meeting_max_rounds": 3,
+        "meeting_consensus_threshold_pct": 10.0,
+        "meeting_stability_rounds": 99,
+        "agent_reentry_probe_enabled": True,
+        "agent_reentry_probe_policy": "always",
+        "agent_reentry_probe_timeout_seconds": 180,
+        "agent_reentry_format_timeout_seconds": 17,
+    }
+    opus_spec = AgentSpec(
+        slot="Opus 4.8",
+        provider="anthropic",
+        model="claude-opus-4-8",
+        env_api_key="ANTHROPIC_API_KEY",
+        endpoint="https://api.anthropic.com/v1/messages",
+    )
+    format_issue = {
+        "gate_name": "source_planning_readiness",
+        "matched_rule": "partial_or_unparseable_payload",
+        "offending_excerpt": "Resposta em JSON parcial; faltam campos auditáveis.",
+        "field": "summary",
+        "severity": "blocking",
+        "recoverability": "format",
+        "repair_hint": "Retry curto: reenviar JSON completo.",
+        "reentry_eligible": True,
+        "reentry_decision_reason": "erro de formato é recuperável por retry curto",
+    }
+    probe_timeouts: list[int] = []
+
+    async def fake_probe(*, spec, config, generated_at, baseline_title_pct, removed_reason, timeout):
+        probe_timeouts.append(timeout)
+        return (
+            AgentOpinion(
+                agent=spec.slot,
+                title_pct=10.0,
+                summary="Plano recuperado com fontes próprias.",
+                source_urls=["https://example.com/opus-reentry"],
+            ),
+            "",
+            "prompt de reentrada",
+        )
+
+    async def fake_call_agent(spec, prompt, **kwargs):
+        return _healthy_question_opinion(spec.slot)
+
+    async def fake_call_all_agents(prompt, *, specs, **kwargs):
+        return [_healthy_response(spec.slot, 10.0) for spec in specs]
+
+    monkeypatch.setattr("worldcup_brazil.pipeline._run_agent_reentry_probe", fake_probe)
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_agent", fake_call_agent)
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+    watchdog_path = tmp_path / "watchdog.jsonl"
+
+    _consensus, _opinions, transcript, _all = asyncio.run(
+        _run_model_meeting(
+            config=config,
+            planning_opinions=_planning_opinions(),
+            generated_at=datetime(2026, 6, 14, tzinfo=timezone.utc),
+            agent_specs=_specs(),
+            baseline_title_pct=11.0,
+            allow_agent_fallback=True,
+            watchdog=RunWatchdog(path=watchdog_path, verbose=False),
+            reentry_candidate_specs=[opus_spec],
+            reentry_removed_reasons={"Opus 4.8": "devolver resposta parcial ou sem campos auditáveis"},
+            reentry_removed_issues={"Opus 4.8": [format_issue]},
+        )
+    )
+
+    assert probe_timeouts == [17]
+    assert any(
+        "Opus 4.8" in {response["agent"] for response in turn["responses"]}
+        for turn in transcript[1:]
+    )
+    assert any(
+        turn["llm_council_fast_path"]["minimum_blind_acceptances"] == 3
+        for turn in transcript[1:]
+    )
+    events = [json.loads(line) for line in watchdog_path.read_text(encoding="utf-8").splitlines()]
+    started = [event for event in events if event["step"] == "agent_reentry_probe" and event["status"] == "start"][0]
+    assert started["extra"]["timeout_seconds"] == 17
+    assert started["extra"]["reentry_eligible"] is True
+    assert started["extra"]["offending_excerpt"] == format_issue["offending_excerpt"]
+    finished = [event for event in events if event["step"] == "agent_reentry_probe" and event["status"] == "finish"][0]
+    assert len(finished["extra"]["active_slots"]) == 4
+
+
+def test_policy_reentry_violation_is_skipped_without_probe(monkeypatch, tmp_path) -> None:
+    config = {
+        **_base_config(),
+        "meeting_min_rounds": 1,
+        "meeting_max_rounds": 1,
+        "meeting_consensus_threshold_pct": 10.0,
+        "agent_reentry_probe_enabled": True,
+        "agent_reentry_probe_policy": "always",
+    }
+    opus_spec = AgentSpec(
+        slot="Opus 4.8",
+        provider="anthropic",
+        model="claude-opus-4-8",
+        env_api_key="ANTHROPIC_API_KEY",
+        endpoint="https://api.anthropic.com/v1/messages",
+    )
+    opta_issue = {
+        "gate_name": "source_planning_readiness",
+        "matched_rule": "reserved_benchmark_opta",
+        "offending_excerpt": "Usei Opta Power Rankings como benchmark reservado.",
+        "field": "summary",
+        "severity": "blocking",
+        "recoverability": "policy",
+        "repair_hint": "Remover Opta e trazer fontes não reservadas.",
+        "reentry_eligible": False,
+        "reentry_decision_reason": "violação real de contrato não ganha reentry automática",
+    }
+
+    async def fake_probe(*args, **kwargs):
+        raise AssertionError("violação real de Opta não deveria agendar reentry")
+
+    async def fake_call_agent(spec, prompt, **kwargs):
+        return _healthy_question_opinion(spec.slot)
+
+    async def fake_call_all_agents(prompt, *, specs, **kwargs):
+        return [_healthy_response(spec.slot, 10.0) for spec in specs]
+
+    monkeypatch.setattr("worldcup_brazil.pipeline._run_agent_reentry_probe", fake_probe)
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_agent", fake_call_agent)
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+    watchdog_path = tmp_path / "watchdog.jsonl"
+
+    asyncio.run(
+        _run_model_meeting(
+            config=config,
+            planning_opinions=_planning_opinions(),
+            generated_at=datetime(2026, 6, 14, tzinfo=timezone.utc),
+            agent_specs=_specs(),
+            baseline_title_pct=11.0,
+            allow_agent_fallback=True,
+            watchdog=RunWatchdog(path=watchdog_path, verbose=False),
+            reentry_candidate_specs=[opus_spec],
+            reentry_removed_reasons={"Opus 4.8": "referência a benchmark reservado no planejamento sem Opta"},
+            reentry_removed_issues={"Opus 4.8": [opta_issue]},
+        )
+    )
+
+    events = [json.loads(line) for line in watchdog_path.read_text(encoding="utf-8").splitlines()]
+    skipped = [event for event in events if event["step"] == "agent_reentry_probe" and event["status"] == "skipped"][0]
+    assert skipped["extra"]["agent"] == "Opus 4.8"
+    assert skipped["extra"]["reentry_eligible"] is False
+    assert skipped["extra"]["validation_issue"]["matched_rule"] == "reserved_benchmark_opta"
+    assert skipped["extra"]["offending_excerpt"] == opta_issue["offending_excerpt"]
 
 
 def test_format_impossible_opponent_reason_includes_phase_country_and_candidates() -> None:
@@ -1537,13 +2017,50 @@ def test_opponent_debriefing_room_has_own_round_contract_fitting_budget() -> Non
     assert int(sub_config["meeting_stability_rounds"]) == 1
     assert int(sub_config["agent_timeout_seconds"]) <= 120
     assert int(sub_config["protagonist_timeout_seconds"]) <= 120  # 1ª chamada de toda rodada
+    assert float(sub_config["meeting_round_budget_seconds"]) >= 300
     assert _opponent_debriefing_budget_warning(config) is None
+
+    tight_round = dict(config)
+    tight_round["opponent_debriefing_round_budget_seconds"] = 120
+    round_warning = _opponent_debriefing_budget_warning(tight_round)
+    assert round_warning is not None
+    assert "orçamento acumulado de rodada" in round_warning
 
     tight = dict(config)
     tight["parallel_opponent_debriefing_timeout_seconds"] = 60
     warning = _opponent_debriefing_budget_warning(tight)
     assert warning is not None
     assert "não cabe no orçamento" in warning
+
+
+def test_opponent_debriefing_room_keeps_live_crossing_group_results_in_scope() -> None:
+    from pathlib import Path
+
+    from worldcup_brazil.monte_carlo import run_brazil_monte_carlo
+    from worldcup_brazil.pipeline import _opponent_debriefing_config, load_config
+
+    config = load_config(Path("config/worldcup_brazil.example.json"))
+    config["monte_carlo"]["iterations"] = 3000
+    config["completed_group_matches"] = [
+        {
+            "group": "F",
+            "team_a": "Holanda",
+            "team_b": "Japão",
+            "score_a": 2,
+            "score_b": 2,
+            "date": "2026-06-14",
+        },
+    ]
+    config["_monte_carlo_result"] = run_brazil_monte_carlo(config)
+
+    sub_config = _opponent_debriefing_config(config)
+
+    assert sub_config["completed_group_matches"][0]["group"] == "F"
+    assert sub_config["_path_relevant_group_states"]["F"]["completed_results"][0]["score"] == "Holanda 2-2 Japão"
+    direction = sub_config["macro_direction"].lower()
+    assert "placares realizados" in direction
+    assert "tabelas vivas" in direction
+    assert "grupos de cruzamento" in direction
 
 
 def test_meeting_at_ceiling_publishes_last_valid_consensus_when_final_round_is_sterile(monkeypatch, tmp_path) -> None:
@@ -1617,6 +2134,148 @@ def test_meeting_at_ceiling_publishes_last_valid_consensus_when_final_round_is_s
     assert degraded, "deveria emitir watchdog event degraded_publish no teto com rodada final estéril"
     assert degraded[0]["extra"]["last_valid_title_pct"] == consensus.title_pct
     assert not any(e.get("step") == "model_meeting" and e.get("status") == "fail" for e in events)
+
+
+def test_meeting_after_coverage_missing_forces_next_question_to_missing_phase(monkeypatch, tmp_path) -> None:
+    """Regressão do run a30341: a sala chegou a consenso numérico, mas o gate
+    coverage_missing apontou Semifinal ausente e a próxima rodada continuou
+    perguntando sobre outro assunto. O moderador precisa transformar essa lacuna
+    em pauta obrigatória da rodada seguinte."""
+    config = {
+        **_base_config(),
+        "group_matches": [{"opponent": "Marrocos"}],
+        "knockout_matches": [
+            {"phase": "16 avos", "opponent": "Holanda"},
+            {"phase": "Semifinal", "opponent": "Argentina"},
+        ],
+        "meeting_min_rounds": 1,
+        "meeting_max_rounds": 2,
+        "meeting_consensus_threshold_pct": 2.5,
+        "meeting_require_full_path_coverage": True,
+        "meeting_slot_breaker_threshold": 99,
+        "meeting_stability_rounds": 99,
+    }
+    call_count = {"question": 0}
+
+    async def fake_call_agent(spec, prompt, **kwargs):
+        call_count["question"] += 1
+        return AgentOpinion(
+            agent=spec.slot,
+            title_pct=9.0,
+            summary="Pergunta genérica sem cobrir a Semifinal.",
+            question="Com odds e Elo, concordam com Marrocos, 16 avos e título em 9%?",
+            answer="Marrocos e 16 avos sustentam título em 9%.",
+            source_urls=["https://example.com/odds"],
+            agrees_with_protagonist=True,
+        )
+
+    async def fake_call_all_agents(prompt, *, specs, **kwargs):
+        if "Rodada de cobertura obrigatória" in prompt:
+            return [
+                AgentOpinion(
+                    agent=spec.slot,
+                    title_pct=9.0,
+                    summary="Cubro a Semifinal faltante.",
+                    answer=(
+                        "Cobrindo a lacuna: na Semifinal, Argentina e Portugal são top-2; "
+                        "mantém título em 9% com fonte auditável."
+                    ),
+                    source_urls=["https://example.com/semi"],
+                    agrees_with_protagonist=True,
+                )
+                for spec in specs
+            ]
+        return [
+            AgentOpinion(
+                agent=spec.slot,
+                title_pct=9.0,
+                summary="Concordo com Marrocos e 16 avos.",
+                answer="Marrocos e 16 avos estão cobertos; título em 9% com fonte auditável.",
+                source_urls=["https://example.com/odds"],
+                agrees_with_protagonist=True,
+            )
+            for spec in specs
+        ]
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_agent", fake_call_agent)
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+
+    watchdog_path = tmp_path / "watchdog.jsonl"
+    consensus, _opinions, transcript, _all = asyncio.run(
+        _run_model_meeting(
+            config=config,
+            planning_opinions=_planning_opinions(),
+            generated_at=datetime(2026, 6, 18, tzinfo=timezone.utc),
+            agent_specs=_specs(),
+            baseline_title_pct=11.0,
+            allow_agent_fallback=True,
+            watchdog=RunWatchdog(path=watchdog_path, verbose=False),
+        )
+    )
+
+    assert len(transcript) == 2
+    assert "Semifinal" in transcript[1]["question"]
+    assert "cobertura" in transcript[1]["question"].lower()
+    assert transcript[1]["coverage"]["complete"] is True
+    assert getattr(consensus, "exit_status", "consensus") in ("consensus", "max_rounds_no_consensus")
+    events = [json.loads(line) for line in watchdog_path.read_text(encoding="utf-8").splitlines()]
+    assert any(event["step"] == "model_room" and event["status"] == "coverage_missing" for event in events)
+    assert any(event["step"] == "model_room" and event["status"] == "coverage_followup" for event in events)
+
+
+def test_meeting_sterile_abort_publishes_last_valid_consensus_conditionally(monkeypatch, tmp_path) -> None:
+    """Se a sala já produziu consenso válido e auditável, duas rodadas estéreis
+    posteriores não devem destruir o run inteiro. O resultado precisa sair
+    marcado como condicional/degradado, e sala sem consenso prévio continua
+    falhando em outro teste."""
+    config = {
+        **_base_config(),
+        "meeting_min_rounds": 99,
+        "meeting_max_rounds": 4,
+        "meeting_sterile_round_limit": 2,
+        "meeting_slot_breaker_threshold": 99,
+        "meeting_stability_rounds": 99,
+    }
+    round_counter = {"n": 0}
+
+    async def fake_call_agent(spec, prompt, **kwargs):
+        round_counter["n"] += 1
+        if round_counter["n"] >= 3:
+            return _invalid_response(spec.slot)
+        return _healthy_question_opinion(spec.slot)
+
+    async def fake_call_all_agents(prompt, *, specs, **kwargs):
+        if round_counter["n"] >= 3:
+            return [_invalid_response(spec.slot) for spec in specs]
+        return [_healthy_response(spec.slot, 9.0) for spec in specs]
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_agent", fake_call_agent)
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+
+    watchdog_path = tmp_path / "watchdog.jsonl"
+    consensus, opinions, transcript, _all = asyncio.run(
+        _run_model_meeting(
+            config=config,
+            planning_opinions=_planning_opinions(),
+            generated_at=datetime(2026, 6, 18, tzinfo=timezone.utc),
+            agent_specs=_specs(),
+            baseline_title_pct=11.0,
+            allow_agent_fallback=True,
+            watchdog=RunWatchdog(path=watchdog_path, verbose=False),
+        )
+    )
+
+    assert len(transcript) == 3
+    assert abs(float(consensus.title_pct) - 9.3) < 0.1
+    assert getattr(consensus, "exit_status") == "conditional_last_valid_after_sterile"
+    assert "sala estéril" in getattr(consensus, "exit_warning")
+    assert opinions, "deveria devolver as opiniões da última rodada válida"
+    events = [json.loads(line) for line in watchdog_path.read_text(encoding="utf-8").splitlines()]
+    assert any(
+        event["step"] == "model_meeting" and event["status"] == "conditional_publish"
+        for event in events
+    )
+    assert not any(event["step"] == "model_meeting" and event["status"] == "fail" for event in events)
 
 
 def test_meeting_at_ceiling_with_valid_round_but_no_exit_marks_no_consensus(monkeypatch, tmp_path) -> None:

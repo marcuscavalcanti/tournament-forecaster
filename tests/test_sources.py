@@ -1,7 +1,7 @@
 import io
 import urllib.error
 
-from worldcup_brazil.pipeline import _filter_non_opta_sources, _is_opta_source
+from worldcup_brazil.pipeline import _filter_non_opta_sources, _is_low_authority_public_source, _is_opta_source
 from worldcup_brazil.sources import DEFAULT_SOURCES, EvidenceSource, fetch_source, fetch_sources_concurrently
 
 
@@ -33,6 +33,14 @@ def test_filter_non_opta_sources_excludes_opta_from_my_model() -> None:
 
     assert _is_opta_source(sources[0])
     assert [source.name for source in filtered] == ["World Football Elo Ratings"]
+
+
+def test_low_authority_public_source_classifier_marks_social_and_video_sources() -> None:
+    assert _is_low_authority_public_source("Perplexity Pro: https://www.youtube.com/watch?v=abc")
+    assert _is_low_authority_public_source("Gemini Pro: https://facebook.com/groups/worldcup")
+    assert _is_low_authority_public_source("DeepSeek V4 Pro: https://www.capcut.com/explore/world-cup")
+    assert not _is_low_authority_public_source("GPT 5.5: https://www.oddsportal.com/football/world/world-cup/")
+    assert not _is_low_authority_public_source("Opus 4.8 busca: Brazil World Cup odds injuries")
 
 
 def test_fetch_source_retries_http_503_before_returning_ok(monkeypatch) -> None:

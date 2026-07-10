@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import unicodedata
 
 from worldcup_brazil.models import ReportBundle
 from worldcup_brazil.probabilities import MatchEstimate
@@ -11,6 +12,61 @@ PHASE_ORDER = ("16 avos", "Oitavas", "Quartas", "Semifinal", "Final")
 
 def _fmt_pct(value: float) -> str:
     return f"{value:.1f}%"
+
+
+def _stage_reach_probability(bundle: ReportBundle, key: str) -> float:
+    monte_carlo = bundle.metadata.get("monte_carlo", {}) if isinstance(bundle.metadata, dict) else {}
+    if isinstance(monte_carlo, dict):
+        stages = monte_carlo.get("stage_probabilities")
+        if isinstance(stages, dict) and stages.get(key) is not None:
+            return float(stages[key])
+    return float(bundle.stage_probabilities.get(key, 0.0))
+
+
+def _invalid_title_number(
+    *,
+    title_pct_source: object = None,
+    used_fallback: object = False,
+    removed_from_main: object = False,
+) -> bool:
+    source = str(title_pct_source or "").strip().lower()
+    return source == "fallback" or bool(used_fallback) or bool(removed_from_main)
+
+
+def _fmt_response_title(
+    value: float | int | str | None,
+    *,
+    title_pct_source: object = None,
+    used_fallback: object = False,
+    removed_from_main: object = False,
+) -> str:
+    if _invalid_title_number(
+        title_pct_source=title_pct_source,
+        used_fallback=used_fallback,
+        removed_from_main=removed_from_main,
+    ):
+        return "sem número válido"
+    if value is None:
+        return "sem número próprio"
+    return _fmt_pct(float(value))
+
+
+def _fmt_prediction_title(prediction: dict) -> str:
+    return _fmt_response_title(
+        prediction.get("title_pct"),
+        title_pct_source=prediction.get("title_pct_source"),
+        used_fallback=prediction.get("used_fallback"),
+        removed_from_main=prediction.get("removed_from_main"),
+    )
+
+
+def _fmt_chat_response_title(response: dict) -> str:
+    return _fmt_response_title(
+        response.get("title_pct"),
+        title_pct_source=response.get("title_pct_source"),
+        used_fallback=response.get("used_fallback"),
+        removed_from_main=response.get("removed_from_main"),
+    )
 
 
 def _fmt_ci(low: float | None, high: float | None) -> str | None:
@@ -55,6 +111,33 @@ def _date_prefix(match: MatchEstimate) -> str:
     return f"{match.match_date} "
 
 
+def _normalize_text(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", str(value or ""))
+    return "".join(char for char in normalized if not unicodedata.combining(char)).lower()
+
+
+def _completed_result_for_match(bundle: ReportBundle, match: MatchEstimate) -> str | None:
+    metadata = bundle.metadata or {}
+    group_state = metadata.get("group_state")
+    if not isinstance(group_state, dict):
+        monte_carlo = metadata.get("monte_carlo") if isinstance(metadata.get("monte_carlo"), dict) else {}
+        group_state = monte_carlo.get("group_state") if isinstance(monte_carlo, dict) else {}
+    if not isinstance(group_state, dict):
+        return None
+    brazil_key = _normalize_text(match.brazil)
+    opponent_key = _normalize_text(match.opponent)
+    for item in group_state.get("completed_results", []) or []:
+        if not isinstance(item, dict):
+            continue
+        score = str(item.get("score") or "").strip()
+        if not score:
+            continue
+        score_key = _normalize_text(score)
+        if brazil_key in score_key and opponent_key in score_key:
+            return score
+    return None
+
+
 def _render_match(match: MatchEstimate, *, include_venue: bool = False) -> list[str]:
     lines = [
         (
@@ -79,6 +162,13 @@ def _render_match(match: MatchEstimate, *, include_venue: bool = False) -> list[
 def _render_group_block(bundle: ReportBundle) -> list[str]:
     lines = [f"{bundle.group_name} — probabilidade de vitória do Brasil por jogo:"]
     for match in bundle.group_matches:
+        completed_result = _completed_result_for_match(bundle, match)
+        if completed_result:
+            lines.append(
+                f"• {_date_prefix(match)}vs {match.opponent} ({_venue(match)}): "
+                f"resultado {completed_result}"
+            )
+            continue
         if match.draw_pct is None:
             lines.append(
                 f"• {_date_prefix(match)}vs {match.opponent} ({_venue(match)}): "
@@ -201,12 +291,50 @@ def _render_model_predictions_no_opta(bundle: ReportBundle) -> list[str]:
     ]
     for agent, prediction in bundle.model_predictions_no_opta.items():
         fallback = " | fallback" if prediction.get("used_fallback") else ""
+        title_text = _fmt_prediction_title(prediction)
+        source = str(prediction.get("title_pct_source") or "").strip()
+        source_note = f" [{source}]" if source and source != "explicit" else ""
         lines.append(
-            f"- {agent}: título {_fmt_pct(float(prediction.get('title_pct', 0.0)))}{fallback}. "
+            f"- {agent}: título {title_text}{source_note}{fallback}. "
             f"{prediction.get('summary', '')}"
         )
     lines.append("")
     return lines
+
+
+def _render_path_live_group_state_lines(monte_carlo: dict[str, object]) -> list[str]:
+    states = monte_carlo.get("relevant_group_states") if isinstance(monte_carlo, dict) else {}
+    if not isinstance(states, dict):
+        return []
+    chunks: list[str] = []
+    for group, state in sorted(states.items()):
+        if not isinstance(state, dict):
+            continue
+        completed = [
+            str(item.get("score") or "").strip()
+            for item in state.get("completed_results", []) or []
+            if isinstance(item, dict) and str(item.get("score") or "").strip()
+        ]
+        if not completed:
+            continue
+        phases = [
+            str(phase).strip()
+            for phase in state.get("phases", []) or []
+            if str(phase).strip()
+        ]
+        table = state.get("current_table") if isinstance(state.get("current_table"), list) else []
+        leader = ""
+        if table and isinstance(table[0], dict):
+            leader = str(table[0].get("team") or "").strip()
+        phase_text = ", ".join(phases[:2]) if phases else "caminho"
+        leader_text = f"; líder {leader}" if leader else ""
+        chunks.append(
+            f"Grupo {group} ({phase_text}{leader_text}): "
+            f"{'; '.join(completed[:3])}"
+        )
+    if not chunks:
+        return []
+    return ["- Placares do caminho já incorporados: " + " | ".join(chunks[:5]) + "."]
 
 
 def _render_monte_carlo_summary(bundle: ReportBundle) -> list[str]:
@@ -250,6 +378,7 @@ def _render_monte_carlo_summary(bundle: ReportBundle) -> list[str]:
             f"{mode}; mínimo {_fmt_int(path_gate.get('min_iterations', 0))} simulações e "
             f"{_fmt_pct(float(path_gate.get('min_rating_coverage_pct', 0.0)))} de cobertura."
         )
+    lines.extend(_render_path_live_group_state_lines(monte_carlo))
     team_context = monte_carlo.get("team_context") if isinstance(monte_carlo, dict) else {}
     if isinstance(team_context, dict) and int(team_context.get("applied_signal_count") or 0) > 0:
         families = ", ".join(str(item) for item in team_context.get("source_families", [])[:5])
@@ -259,13 +388,31 @@ def _render_monte_carlo_summary(bundle: ReportBundle) -> list[str]:
             f"{int(team_context.get('teams_with_context_count') or 0)} seleções"
             + (f"; famílias: {families}." if families else ".")
         )
-    lines.append(
-        "- Como pesa: simula grupos, melhores terceiros e chave oficial. "
-        "Os modelos recebem isso como insumo quantitativo e podem aceitar ou contestar com fonte melhor."
-    )
+    sensitivity = bundle.metadata.get("team_context_sensitivity") if isinstance(bundle.metadata, dict) else {}
+    if isinstance(sensitivity, dict) and sensitivity.get("enabled"):
+        scenarios = ", ".join(str(item) for item in sensitivity.get("recommended_scenarios", []) or [])
+        lines.append(
+            "- Sensibilidade do contexto: "
+            f"Brasil rating_delta {float(sensitivity.get('brazil_rating_delta', 0.0)):.1f}; "
+            "recalcular cenários"
+            + (f" {scenarios}." if scenarios else ".")
+        )
+    blend = ((bundle.metadata or {}).get("numeric_chairman") or {}).get("stage_probability_blend") or {}
+    if isinstance(blend, dict) and blend.get("enabled"):
+        lines.append(
+            "- Como pesa: funil final combina "
+            f"{float(blend.get('monte_carlo_weight', 0.6)) * 100:.0f}% Monte Carlo e "
+            f"{float(blend.get('model_weight', 0.4)) * 100:.0f}% consenso dos modelos; "
+            "mercado pode desafiar, mas não reprecifica sozinho."
+        )
+    else:
+        lines.append(
+            "- Como pesa: simula grupos, melhores terceiros e chave oficial. "
+            "Os modelos recebem isso como insumo quantitativo e podem aceitar ou contestar com fonte melhor."
+        )
     if stages:
         lines.append(
-            "- Funil MC: "
+            "- Funil MC de base: "
             f"quartas {_fmt_pct(float(stages.get('quartas', 0.0)))} | "
             f"semi {_fmt_pct(float(stages.get('semifinal', 0.0)))} | "
             f"final {_fmt_pct(float(stages.get('final', 0.0)))} | "
@@ -413,7 +560,7 @@ def render_linkedin_post(bundle: ReportBundle) -> str:
     lines.append("")
     lines.append(
         "Probabilidade de Brasil chegar às quartas: "
-        f"{_fmt_pct(bundle.stage_probabilities.get('quartas', 0.0))} "
+        f"{_fmt_pct(_stage_reach_probability(bundle, 'quartas'))} "
         "- chance de sobreviver ao grupo, aos 16 avos e às oitavas. "
         "Método: odds/mercados, ratings e simulação de chave."
         f"{_stage_ci(bundle, 'quartas')}"
@@ -421,7 +568,7 @@ def render_linkedin_post(bundle: ReportBundle) -> str:
     lines.append("")
     lines.append(
         "Probabilidade de Brasil chegar à semifinal: "
-        f"{_fmt_pct(bundle.stage_probabilities.get('semifinal', 0.0))} "
+        f"{_fmt_pct(_stage_reach_probability(bundle, 'semifinal'))} "
         "- daqui em diante o peso do adversário elite começa a morder. "
         "Método: força relativa, descanso, cartões e risco de lesão."
         f"{_stage_ci(bundle, 'semifinal')}"
@@ -429,7 +576,7 @@ def render_linkedin_post(bundle: ReportBundle) -> str:
     lines.append("")
     lines.append(
         "Probabilidade de Brasil chegar à final: "
-        f"{_fmt_pct(bundle.stage_probabilities.get('final', 0.0))} "
+        f"{_fmt_pct(_stage_reach_probability(bundle, 'final'))} "
         "- aqui entra a parte cruel do mata-mata: um jogo ruim derruba um projeto bom. "
         "Método: rating + mercado + cenário de chave."
         f"{_stage_ci(bundle, 'final')}"
@@ -442,6 +589,16 @@ def render_linkedin_post(bundle: ReportBundle) -> str:
         "a leitura direta dos modelos aparece em 'Palpites por modelo'."
         f"{_stage_ci(bundle, 'titulo')}"
     )
+    stage_exit_distribution = bundle.metadata.get("stage_exit_distribution", {})
+    if isinstance(stage_exit_distribution, dict):
+        modal_stage = str(stage_exit_distribution.get("modal_exit_stage", "") or "").strip()
+        modal_pct = stage_exit_distribution.get("modal_exit_pct")
+        if modal_stage and modal_pct is not None:
+            lines.append(
+                "Leitura determinística do funil: "
+                f"a saída mais comum é em {modal_stage} ({_fmt_pct(float(modal_pct))}), "
+                "calculada por diferença entre probabilidades de alcance, não por opinião da sala."
+            )
     lines.append("")
     lines.extend(_render_monte_carlo_summary(bundle))
     lines.extend(_render_model_predictions_no_opta(bundle))
@@ -481,7 +638,7 @@ def render_linkedin_post(bundle: ReportBundle) -> str:
                 for response in turn.get("responses", []):
                     lines.append(f"[Rodada {turn['round']}] {response['agent']}: {_post_chat_text(response['answer'])}")
                     lines.append(
-                        f"  Status: {_response_status(response)} | título: {_fmt_pct(response['title_pct'])} | "
+                        f"  Status: {_response_status(response)} | título: {_fmt_chat_response_title(response)} | "
                         f"aceitação: {response['support_score']:.2f}"
                     )
                 lines.append(
@@ -710,7 +867,10 @@ def render_audit_report(bundle: ReportBundle) -> str:
                 lines.append("")
                 lines.append(f"[{response['agent']}]")
                 lines.append(f"Status: {_response_status(response)}")
-                lines.append(f"Título: {_fmt_pct(response['title_pct'])}; aceitação: {response['support_score']:.2f}")
+                lines.append(
+                    f"Título: {_fmt_chat_response_title(response)}; "
+                    f"aceitação: {response['support_score']:.2f}"
+                )
                 lines.append(f"Mensagem: {_compact_chat_text(response['answer'])}")
                 if response.get("leadership_bid"):
                     proposed = str(response.get("proposed_next_question", "") or "").strip()

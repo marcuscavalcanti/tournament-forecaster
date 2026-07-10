@@ -5,11 +5,12 @@ import math
 import random
 import re
 import unicodedata
+from datetime import date
 from itertools import combinations
-from statistics import NormalDist
+from statistics import NormalDist, median
 from typing import Any
 
-from worldcup_brazil.bracket import PHASE_LABELS, PHASE_SEQUENCE
+from worldcup_brazil.bracket import PHASE_LABELS, PHASE_SEQUENCE, brazil_bracket_path
 
 
 DEFAULT_ITERATIONS = 40000
@@ -20,6 +21,7 @@ DEFAULT_POSITION_RATINGS = (1600.0, 1500.0, 1450.0, 1400.0)
 DEFAULT_PROBABILITY_PCT_TO_RATING_POINTS = 8.0
 DEFAULT_MAX_SIGNAL_RATING_DELTA = 120.0
 DEFAULT_MAX_TEAM_CONTEXT_RATING_DELTA = 180.0
+DEFAULT_TEAM_CONTEXT_WARNING_DELTA = 40.0
 DEFAULT_PATH_GATE_MIN_ITERATIONS = 10000
 DEFAULT_PATH_GATE_MIN_RATING_COVERAGE_PCT = 65.0
 DEFAULT_PATH_GATE_NARROW_UNCERTAINTY_THRESHOLD_PCT = 35.0
@@ -149,6 +151,54 @@ def _signal_category(signal: dict[str, Any]) -> str:
     ).strip() or "contexto"
 
 
+def _canonical_signal_family(category: str) -> str:
+    raw = str(category or "").strip()
+    normalized = _normalize(raw).replace("-", "_").replace("/", "_").replace(" ", "_")
+    normalized = re.sub(r"_+", "_", normalized).strip("_")
+
+    if any(
+        marker in normalized
+        for marker in (
+            "resultado_recente",
+            "resultados_recentes",
+            "recent_result",
+            "recent_results",
+            "match_result",
+            "match_results",
+            "resultado_de_jogo",
+            "resultado_jogo",
+        )
+    ):
+        return "recent_results"
+    if (
+        "caminho_16_avos" in normalized
+        or "16_avos" in normalized
+        or "knockout_path" in normalized
+        or "path_context" in normalized
+        or "caminho_mata_mata" in normalized
+    ):
+        return "path_context"
+    if normalized in {"recent_news", "noticias_recentes", "recent_updates"}:
+        return "recent_news"
+    if any(marker in normalized for marker in ("injur", "lesao", "lesoes", "corte", "cuts_news")):
+        return "injuries_cuts_news"
+    if "performance" in normalized or "sofascore" in normalized:
+        return "performance"
+    if "transfermarkt" in normalized or "market_value" in normalized or "valor_de_mercado" in normalized:
+        return "market_value"
+    if "bet" in normalized or "prediction_market" in normalized or "mercado_de_apostas" in normalized:
+        return "bets_prediction_markets"
+    if "rating" in normalized or "ranking" in normalized:
+        return "ratings"
+    if "press" in normalized or "imprensa" in normalized or "especializada" in normalized:
+        return "specialized_press"
+    if "arbitragem" in normalized or "arbitration" in normalized or "var" in normalized or "cart" in normalized:
+        return "arbitration_var_cards"
+    if "amistoso" in normalized or "friendly" in normalized:
+        return "recent_friendlies"
+    return normalized or "context"
+
+
 def _signal_confidence(signal: dict[str, Any]) -> float:
     try:
         value = float(signal.get("confidence", 1.0))
@@ -189,6 +239,282 @@ def _signal_raw_rating_delta(signal: dict[str, Any], *, probability_pct_to_ratin
     return None
 
 
+EVENT_REACTIVE_SIGNAL_FAMILIES = {
+    "bets_prediction_markets",
+    "ratings",
+    "performance",
+    "injuries_cuts_news",
+    "recent_news",
+    "specialized_press",
+    "recent_friendlies",
+    "recent_results",
+    "path_context",
+}
+
+STRUCTURAL_SIGNAL_FAMILIES = {
+    "elenco_talento",
+    "squad_depth",
+    "tactical_cycle",
+    "managerial_structure",
+    "market_value",
+}
+
+STRUCTURAL_CONTEXT_MARKERS = (
+    "attrition",
+    "squad",
+    "elenco",
+    "talent",
+    "talento",
+    "attack_structure",
+    "estrutura",
+    "estrutural",
+    "cycle",
+    "ciclo",
+    "ausencias acumuladas",
+    "ausencias",
+    "ausencias estruturais",
+    "ausencias acumuladas",
+)
+
+MATCH_EVENT_OPPONENT_ALIASES = {
+    "marrocos": ("marrocos", "morocco", "morocco"),
+    "haiti": ("haiti",),
+    "escocia": ("escocia", "scotland", "escócia"),
+    "holanda": ("holanda", "netherlands", "paises baixos", "países baixos"),
+    "japao": ("japao", "japan", "japão"),
+    "suecia": ("suecia", "sweden", "suécia"),
+    "tunisia": ("tunisia", "tunísia", "tunis"),
+    "argentina": ("argentina",),
+    "portugal": ("portugal",),
+    "franca": ("franca", "frança", "france"),
+    "espanha": ("espanha", "spain"),
+    "alemanha": ("alemanha", "germany"),
+    "inglaterra": ("inglaterra", "england"),
+    "croacia": ("croacia", "croácia", "croatia"),
+}
+
+
+def _signal_text(signal: dict[str, Any], *, explicit_group: Any = "") -> str:
+    parts: list[str] = []
+    for key in (
+        "rationale",
+        "summary",
+        "answer",
+        "headline",
+        "title",
+        "event",
+        "match",
+        "opponent",
+        "fixture",
+        "source",
+        "source_url",
+        "source_query",
+        "source_urls",
+        "source_queries",
+    ):
+        value = signal.get(key)
+        if isinstance(value, list):
+            parts.extend(str(item) for item in value)
+        elif value is not None:
+            parts.append(str(value))
+    if explicit_group:
+        parts.append(str(explicit_group))
+    return _normalize(" ".join(parts))
+
+
+def _match_date_token(text: str) -> str:
+    match = re.search(r"\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b", text)
+    if match:
+        year, month, day = match.groups()
+        return f"{year}-{int(month):02d}-{int(day):02d}"
+    match = re.search(r"\b(\d{1,2})[-/](\d{1,2})(?:[-/](20\d{2}|\d{2}))?\b", text)
+    if match:
+        day, month, year = match.groups()
+        if year and len(year) == 2:
+            year = f"20{year}"
+        return f"{year or 'undated'}-{int(month):02d}-{int(day):02d}"
+    return "undated"
+
+
+def _parse_match_date(value: Any) -> date | None:
+    token = _match_date_token(_normalize(value))
+    if not token.startswith("20"):
+        return None
+    try:
+        return date.fromisoformat(token)
+    except ValueError:
+        return None
+
+
+def _signal_date(signal: dict[str, Any]) -> date | None:
+    for key in ("event_date", "match_date", "date", "played_at"):
+        parsed = _parse_match_date(signal.get(key))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _is_structural_context_signal(
+    signal: dict[str, Any],
+    *,
+    source_family: str,
+    explicit_group: Any = "",
+) -> bool:
+    return source_family in STRUCTURAL_SIGNAL_FAMILIES
+
+
+def _raw_correlation_group_hint(signal: dict[str, Any]) -> Any:
+    for key in ("correlation_group", "shock_id", "event_id", "context_group"):
+        raw = signal.get(key)
+        if raw:
+            return raw
+    return None
+
+
+def _completed_match_index(config: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    by_team: dict[str, list[dict[str, Any]]] = {}
+    for match in _completed_group_matches(config):
+        match_date = _parse_match_date(match.get("date"))
+        if match_date is None:
+            continue
+        team_a = str(match.get("team_a") or "").strip()
+        team_b = str(match.get("team_b") or "").strip()
+        if not team_a or not team_b:
+            continue
+        team_a_key = _normalize(team_a)
+        team_b_key = _normalize(team_b)
+        indexed = {
+            "date": match_date,
+            "date_token": match_date.isoformat(),
+            "teams": (team_a_key, team_b_key),
+        }
+        by_team.setdefault(team_a_key, []).append({**indexed, "opponent": team_b_key})
+        by_team.setdefault(team_b_key, []).append({**indexed, "opponent": team_a_key})
+    for matches in by_team.values():
+        matches.sort(key=lambda item: item["date"])
+    return by_team
+
+
+def _completed_match_anchor_group(
+    signal: dict[str, Any],
+    *,
+    team: str,
+    completed_match_index: dict[str, list[dict[str, Any]]],
+) -> str | None:
+    team_key = _normalize(team)
+    matches = completed_match_index.get(team_key) or []
+    if not matches:
+        return None
+    signal_played_at = _signal_date(signal)
+    candidates = [
+        match for match in matches
+        if signal_played_at is None or match["date"] <= signal_played_at
+    ]
+    if not candidates:
+        return None
+    match = candidates[-1]
+    return f"match_event:{team_key}:{match['opponent']}:{match['date_token']}"
+
+
+def _derived_match_event_group(signal: dict[str, Any], *, team: str, source_family: str, explicit_group: Any = "") -> str | None:
+    if _is_structural_context_signal(signal, source_family=source_family, explicit_group=explicit_group):
+        return None
+    text = _signal_text(signal, explicit_group=explicit_group)
+    team_key = _normalize(team)
+    for opponent_key, aliases in MATCH_EVENT_OPPONENT_ALIASES.items():
+        if opponent_key == team_key:
+            continue
+        if any(alias in text for alias in aliases):
+            explicit_date = (
+                signal.get("event_date")
+                or signal.get("match_date")
+                or signal.get("date")
+                or signal.get("played_at")
+            )
+            date_token = _match_date_token(_normalize(explicit_date)) if explicit_date else _match_date_token(text)
+            if date_token == "undated":
+                date_token = ""
+            suffix = f":{date_token}" if date_token else ""
+            return f"match_event:{team_key}:{opponent_key}{suffix}"
+    return None
+
+
+def _signal_correlation_group(
+    signal: dict[str, Any],
+    *,
+    source_family: str,
+    team: str,
+    completed_match_index: dict[str, list[dict[str, Any]]],
+) -> tuple[str, str]:
+    if _is_structural_context_signal(signal, source_family=source_family):
+        for key in ("correlation_group", "shock_id", "event_id", "context_group"):
+            raw = signal.get(key)
+            if raw:
+                normalized_raw = _normalize(raw)
+                if normalized_raw.startswith("match_event"):
+                    continue
+                return normalized_raw, "structural"
+        return source_family, "structural"
+
+    completed_anchor = _completed_match_anchor_group(
+        signal,
+        team=team,
+        completed_match_index=completed_match_index,
+    )
+    if completed_anchor:
+        return completed_anchor, "completed_match"
+    return source_family, "fallback_family"
+
+
+def _team_context_group_rho(mc_config: dict[str, Any], correlation_group: str) -> float:
+    default_rho = mc_config.get("team_context_correlation_default_rho", 0.0)
+    raw_by_group = mc_config.get("team_context_correlation_rho_by_group") or {}
+    raw_value = default_rho
+    if isinstance(raw_by_group, dict):
+        raw_value = raw_by_group.get(correlation_group, default_rho)
+        if raw_value == default_rho and correlation_group.startswith("match_event:"):
+            base_group = ":".join(correlation_group.split(":")[:3])
+            raw_value = raw_by_group.get(base_group, raw_value)
+    try:
+        rho = float(raw_value)
+    except (TypeError, ValueError):
+        rho = 0.0
+    return max(0.0, min(1.0, rho))
+
+
+def _correlated_family_adjustments(
+    family_adjustments: list[dict[str, Any]],
+    *,
+    mc_config: dict[str, Any],
+) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for adjustment in family_adjustments:
+        correlation_group = str(adjustment.get("correlation_group") or adjustment["source_family"])
+        grouped.setdefault(correlation_group, []).append(adjustment)
+
+    rendered: list[dict[str, Any]] = []
+    for correlation_group, members in sorted(grouped.items()):
+        rho = _team_context_group_rho(mc_config, correlation_group)
+        dominant = max(members, key=lambda item: abs(float(item["rating_delta"])))
+        residual_delta = sum(
+            float(item["rating_delta"]) for item in members if item is not dominant
+        )
+        rating_delta = float(dominant["rating_delta"]) + (1.0 - rho) * residual_delta
+        rendered_adjustment = {
+            "correlation_group": correlation_group,
+            "rho": round(rho, 3),
+            "rating_delta": round(rating_delta, 1),
+            "dominant_family": str(dominant["source_family"]),
+            "dominant_delta": round(float(dominant["rating_delta"]), 1),
+            "residual_delta": round(residual_delta, 1),
+            "member_families": sorted(str(item["source_family"]) for item in members),
+        }
+        if any(item.get("_correlation_group_source") == "completed_match" for item in members):
+            rendered_adjustment["correlation_group_source"] = "completed_match"
+        rendered.append(rendered_adjustment)
+    return rendered
+
+
 def _apply_team_context_adjustments(config: dict[str, Any], ratings: dict[str, float]) -> dict[str, Any]:
     mc_config = _mc_config(config)
     probability_pct_to_rating_points = float(
@@ -196,17 +522,20 @@ def _apply_team_context_adjustments(config: dict[str, Any], ratings: dict[str, f
     )
     max_signal_delta = float(mc_config.get("max_signal_rating_delta", DEFAULT_MAX_SIGNAL_RATING_DELTA))
     max_team_delta = float(mc_config.get("max_team_context_rating_delta", DEFAULT_MAX_TEAM_CONTEXT_RATING_DELTA))
+    warning_delta = float(mc_config.get("team_context_warning_delta", DEFAULT_TEAM_CONTEXT_WARNING_DELTA))
     team_name_by_key = {_normalize(name): name for name in ratings}
 
     applied_signal_count = 0
     ignored_signal_count = 0
     source_families: set[str] = set()
     team_adjustments: dict[str, dict[str, Any]] = {}
+    completed_matches_by_team = _completed_match_index(config)
 
     for signal in _configured_team_context_signals(config):
         team_key = _normalize(signal.get("team") or signal.get("selection") or signal.get("country"))
         team = team_name_by_key.get(team_key)
         category = _signal_category(signal)
+        source_family = _canonical_signal_family(category)
         raw_delta = _signal_raw_rating_delta(
             signal,
             probability_pct_to_rating_points=probability_pct_to_rating_points,
@@ -229,35 +558,189 @@ def _apply_team_context_adjustments(config: dict[str, Any], ratings: dict[str, f
                 "rating_delta": 0.0,
                 "signals": [],
                 "source_families": set(),
+                "family_deltas": {},
             },
         )
-        bucket["rating_delta"] += weighted_delta
-        bucket["source_families"].add(category)
-        bucket["signals"].append(
-            {
-                "category": category,
-                "rating_delta": round(weighted_delta, 1),
-                "confidence": round(confidence, 2),
-                "source": signal.get("source_url")
-                or signal.get("source_query")
-                or signal.get("source")
-                or signal.get("source_urls")
-                or signal.get("source_queries"),
-                "agent": signal.get("agent"),
-            }
+        bucket["source_families"].add(source_family)
+        correlation_group, correlation_group_source = _signal_correlation_group(
+            signal,
+            source_family=source_family,
+            team=team,
+            completed_match_index=completed_matches_by_team,
         )
-        source_families.add(category)
+        bucket["family_deltas"].setdefault((source_family, correlation_group), []).append(weighted_delta)
+        bucket.setdefault("family_group_sources", {})[(source_family, correlation_group)] = correlation_group_source
+        rendered_signal = {
+            "category": source_family,
+            "correlation_group": correlation_group,
+            "correlation_group_source": correlation_group_source,
+            "rating_delta": round(weighted_delta, 1),
+            "confidence": round(confidence, 2),
+            "source": signal.get("source_url")
+            or signal.get("source_query")
+            or signal.get("source")
+            or signal.get("source_urls")
+            or signal.get("source_queries"),
+            "agent": signal.get("agent"),
+        }
+        if category != source_family:
+            rendered_signal["original_category"] = category
+        raw_group_hint = _raw_correlation_group_hint(signal)
+        derived_match_hint = _derived_match_event_group(
+            signal,
+            team=team,
+            source_family=source_family,
+            explicit_group=raw_group_hint or "",
+        )
+        if raw_group_hint and _normalize(raw_group_hint) != correlation_group:
+            rendered_signal["model_correlation_group_hint"] = _normalize(raw_group_hint)
+        if derived_match_hint and derived_match_hint != correlation_group:
+            rendered_signal["model_match_event_hint"] = derived_match_hint
+        if (
+            correlation_group_source == "completed_match"
+            and raw_group_hint
+            and _normalize(raw_group_hint) != correlation_group
+        ):
+            rendered_signal["correlation_group_override_reason"] = "completed_match_overrode_model_hint"
+        bucket["signals"].append(rendered_signal)
+        source_families.add(source_family)
         applied_signal_count += 1
 
     rendered_adjustments: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
     for team, bucket in team_adjustments.items():
+        family_adjustments: list[dict[str, Any]] = []
+        internal_family_adjustments: list[dict[str, Any]] = []
+        for (family, correlation_group), values in sorted(bucket["family_deltas"].items()):
+            if not values:
+                continue
+            correlation_group_source = bucket.get("family_group_sources", {}).get(
+                (family, correlation_group),
+                "fallback_family",
+            )
+            adjustment = {
+                "source_family": family,
+                "rating_delta": round(float(median(values)), 1),
+                "signal_count": len(values),
+            }
+            if correlation_group != family:
+                adjustment["correlation_group"] = correlation_group
+            family_adjustments.append(adjustment)
+            internal_adjustment = dict(adjustment)
+            internal_adjustment["_correlation_group_source"] = correlation_group_source
+            internal_family_adjustments.append(internal_adjustment)
+        correlation_adjustments = _correlated_family_adjustments(
+            internal_family_adjustments,
+            mc_config=mc_config,
+        )
+        completed_multi_family_groups = [
+            item for item in correlation_adjustments
+            if item.get("correlation_group_source") == "completed_match"
+            and len(item.get("member_families") or []) > 1
+        ]
+        completed_anchor_signals = [
+            signal for signal in bucket["signals"]
+            if signal.get("correlation_group_source") == "completed_match"
+            and signal.get("category") not in STRUCTURAL_SIGNAL_FAMILIES
+        ]
+        completed_anchor_families = {str(signal["category"]) for signal in completed_anchor_signals}
+        if len(completed_anchor_families) > 1 and not completed_multi_family_groups:
+            warnings.append(
+                {
+                    "team": team,
+                    "reason": "team_context_event_reactive_under_merge_guard",
+                    "source_families": sorted(completed_anchor_families),
+                }
+            )
+        fallback_reactive_families = {
+            str(signal["category"])
+            for signal in bucket["signals"]
+            if signal.get("category") not in STRUCTURAL_SIGNAL_FAMILIES
+            and signal.get("correlation_group_source") != "completed_match"
+        }
+        if len(fallback_reactive_families) > 1 and not completed_anchor_signals:
+            warnings.append(
+                {
+                    "team": team,
+                    "reason": "team_context_reactive_families_without_calendar_anchor",
+                    "source_families": sorted(fallback_reactive_families),
+                }
+            )
+        for signal in bucket["signals"]:
+            if (
+                signal.get("category") not in STRUCTURAL_SIGNAL_FAMILIES
+                and signal.get("correlation_group_source") != "completed_match"
+                and signal.get("model_match_event_hint")
+            ):
+                warnings.append(
+                    {
+                        "team": team,
+                        "reason": "team_context_model_match_shock_without_calendar_anchor",
+                        "source_family": str(signal["category"]),
+                        "model_correlation_group_hint": signal.get("model_correlation_group_hint"),
+                        "derived_match_event": signal.get("model_match_event_hint"),
+                    }
+                )
+        raw_team_delta = sum(float(item["rating_delta"]) for item in correlation_adjustments)
+        # Evidence-weighted regression. The cap is applied FIRST so the evidence-weighting
+        # operates on the bounded magnitude instead of being erased by the clamp on true
+        # blow-ups. Independent evidence is min(material correlation groups, distinct verified
+        # sources): a single shock relabelled into many group ids cannot inflate the count past
+        # the number of real sources behind it, and sub-threshold groups from one source cannot
+        # bypass it either. Only the excess above warning_delta is shrunk, by a Bayesian factor
+        # n/(n+prior). Deterministic, zero added latency.
+        evidence_regression_enabled = bool(mc_config.get("team_context_evidence_regression_enabled", True))
+        evidence_prior = float(mc_config.get("team_context_evidence_regression_prior", 2.0))
+        evidence_material_delta = float(mc_config.get("team_context_evidence_material_delta", 1.0))
+        capped_raw_delta = max(-max_team_delta, min(max_team_delta, raw_team_delta))
+        material_groups = sum(
+            1
+            for item in correlation_adjustments
+            if abs(float(item["rating_delta"])) >= evidence_material_delta
+        )
+        distinct_sources = len(
+            {
+                str(signal.get("source") or signal.get("source_url") or "").strip()
+                for signal in bucket["signals"]
+            }
+            - {""}
+        )
+        independent_evidence = min(material_groups, distinct_sources)
+        regressed_team_delta = capped_raw_delta
+        if evidence_regression_enabled and abs(capped_raw_delta) > warning_delta:
+            factor = independent_evidence / (independent_evidence + evidence_prior)
+            excess = abs(capped_raw_delta) - warning_delta
+            sign = 1.0 if capped_raw_delta >= 0 else -1.0
+            regressed_team_delta = sign * (warning_delta + excess * factor)
+        bucket["evidence_regression"] = {
+            "raw_delta": round(raw_team_delta, 1),
+            "capped_delta": round(capped_raw_delta, 1),
+            "regressed_delta": round(regressed_team_delta, 1),
+            "independent_evidence": independent_evidence,
+            "material_groups": material_groups,
+            "distinct_sources": distinct_sources,
+            "prior": evidence_prior,
+        }
+        bucket["rating_delta"] = regressed_team_delta
         bounded_team_delta = max(-max_team_delta, min(max_team_delta, float(bucket["rating_delta"])))
+        if abs(bounded_team_delta) > warning_delta:
+            warnings.append(
+                {
+                    "team": team,
+                    "rating_delta": round(bounded_team_delta, 1),
+                    "threshold": warning_delta,
+                    "reason": "team_context_delta_above_warning_threshold",
+                }
+            )
         ratings[team] = ratings[team] + bounded_team_delta
         rendered_adjustments.append(
             {
                 "team": team,
                 "rating_delta": round(bounded_team_delta, 1),
+                "evidence_regression": bucket["evidence_regression"],
                 "source_families": sorted(bucket["source_families"]),
+                "family_adjustments": family_adjustments,
+                "correlation_adjustments": correlation_adjustments,
                 "signals": bucket["signals"],
             }
         )
@@ -270,6 +753,8 @@ def _apply_team_context_adjustments(config: dict[str, Any], ratings: dict[str, f
         "teams_with_context_count": len(rendered_adjustments),
         "source_families": sorted(source_families),
         "team_adjustments": rendered_adjustments,
+        "warnings": warnings,
+        "team_context_warning_delta": warning_delta,
         "probability_pct_to_rating_points": probability_pct_to_rating_points,
         "max_signal_rating_delta": max_signal_delta,
         "max_team_context_rating_delta": max_team_delta,
@@ -338,6 +823,403 @@ def _explicit_brazil_group_probabilities(config: dict[str, Any]) -> dict[tuple[s
             max(0.0, min(100.0, opponent_pct)),
         )
     return probabilities
+
+
+def _team_group_map(config: dict[str, Any]) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for group, teams in _groups(config).items():
+        for team in teams:
+            name = _team_name(team)
+            if name:
+                mapping[_normalize(name)] = str(group).strip().upper()
+    return mapping
+
+
+def _completed_pair_key(team_a: str, team_b: str) -> tuple[str, str]:
+    return tuple(sorted((_normalize(team_a), _normalize(team_b))))
+
+
+def _score_value(record: dict[str, Any], *keys: str) -> int | None:
+    for key in keys:
+        if key not in record:
+            continue
+        try:
+            return int(record[key])
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _completed_group_matches(config: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_matches = config.get("completed_group_matches") or config.get("group_results") or []
+    if not isinstance(raw_matches, list):
+        return []
+    team_groups = _team_group_map(config)
+    completed: list[dict[str, Any]] = []
+    for raw in raw_matches:
+        if not isinstance(raw, dict):
+            continue
+        team_a = str(raw.get("team_a") or raw.get("home") or raw.get("team1") or "").strip()
+        team_b = str(raw.get("team_b") or raw.get("away") or raw.get("team2") or "").strip()
+        if not team_a or not team_b:
+            continue
+        score_a = _score_value(raw, "score_a", "home_score", "goals_a", "team_a_score")
+        score_b = _score_value(raw, "score_b", "away_score", "goals_b", "team_b_score")
+        if score_a is None or score_b is None:
+            score_text = str(raw.get("score") or "").strip()
+            score_match = re.fullmatch(r"\s*(\d+)\s*[-xX]\s*(\d+)\s*", score_text)
+            if score_match:
+                score_a = int(score_match.group(1))
+                score_b = int(score_match.group(2))
+        if score_a is None or score_b is None:
+            continue
+        group = str(raw.get("group") or "").strip().upper()
+        if not group:
+            group_a = team_groups.get(_normalize(team_a), "")
+            group_b = team_groups.get(_normalize(team_b), "")
+            if group_a and group_a == group_b:
+                group = group_a
+        if not group:
+            continue
+        completed.append(
+            {
+                "group": group,
+                "team_a": team_a,
+                "team_b": team_b,
+                "score_a": score_a,
+                "score_b": score_b,
+                "date": raw.get("date"),
+                "source": raw.get("source") or raw.get("source_url"),
+                "score": f"{team_a} {score_a}-{score_b} {team_b}",
+            }
+        )
+    return completed
+
+
+def _completed_group_match_lookup(completed_matches: list[dict[str, Any]]) -> dict[str, dict[tuple[str, str], dict[str, Any]]]:
+    lookup: dict[str, dict[tuple[str, str], dict[str, Any]]] = {}
+    for match in completed_matches:
+        group = str(match.get("group") or "").strip().upper()
+        team_a = str(match.get("team_a") or "")
+        team_b = str(match.get("team_b") or "")
+        if not group or not team_a or not team_b:
+            continue
+        lookup.setdefault(group, {})[_completed_pair_key(team_a, team_b)] = match
+    return lookup
+
+
+def _completed_knockout_matches(config: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_matches = config.get("completed_knockout_matches") or config.get("knockout_results") or []
+    if not isinstance(raw_matches, list):
+        return []
+    completed: list[dict[str, Any]] = []
+    for raw in raw_matches:
+        if not isinstance(raw, dict):
+            continue
+        team_a = str(raw.get("team_a") or raw.get("home") or raw.get("team1") or "").strip()
+        team_b = str(raw.get("team_b") or raw.get("away") or raw.get("team2") or "").strip()
+        phase = str(raw.get("phase") or "").strip()
+        if not team_a or not team_b or not phase:
+            continue
+        score_a = _score_value(raw, "score_a", "home_score", "goals_a", "team_a_score")
+        score_b = _score_value(raw, "score_b", "away_score", "goals_b", "team_b_score")
+        if score_a is None or score_b is None:
+            score_text = str(raw.get("score") or "").strip()
+            score_match = re.fullmatch(r"\s*(\d+)\s*[-xX]\s*(\d+)\s*", score_text)
+            if score_match:
+                score_a = int(score_match.group(1))
+                score_b = int(score_match.group(2))
+        if score_a is None or score_b is None:
+            continue
+        winner = str(raw.get("winner") or "").strip()
+        if not winner:
+            if score_a > score_b:
+                winner = team_a
+            elif score_b > score_a:
+                winner = team_b
+        if _normalize(winner) not in {_normalize(team_a), _normalize(team_b)}:
+            continue
+        completed_match = {
+            "phase": phase,
+            "team_a": team_a,
+            "team_b": team_b,
+            "score_a": score_a,
+            "score_b": score_b,
+            "winner": team_a if _normalize(winner) == _normalize(team_a) else team_b,
+            "date": raw.get("date"),
+            "source": raw.get("source") or raw.get("source_url"),
+            "score": f"{team_a} {score_a}-{score_b} {team_b}",
+        }
+        match_id = str(raw.get("match_id") or "").strip()
+        if match_id:
+            completed_match["match_id"] = match_id
+        penalty_a = _score_value(raw, "penalty_score_a", "home_penalty_score", "HomeTeamPenaltyScore")
+        penalty_b = _score_value(raw, "penalty_score_b", "away_penalty_score", "AwayTeamPenaltyScore")
+        if penalty_a is not None and penalty_b is not None:
+            completed_match["penalty_score"] = f"{penalty_a}-{penalty_b}"
+        completed.append(completed_match)
+    return completed
+
+
+def _completed_knockout_match_lookup(completed_matches: list[dict[str, Any]]) -> dict[str, dict[tuple[str, str], dict[str, Any]]]:
+    lookup: dict[str, dict[tuple[str, str], dict[str, Any]]] = {}
+    for match in completed_matches:
+        phase = str(match.get("phase") or "").strip()
+        team_a = str(match.get("team_a") or "")
+        team_b = str(match.get("team_b") or "")
+        if not phase or not team_a or not team_b:
+            continue
+        lookup.setdefault(_normalize(phase), {})[_completed_pair_key(team_a, team_b)] = match
+    return lookup
+
+
+def _completed_knockout_for_pair(
+    completed_lookup: dict[str, dict[tuple[str, str], dict[str, Any]]] | None,
+    *,
+    phase: str,
+    team_a: str,
+    team_b: str,
+) -> dict[str, Any] | None:
+    phase_lookup = (completed_lookup or {}).get(_normalize(phase), {})
+    return phase_lookup.get(_completed_pair_key(team_a, team_b))
+
+
+def _completed_knockout_winner(result: dict[str, Any], *, team_a: str, team_b: str) -> str | None:
+    winner = str(result.get("winner") or "").strip()
+    if _normalize(winner) == _normalize(team_a):
+        return team_a
+    if _normalize(winner) == _normalize(team_b):
+        return team_b
+    score_a = _score_value(result, "score_a")
+    score_b = _score_value(result, "score_b")
+    if score_a is not None and score_b is not None:
+        if score_a > score_b:
+            return team_a
+        if score_b > score_a:
+            return team_b
+    return None
+
+
+def _row_team_key(rows: dict[str, dict[str, Any]], team: str) -> str | None:
+    if team in rows:
+        return team
+    team_key = _normalize(team)
+    return next((name for name in rows if _normalize(name) == team_key), None)
+
+
+def _apply_match_result_to_rows(rows: dict[str, dict[str, Any]], team_a: str, team_b: str, score_a: int, score_b: int) -> None:
+    row_a = _row_team_key(rows, team_a)
+    row_b = _row_team_key(rows, team_b)
+    if row_a is None or row_b is None:
+        return
+    rows[row_a]["played"] = int(rows[row_a].get("played", 0)) + 1
+    rows[row_b]["played"] = int(rows[row_b].get("played", 0)) + 1
+    rows[row_a]["goals_for"] = int(rows[row_a].get("goals_for", 0)) + score_a
+    rows[row_a]["goals_against"] = int(rows[row_a].get("goals_against", 0)) + score_b
+    rows[row_b]["goals_for"] = int(rows[row_b].get("goals_for", 0)) + score_b
+    rows[row_b]["goals_against"] = int(rows[row_b].get("goals_against", 0)) + score_a
+    if score_a > score_b:
+        rows[row_a]["points"] += 3
+        rows[row_a]["wins"] += 1
+    elif score_b > score_a:
+        rows[row_b]["points"] += 3
+        rows[row_b]["wins"] += 1
+    else:
+        rows[row_a]["points"] += 1
+        rows[row_b]["points"] += 1
+
+
+def _row_goal_difference(row: dict[str, Any]) -> int:
+    return int(row.get("goals_for", 0)) - int(row.get("goals_against", 0))
+
+
+def _completed_group_has_all_pairs(names: list[str], group_completed: dict[tuple[str, str], dict[str, Any]]) -> bool:
+    return all(_completed_pair_key(team_a, team_b) in group_completed for team_a, team_b in combinations(names, 2))
+
+
+def _group_ranking_key(row: dict[str, Any], *, score_tiebreakers_ready: bool) -> tuple[Any, ...]:
+    if score_tiebreakers_ready:
+        return (
+            int(row["points"]),
+            _row_goal_difference(row),
+            int(row.get("goals_for", 0)),
+            int(row["wins"]),
+            float(row["rating"]),
+            float(row.get("tie_noise", 0.0)),
+        )
+    return (
+        int(row["points"]),
+        int(row["wins"]),
+        float(row["rating"]),
+        float(row.get("tie_noise", 0.0)),
+    )
+
+
+def _brazil_group(config: dict[str, Any]) -> str:
+    configured = str(config.get("brazil_group") or "").strip().upper()
+    if configured:
+        return configured
+    brazil = _normalize(config.get("brazil_team_name", "Brasil"))
+    for group, teams in _groups(config).items():
+        if any(_normalize(_team_name(team)) == brazil for team in teams):
+            return str(group).strip().upper()
+    return ""
+
+
+def _completed_current_table(
+    config: dict[str, Any],
+    completed_matches: list[dict[str, Any]],
+    *,
+    ratings: dict[str, float],
+    group: str | None = None,
+) -> list[dict[str, Any]]:
+    target_group = str(group or _brazil_group(config)).strip().upper()
+    teams = _groups(config).get(target_group, [])
+    rows = {
+        _team_name(team): {
+            "team": _team_name(team),
+            "played": 0,
+            "points": 0,
+            "wins": 0,
+            "goals_for": 0,
+            "goals_against": 0,
+            "rating": ratings.get(_team_name(team), 0.0),
+        }
+        for team in teams
+        if _team_name(team)
+    }
+    for match in completed_matches:
+        if str(match.get("group") or "").strip().upper() != target_group:
+            continue
+        _apply_match_result_to_rows(
+            rows,
+            str(match["team_a"]),
+            str(match["team_b"]),
+            int(match["score_a"]),
+            int(match["score_b"]),
+        )
+    rendered = []
+    for row in rows.values():
+        goals_for = int(row.get("goals_for", 0))
+        goals_against = int(row.get("goals_against", 0))
+        rendered.append(
+            {
+                "team": row["team"],
+                "played": int(row.get("played", 0)),
+                "points": int(row.get("points", 0)),
+                "wins": int(row.get("wins", 0)),
+                "goals_for": goals_for,
+                "goals_against": goals_against,
+                "goal_difference": goals_for - goals_against,
+            }
+        )
+    rendered.sort(
+        key=lambda row: (
+            row["points"],
+            row["goal_difference"],
+            row["goals_for"],
+            row["wins"],
+            ratings.get(str(row["team"]), 0.0),
+        ),
+        reverse=True,
+    )
+    return rendered
+
+
+def _completed_results_for_group(completed_matches: list[dict[str, Any]], group: str) -> list[dict[str, Any]]:
+    target_group = str(group or "").strip().upper()
+    return [
+        {
+            "group": match.get("group"),
+            "date": match.get("date"),
+            "score": match.get("score"),
+            "source": match.get("source"),
+        }
+        for match in completed_matches
+        if str(match.get("group") or "").strip().upper() == target_group
+    ]
+
+
+def _completed_results_for_all_groups(completed_matches: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "group": match.get("group"),
+            "date": match.get("date"),
+            "score": match.get("score"),
+            "source": match.get("source"),
+        }
+        for match in completed_matches
+    ]
+
+
+def _completed_results_for_all_knockouts(completed_matches: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "phase": match.get("phase"),
+            "date": match.get("date"),
+            "score": match.get("score"),
+            "winner": match.get("winner"),
+            "source": match.get("source"),
+        }
+        for match in completed_matches
+    ]
+
+
+def _phase_relevant_groups(config: dict[str, Any]) -> dict[str, list[str]]:
+    by_phase: dict[str, list[str]] = {}
+    for entry in brazil_bracket_path(config):
+        phase = str(entry.get("phase") or "").strip()
+        groups = [
+            str(group).strip().upper()
+            for group in entry.get("allowed_opponent_groups", []) or []
+            if str(group).strip()
+        ]
+        if phase and groups:
+            by_phase[phase] = list(dict.fromkeys(groups))
+    return by_phase
+
+
+def _relevant_groups_for_brazil_path(config: dict[str, Any]) -> list[str]:
+    ordered: list[str] = []
+
+    def add(group: str) -> None:
+        normalized = str(group or "").strip().upper()
+        if normalized and normalized not in ordered:
+            ordered.append(normalized)
+
+    add(_brazil_group(config))
+    for groups in _phase_relevant_groups(config).values():
+        for group in groups:
+            add(group)
+    return ordered
+
+
+def _relevant_group_states_summary(
+    config: dict[str, Any],
+    *,
+    ratings: dict[str, float],
+    completed_matches: list[dict[str, Any]],
+) -> dict[str, Any]:
+    phase_groups = _phase_relevant_groups(config)
+    states: dict[str, Any] = {}
+    for group in _relevant_groups_for_brazil_path(config):
+        phases = [
+            phase
+            for phase, groups in phase_groups.items()
+            if group in groups
+        ]
+        states[group] = {
+            "group": group,
+            "phases": phases,
+            "current_table": _completed_current_table(
+                config,
+                completed_matches,
+                ratings=ratings,
+                group=group,
+            ),
+            "completed_results": _completed_results_for_group(completed_matches, group),
+        }
+    return states
 
 
 @functools.lru_cache(maxsize=32768)
@@ -419,6 +1301,7 @@ def _simulate_groups(
     *,
     ratings: dict[str, float],
     explicit_brazil_probs: dict[tuple[str, str], tuple[float, float, float]],
+    completed_group_lookup: dict[str, dict[tuple[str, str], dict[str, Any]]] | None = None,
     default_draw_pct: float,
     rating_scale: float,
 ) -> tuple[dict[str, list[str]], list[dict[str, Any]]]:
@@ -431,12 +1314,27 @@ def _simulate_groups(
                 "team": name,
                 "points": 0,
                 "wins": 0,
+                "played": 0,
+                "goals_for": 0,
+                "goals_against": 0,
                 "rating": ratings[name],
                 "tie_noise": rng.random(),
             }
             for name in names
         }
+        group_completed = (completed_group_lookup or {}).get(str(group).strip().upper(), {})
+        for match in group_completed.values():
+            _apply_match_result_to_rows(
+                rows,
+                str(match["team_a"]),
+                str(match["team_b"]),
+                int(match["score_a"]),
+                int(match["score_b"]),
+            )
+        score_tiebreakers_ready = _completed_group_has_all_pairs(names, group_completed)
         for team_a, team_b in combinations(names, 2):
+            if _completed_pair_key(team_a, team_b) in group_completed:
+                continue
             outcome = _sample_group_match(
                 rng,
                 team_a,
@@ -457,16 +1355,20 @@ def _simulate_groups(
                 rows[team_b]["points"] += 1
         ordered_rows = sorted(
             rows.values(),
-            key=lambda row: (row["points"], row["wins"], row["rating"], row["tie_noise"]),
+            key=lambda row: _group_ranking_key(row, score_tiebreakers_ready=score_tiebreakers_ready),
             reverse=True,
         )
         rankings[group] = [str(row["team"]) for row in ordered_rows]
         if len(ordered_rows) >= 3:
             third = dict(ordered_rows[2])
             third["group"] = group
+            third["_score_tiebreakers_ready"] = score_tiebreakers_ready
             third_rows.append(third)
     third_rows.sort(
-        key=lambda row: (row["points"], row["wins"], row["rating"], row["tie_noise"]),
+        key=lambda row: _group_ranking_key(
+            row,
+            score_tiebreakers_ready=bool(row.get("_score_tiebreakers_ready")),
+        ),
         reverse=True,
     )
     return rankings, third_rows[:8]
@@ -623,6 +1525,19 @@ def _merge_phase_bucket(target: dict[str, Any], source: dict[str, Any]) -> None:
             target_counts[item] = int(target_counts.get(item) or 0) + int(count)
 
 
+def _merge_simulation_diagnostics(target: dict[str, Any], source: dict[str, Any]) -> None:
+    for diagnostic_key, diagnostic_value in source.items():
+        if isinstance(diagnostic_value, dict):
+            bucket = target.setdefault(diagnostic_key, {})
+            if not isinstance(bucket, dict):
+                bucket = {}
+                target[diagnostic_key] = bucket
+            for item, count in diagnostic_value.items():
+                bucket[str(item)] = int(bucket.get(str(item), 0) or 0) + int(count or 0)
+            continue
+        target[diagnostic_key] = int(target.get(diagnostic_key, 0) or 0) + int(diagnostic_value or 0)
+
+
 def _stage_probabilities_from_buckets(
     phase_buckets: dict[str, dict[str, Any]],
     *,
@@ -737,6 +1652,34 @@ def _round_pct(count: int, total: int) -> float:
     return round(count / total * 100.0, 1)
 
 
+def _group_state_summary(
+    config: dict[str, Any],
+    *,
+    ratings: dict[str, float],
+    completed_matches: list[dict[str, Any]],
+    diagnostics: dict[str, Any],
+    iterations: int,
+) -> dict[str, Any]:
+    position_counts = {
+        str(position): int(count)
+        for position, count in (diagnostics.get("brazil_group_position_counts") or {}).items()
+    }
+    position_pct = {
+        str(position): _round_pct(count, iterations)
+        for position, count in sorted(position_counts.items(), key=lambda item: int(item[0]))
+    }
+    brazil_group = _brazil_group(config)
+    return {
+        "brazil_group": brazil_group,
+        "current_table": _completed_current_table(config, completed_matches, ratings=ratings),
+        "completed_results": _completed_results_for_group(completed_matches, brazil_group),
+        "brazil_position_counts": position_counts,
+        "brazil_position_pct": position_pct,
+        "brazil_first_pct": position_pct.get("1", 0.0),
+        "brazil_top2_pct": round(position_pct.get("1", 0.0) + position_pct.get("2", 0.0), 1),
+    }
+
+
 def _simulate_tournament_counts(
     config: dict[str, Any],
     *,
@@ -744,14 +1687,19 @@ def _simulate_tournament_counts(
     iterations: int,
     rng: random.Random,
     explicit_brazil_probs: dict[tuple[str, str], tuple[float, float, float]],
+    completed_group_lookup: dict[str, dict[tuple[str, str], dict[str, Any]]] | None,
+    completed_knockout_lookup: dict[str, dict[tuple[str, str], dict[str, Any]]] | None,
     default_draw_pct: float,
     rating_scale: float,
     brazil: str,
-) -> tuple[dict[str, dict[str, Any]], int, dict[str, int]]:
+) -> tuple[dict[str, dict[str, Any]], int, dict[str, Any]]:
     phase_buckets = {PHASE_LABELS[key]: _empty_phase_bucket() for key in PHASE_SEQUENCE}
     title_count = 0
     third_allocation_relaxed_count = 0
     unresolved_match_count = 0
+    brazil_group_position_counts: dict[str, int] = {}
+    team_groups = _team_group_map(config)
+    brazil_group = team_groups.get(_normalize(brazil), str(config.get("brazil_group") or "").strip().upper())
 
     for _ in range(iterations):
         rankings, qualified_thirds = _simulate_groups(
@@ -759,9 +1707,13 @@ def _simulate_tournament_counts(
             config,
             ratings=ratings,
             explicit_brazil_probs=explicit_brazil_probs,
+            completed_group_lookup=completed_group_lookup,
             default_draw_pct=default_draw_pct,
             rating_scale=rating_scale,
         )
+        if brazil_group and brazil in rankings.get(brazil_group, []):
+            position = rankings[brazil_group].index(brazil) + 1
+            brazil_group_position_counts[str(position)] = brazil_group_position_counts.get(str(position), 0) + 1
         third_assignment, relaxed = _allocate_best_thirds(config, qualified_thirds)
         third_allocation_relaxed_count += relaxed
         used_third_groups: set[str] = set()
@@ -806,13 +1758,25 @@ def _simulate_tournament_counts(
                     bucket["opponent_counts"][opponent] = bucket["opponent_counts"].get(opponent, 0) + 1
                     bucket["brazil_slot_counts"][brazil_slot] = bucket["brazil_slot_counts"].get(brazil_slot, 0) + 1
 
-                winner = _sample_knockout_winner(
-                    rng,
-                    team_a,
-                    team_b,
-                    ratings=ratings,
-                    rating_scale=rating_scale,
+                completed_knockout = _completed_knockout_for_pair(
+                    completed_knockout_lookup,
+                    phase=phase,
+                    team_a=team_a,
+                    team_b=team_b,
                 )
+                winner = (
+                    _completed_knockout_winner(completed_knockout, team_a=team_a, team_b=team_b)
+                    if completed_knockout
+                    else None
+                )
+                if winner is None:
+                    winner = _sample_knockout_winner(
+                        rng,
+                        team_a,
+                        team_b,
+                        ratings=ratings,
+                        rating_scale=rating_scale,
+                    )
                 match_winners[match_id] = winner
                 if brazil in {team_a, team_b} and winner == brazil:
                     opponent = team_b if team_a == brazil else team_a
@@ -824,6 +1788,7 @@ def _simulate_tournament_counts(
     return phase_buckets, title_count, {
         "third_allocation_relaxed_count": third_allocation_relaxed_count,
         "unresolved_match_count": unresolved_match_count,
+        "brazil_group_position_counts": brazil_group_position_counts,
     }
 
 
@@ -840,7 +1805,7 @@ class MonteCarloIntegrityError(RuntimeError):
     falha hard ANTES de publicar número errado."""
 
 
-def _check_simulation_integrity(diagnostics: dict[str, int], *, iterations: int) -> None:
+def _check_simulation_integrity(diagnostics: dict[str, Any], *, iterations: int) -> None:
     unresolved = int(diagnostics.get("unresolved_match_count", 0))
     relaxed = int(diagnostics.get("third_allocation_relaxed_count", 0))
     relaxed_cap = int(iterations * RELAXED_THIRD_ALLOCATION_MAX_FRACTION)
@@ -860,6 +1825,128 @@ def _check_simulation_integrity(diagnostics: dict[str, int], *, iterations: int)
         )
 
 
+def recommend_rho_against_market(
+    title_by_rho: dict[float, float],
+    market_pct: float | None,
+    *,
+    plausible_min: float = 0.5,
+    plausible_max: float = 0.95,
+    tolerance_pct: float = 1.0,
+    current_rho: float = 0.7,
+) -> dict[str, Any]:
+    """Pick the within-group correlation rho whose simulated title best matches the market.
+
+    `title_by_rho` maps each tried rho to the resulting title %. rho is restricted to a
+    plausible [plausible_min, plausible_max] band so it is never overfit to absorb base-rating
+    error: if even the most-shrinking plausible rho cannot reach the market, the verdict is
+    `structural_residual` (the gap is base rating / MC structure, not correlation), not a forced
+    rho. Offline diagnostic; no per-run cost."""
+    usable = {
+        round(float(rho), 3): float(title)
+        for rho, title in (title_by_rho or {}).items()
+        if title is not None
+    }
+    if not usable or market_pct is None or float(market_pct) <= 0.0:
+        return {
+            "verdict": "insufficient_data",
+            "recommended_rho": None,
+            "market_pct": (round(float(market_pct), 1) if market_pct else None),
+        }
+    market = float(market_pct)
+    rho_sensitivity = round(max(usable.values()) - min(usable.values()), 1)
+    current_title = usable.get(round(float(current_rho), 3))
+    base = {
+        "current_rho": round(float(current_rho), 2),
+        "current_title_pct": (round(current_title, 1) if current_title is not None else None),
+        "market_pct": round(market, 1),
+        # How much the title moves across the whole rho sweep. Near zero means rho is inert
+        # for this signal profile (the gap, if any, is base rating, not correlation).
+        "title_rho_sensitivity_pct": rho_sensitivity,
+        "plausible_range": [plausible_min, plausible_max],
+    }
+    plausible = {rho: title for rho, title in usable.items() if plausible_min <= rho <= plausible_max}
+    if not plausible:
+        # No swept rho is plausible -> never fall back to recommending an implausible one.
+        return {**base, "verdict": "no_plausible_rho", "recommended_rho": None}
+    best_rho = min(plausible, key=lambda rho: abs(plausible[rho] - market))
+    best_title = plausible[best_rho]
+    residual_gap = round(abs(best_title - market), 1)
+    reachable_max = max(plausible.values())  # title rises with rho for a net-penalised team
+    if rho_sensitivity < tolerance_pct:
+        # The whole sweep barely moves the title: rho is not the lever here. Do not pretend a
+        # particular rho "aligns" -- keep the current rho and call it inert.
+        verdict = "rho_inert"
+        recommended = round(float(current_rho), 2)
+    elif residual_gap <= tolerance_pct:
+        verdict = "rho_aligns_with_market"
+        recommended = round(best_rho, 2)
+    elif reachable_max < market - tolerance_pct:
+        verdict = "structural_residual"  # max plausible shrink still under market -> base rating
+        recommended = round(best_rho, 2)
+    else:
+        verdict = "rho_partially_closes_gap"
+        recommended = round(best_rho, 2)
+    return {
+        **base,
+        "verdict": verdict,
+        "recommended_rho": recommended,
+        "recommended_title_pct": round(best_title, 1),
+        "residual_gap_pct": residual_gap,
+    }
+
+
+def recommend_base_rating_against_market(
+    title_by_rating: dict[float, float],
+    market_pct: float | None,
+    *,
+    current_rating: float,
+    peer_max_rating: float,
+    tolerance_pct: float = 1.0,
+    plausible_margin: float = 40.0,
+) -> dict[str, Any]:
+    """Diagnose whether the team's SEED base rating (not the market) explains the title gap.
+
+    `title_by_rating` maps each tried base rating to the resulting title %. Finds the rating
+    whose simulated title matches the market, but only calls the seed `seed_plausibly_low` if
+    that rating stays within the peer top cluster (`peer_max_rating + plausible_margin`). It
+    never recommends matching the market with an implausible rating: the model is meant to be
+    allowed to disagree with the market, so an implausible implied rating is reported as a
+    `market_disagreement`, not a fix. Offline diagnostic; no auto-fit."""
+    usable = {
+        round(float(rating), 0): float(title)
+        for rating, title in (title_by_rating or {}).items()
+        if title is not None
+    }
+    if not usable or market_pct is None or float(market_pct) <= 0.0:
+        return {"verdict": "insufficient_data", "recommended_rating": None}
+    market = float(market_pct)
+    implied_rating = min(usable, key=lambda rating: abs(usable[rating] - market))
+    implied_title = usable[implied_rating]
+    current_title = usable.get(round(float(current_rating), 0))
+    plausible_ceiling = peer_max_rating + plausible_margin
+    if current_title is not None and abs(current_title - market) <= tolerance_pct:
+        # the seed itself already lands at the market -- no change needed
+        verdict = "seed_aligns_with_market"
+    elif implied_rating <= plausible_ceiling:
+        # bumping the seed toward the implied rating is defensible -- but verify it independently
+        verdict = "seed_plausibly_low"
+    else:
+        # matching the market would need an implausible rating -> a genuine model/market split
+        verdict = "market_disagreement"
+    return {
+        "verdict": verdict,
+        "current_rating": round(float(current_rating), 0),
+        "current_title_pct": (round(current_title, 1) if current_title is not None else None),
+        "market_implied_rating": round(implied_rating, 0),
+        "market_implied_title_pct": round(implied_title, 1),
+        "market_pct": round(market, 1),
+        "peer_max_rating": round(float(peer_max_rating), 0),
+        "plausible_ceiling": round(plausible_ceiling, 0),
+        "rating_gap": round(implied_rating - float(current_rating), 0),
+        "note": "verify any bump against real Elo / results, never just the market",
+    }
+
+
 def run_brazil_monte_carlo(config: dict[str, Any]) -> dict[str, Any]:
     mc_config = _mc_config(config)
     if not bool(mc_config.get("enabled", False)):
@@ -876,6 +1963,10 @@ def run_brazil_monte_carlo(config: dict[str, Any]) -> dict[str, Any]:
     ratings, rating_coverage_pct, explicit_team_names = _build_rating_table_with_sources(config)
     team_context = _apply_team_context_adjustments(config, ratings)
     explicit_brazil_probs = _explicit_brazil_group_probabilities(config)
+    completed_group_matches = _completed_group_matches(config)
+    completed_group_lookup = _completed_group_match_lookup(completed_group_matches)
+    completed_knockout_matches = _completed_knockout_matches(config)
+    completed_knockout_lookup = _completed_knockout_match_lookup(completed_knockout_matches)
     default_draw_pct = float(mc_config.get("default_draw_pct", DEFAULT_DRAW_PCT))
     rating_scale = float(mc_config.get("rating_scale", DEFAULT_RATING_SCALE))
     brazil = str(config.get("brazil_team_name", "Brasil"))
@@ -883,9 +1974,10 @@ def run_brazil_monte_carlo(config: dict[str, Any]) -> dict[str, Any]:
     rating_uncertainty_enabled = bool(mc_config.get("rating_uncertainty_enabled", False))
     stage_uncertainty_intervals: dict[str, tuple[float, float]] = {}
     rating_uncertainty = {"enabled": False}
-    simulation_diagnostics: dict[str, int] = {
+    simulation_diagnostics: dict[str, Any] = {
         "third_allocation_relaxed_count": 0,
         "unresolved_match_count": 0,
+        "brazil_group_position_counts": {},
     }
     phase_buckets = {PHASE_LABELS[key]: _empty_phase_bucket() for key in PHASE_SEQUENCE}
     title_count = 0
@@ -928,14 +2020,13 @@ def run_brazil_monte_carlo(config: dict[str, Any]) -> dict[str, Any]:
                 iterations=inner_iterations,
                 rng=rng,
                 explicit_brazil_probs=explicit_brazil_probs,
+                completed_group_lookup=completed_group_lookup,
+                completed_knockout_lookup=completed_knockout_lookup,
                 default_draw_pct=default_draw_pct,
                 rating_scale=rating_scale,
                 brazil=brazil,
             )
-            for diagnostic_key, diagnostic_value in sample_diagnostics.items():
-                simulation_diagnostics[diagnostic_key] = (
-                    simulation_diagnostics.get(diagnostic_key, 0) + int(diagnostic_value)
-                )
+            _merge_simulation_diagnostics(simulation_diagnostics, sample_diagnostics)
             for phase in phase_buckets:
                 _merge_phase_bucket(phase_buckets[phase], sample_buckets[phase])
             title_count += sample_title_count
@@ -974,14 +2065,13 @@ def run_brazil_monte_carlo(config: dict[str, Any]) -> dict[str, Any]:
             iterations=iterations,
             rng=rng,
             explicit_brazil_probs=explicit_brazil_probs,
+            completed_group_lookup=completed_group_lookup,
+            completed_knockout_lookup=completed_knockout_lookup,
             default_draw_pct=default_draw_pct,
             rating_scale=rating_scale,
             brazil=brazil,
         )
-        for diagnostic_key, diagnostic_value in single_run_diagnostics.items():
-            simulation_diagnostics[diagnostic_key] = (
-                simulation_diagnostics.get(diagnostic_key, 0) + int(diagnostic_value)
-            )
+        _merge_simulation_diagnostics(simulation_diagnostics, single_run_diagnostics)
         stage_probabilities = _stage_probabilities_from_buckets(
             phase_buckets,
             title_count=title_count,
@@ -1033,6 +2123,19 @@ def run_brazil_monte_carlo(config: dict[str, Any]) -> dict[str, Any]:
         iterations >= path_gate_min_iterations
         and rating_coverage_pct >= path_gate_min_rating_coverage_pct
     )
+    group_state = _group_state_summary(
+        config,
+        ratings=ratings,
+        completed_matches=completed_group_matches,
+        diagnostics=simulation_diagnostics,
+        iterations=iterations,
+    )
+    phase_relevant_groups = _phase_relevant_groups(config)
+    relevant_group_states = _relevant_group_states_summary(
+        config,
+        ratings=ratings,
+        completed_matches=completed_group_matches,
+    )
     return {
         "enabled": True,
         "iterations": iterations,
@@ -1051,6 +2154,17 @@ def run_brazil_monte_carlo(config: dict[str, Any]) -> dict[str, Any]:
         "stage_uncertainty_intervals": stage_uncertainty_intervals,
         "rating_uncertainty": rating_uncertainty,
         "simulation_diagnostics": simulation_diagnostics,
+        "completed_group_matches": {
+            "count": len(completed_group_matches),
+            "matches": _completed_results_for_all_groups(completed_group_matches),
+        },
+        "completed_knockout_matches": {
+            "count": len(completed_knockout_matches),
+            "matches": _completed_results_for_all_knockouts(completed_knockout_matches),
+        },
+        "phase_relevant_groups": phase_relevant_groups,
+        "relevant_group_states": relevant_group_states,
+        "group_state": group_state,
         "title_count": title_count,
         "phases": phases,
         "path_gate": {
@@ -1090,6 +2204,11 @@ def monte_carlo_compact_summary(result: dict[str, Any], *, top_n: int = 3) -> di
         "stage_uncertainty_intervals": result.get("stage_uncertainty_intervals", {}),
         "rating_uncertainty": result.get("rating_uncertainty", {"enabled": False}),
         "simulation_diagnostics": result.get("simulation_diagnostics", {}),
+        "completed_group_matches": result.get("completed_group_matches", {"count": 0, "matches": []}),
+        "completed_knockout_matches": result.get("completed_knockout_matches", {"count": 0, "matches": []}),
+        "phase_relevant_groups": result.get("phase_relevant_groups", {}),
+        "relevant_group_states": result.get("relevant_group_states", {}),
+        "group_state": result.get("group_state", {}),
         "path_gate": result.get("path_gate", {}),
         "phases": phases,
     }

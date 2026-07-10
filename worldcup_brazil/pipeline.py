@@ -6,13 +6,14 @@ import math
 import os
 import random
 import re
+import threading
 import unicodedata
 import urllib.parse
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from statistics import NormalDist
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from worldcup_brazil.agents import agent_effort_profiles, call_agent, call_all_agents, load_agent_specs_from_config
 from worldcup_brazil.bracket import (
@@ -51,7 +52,7 @@ from worldcup_brazil.sources import (
 from worldcup_brazil.watchdog import RunWatchdog
 
 
-DEFAULT_CUSTOM_HASHTAG = "#copaComAchismo"
+DEFAULT_CUSTOM_HASHTAG = "#CopaComAchismo"
 DEFAULT_USD_TO_BRL = 5.4
 DEFAULT_MODEL_PRICING_USD_PER_MILLION_TOKENS = {
     "Opus 4.8": {"input": 15.0, "output": 75.0},
@@ -76,7 +77,10 @@ def _agent_owned_fresh_search_contract() -> str:
         "Contrato único da sala: todos os modelos recebem as mesmas regras, objetivo e escopo. "
         "O mediador não faz busca externa, não escolhe fontes, não injeta evidência e não usa cache. "
         "Cada modelo decide suas próprias fontes, faz busca atualizada no próprio canal, nunca use cache, "
-        "e registra source_urls/source_queries. Regra explícita antes da busca: dados da Opta não contam "
+        "e registra source_urls/source_queries. Aqui 'fonte/source' significa fonte de informação esportiva "
+        "verificável (URL HTTP ou consulta de busca sobre odds, rankings, desempenho, elenco, lesões, resultados "
+        "e chaveamento); não significa fonte tipográfica, camisa, uniforme, design, Instagram/Reels ou identidade visual. "
+        "Regra explícita antes da busca: dados da Opta não contam "
         "no Modelo Principal; não inclua Opta em source_urls/source_queries, não use Opta como benchmark, "
         "fonte, ranking, projeção ou âncora. Se fonte falhar, troque por equivalente fresca; não invente dado."
     )
@@ -86,7 +90,8 @@ def _is_negated_opta_mention(lowered: str, *, start: int, end: int) -> bool:
     prefix = lowered[max(0, start - 56) : start]
     suffix = lowered[end : min(len(lowered), end + 56)]
     if re.search(
-        r"(?:nao|non|sem|exclu\w*|proibid\w*|vedad\w*|ignore\w*|remov\w*)"
+        r"(?:nao|non|sem|exclu\w*|proibid\w*|vedad\w*|ignore\w*|remov\w*|"
+        r"substitu\w*|dispens\w*|evit\w*|troc\w*|retir\w*)"
         r"(?:\W+\w+){0,7}\W*$",
         prefix,
     ):
@@ -99,7 +104,7 @@ def _is_negated_opta_mention(lowered: str, *, start: int, end: int) -> bool:
     ):
         return True
     if re.search(
-        r"^\W*(?:(?:foi|foram|fica\w*|esta\w*)\W+)?(?:\w+\W+){0,2}?(?:proibid\w*|vedad\w*|excluid\w*|reservad\w*)",
+        r"^\W*(?:(?:foi|foram|fica\w*|esta\w*)\W+)?(?:\w+\W+){0,2}?(?:proibid\w*|vedad\w*|excluid\w*|reservad\w*|fora\b)",
         suffix,
     ):
         return True
@@ -115,6 +120,40 @@ def _has_opta_marker(value: str) -> bool:
             continue
         return True
     return False
+
+
+def _has_opta_negation_or_compliance_language(text: str) -> bool:
+    normalized = _normalize_text(str(text or ""))
+    if not normalized:
+        return False
+    patterns = (
+        r"\b(?:sem|nao|non)\W+(?:usar|uso|usei|utilizar|utilizei|inclu\w*|consider\w*|ancor\w*)"
+        r"(?:\W+\w+){0,8}\W+opta",
+        r"\b(?:substitu\w*|dispens\w*|evit\w*|troc\w*|retir\w*|exclu\w*|remov\w*)"
+        r"(?:\W+\w+){0,8}\W+opta",
+        r"\bopta\W+(?:nao\W+conta|fora|excluid\w*|removid\w*|proibid\w*)",
+        r"\bopta(?:\W+\w+){0,5}\W+(?:proibid\w*|vedad\w*|fora|excluid\w*|removid\w*)",
+    )
+    return any(re.search(pattern, normalized) for pattern in patterns)
+
+
+def _has_fixed_allocation_negation_or_compliance_language(text: str) -> bool:
+    normalized = _normalize_text(str(text or ""))
+    if not normalized:
+        return False
+    patterns = (
+        r"\b(?:sem|nao|non)\W+(?:usar|uso|usei|utilizar|utilizei|aplicar|apliquei)"
+        r"(?:\W+\w+){0,8}\W+(?:alocacao\W+fixa|percentual\W+fixo|peso\W+fixo|quanti/quali)",
+        r"\b(?:nao|non)\W+(?:reconstru\w*|recriar|calcular|decompor|declara\w*|declaro)"
+        r"(?:\W+\w+){0,8}\W+(?:decomposicao\W+fixa|alocacao\W+fixa|percentual\W+fixo|peso\W+fixo|quanti/quali)",
+        r"\b(?:substitu\w*|dispens\w*|evit\w*|troc\w*|retir\w*|exclu\w*|remov\w*)"
+        r"(?:\W+\w+){0,8}\W+(?:alocacao\W+fixa|percentual\W+fixo|peso\W+fixo|quanti/quali)",
+        r"\b(?:sem|nao\W+ha|nao\W+uso|nao\W+usei)\W+"
+        r"(?:alocacao\W+fixa|percentual\W+fixo|peso\W+fixo|quanti/quali)",
+        r"\b(?:alocacao\W+fixa|percentual\W+fixo|peso\W+fixo|quanti/quali)"
+        r"\W+(?:proibid\w*|fora|excluid\w*|removid\w*)",
+    )
+    return any(re.search(pattern, normalized) for pattern in patterns)
 
 
 def _is_opta_source(source: EvidenceSource) -> bool:
@@ -322,11 +361,40 @@ def _has_fixed_quanti_quali_allocation(text: str) -> bool:
     )
     quant_markers = ("quanti", "quantitativ", "estatistic", "numer", "dados")
     qual_markers = ("quali", "qualitativ", "contexto", "noticias", "lesoes", "arbitragem")
+    odds_context_markers = (
+        "odd",
+        "odds",
+        "cotacao",
+        "cotacoes",
+        "mercado",
+        "sportsbook",
+        "bookmaker",
+        "casa",
+        "casas",
+        "aposta",
+        "apostas",
+        "fracionaria",
+        "fracionarias",
+        "fractional",
+    )
     has_quant = any(marker in normalized for marker in quant_markers)
     has_qual = any(marker in normalized for marker in qual_markers)
     if not has_quant or not has_qual:
         return False
-    fixed_pair = bool(re.search(r"\b\d{1,3}\s*/\s*\d{1,3}\b", normalized))
+    slash_pair_matches = list(re.finditer(r"\b\d{1,3}\s*/\s*\d{1,3}\b", normalized))
+    allocation_slash_pairs = []
+    for match in slash_pair_matches:
+        local = normalized[max(0, match.start() - 90) : min(len(normalized), match.end() + 90)]
+        immediate = normalized[max(0, match.start() - 55) : min(len(normalized), match.end() + 55)]
+        looks_like_allocation = (
+            any(marker in immediate for marker in quant_markers)
+            and any(marker in immediate for marker in qual_markers)
+            and any(marker in immediate for marker in method_markers)
+        )
+        if any(marker in local for marker in odds_context_markers) and not looks_like_allocation:
+            continue
+        allocation_slash_pairs.append(match)
+    fixed_pair = bool(allocation_slash_pairs)
     fixed_percent_pair = bool(re.search(r"\b\d{1,3}\s*%\D{0,90}\b\d{1,3}\s*%", normalized))
     if not fixed_pair and not fixed_percent_pair:
         return False
@@ -335,9 +403,16 @@ def _has_fixed_quanti_quali_allocation(text: str) -> bool:
         re.search(r"\b\d{1,3}\s*%\D{0,45}(quanti|quantitativ|estatistic|numer|dados)", normalized)
         and re.search(r"\b\d{1,3}\s*%\D{0,45}(quali|qualitativ|contexto|noticias|lesoes|arbitragem)", normalized)
     )
-    slash_quant_qual = bool(
-        re.search(r"\b\d{1,3}\s*/\s*\d{1,3}\b\D{0,60}(quanti|quantitativ|quali|qualitativ|contexto)", normalized)
+    slash_quant_qual = any(
+        re.search(r"(quanti|quantitativ|quali|qualitativ|contexto)", normalized[match.end() : match.end() + 60])
+        for match in allocation_slash_pairs
     )
+    if (
+        _has_fixed_allocation_negation_or_compliance_language(normalized)
+        and not direct_quant_qual_percent
+        and not slash_quant_qual
+    ):
+        return False
     return has_method_marker or direct_quant_qual_percent or slash_quant_qual
 
 
@@ -439,6 +514,297 @@ def _external_search_failure_issue(opinion: Any) -> str | None:
     return None
 
 
+def _validation_excerpt(text: str, markers: tuple[str, ...] = (), *, limit: int = 220) -> str:
+    raw = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not raw:
+        return ""
+    normalized = _normalize_text(raw)
+    for marker in markers:
+        marker_norm = _normalize_text(marker)
+        if not marker_norm:
+            continue
+        index = normalized.find(marker_norm)
+        if index >= 0:
+            start = max(0, index - 70)
+            end = min(len(raw), index + len(marker) + 110)
+            return _truncate_for_watchdog(raw[start:end].strip(), limit=limit)
+    return _truncate_for_watchdog(raw, limit=limit)
+
+
+def _opinion_diagnostic_text(opinion: Any, source_items: list[str] | None = None) -> str:
+    return " ".join(
+        str(item or "")
+        for item in (
+            getattr(opinion, "summary", ""),
+            getattr(opinion, "opening_argument", ""),
+            getattr(opinion, "question", ""),
+            getattr(opinion, "answer", ""),
+            getattr(opinion, "critique", ""),
+            getattr(opinion, "adjustment", ""),
+            getattr(opinion, "proposed_next_question", ""),
+            getattr(opinion, "leadership_rationale", ""),
+            " ".join(source_items or []),
+            " ".join(getattr(opinion, "source_urls", []) or []),
+            " ".join(getattr(opinion, "source_queries", []) or []),
+        )
+    )
+
+
+def _validation_issue(
+    *,
+    gate_name: str,
+    matched_rule: str,
+    offending_excerpt: str,
+    field: str,
+    severity: str,
+    recoverability: str,
+    repair_hint: str,
+) -> dict[str, Any]:
+    issue = {
+        "gate_name": gate_name,
+        "matched_rule": matched_rule,
+        "offending_excerpt": _truncate_for_watchdog(offending_excerpt, limit=220),
+        "field": field,
+        "severity": severity,
+        "recoverability": recoverability,
+        "repair_hint": repair_hint,
+    }
+    policy = _reentry_policy_for_validation_issue(issue)
+    issue["reentry_eligible"] = bool(policy["eligible"])
+    issue["reentry_decision_reason"] = str(policy["decision_reason"])
+    return issue
+
+
+def _issue_text_from_reason(reason: str) -> str:
+    normalized = _normalize_text(reason)
+    if "source_urls/source_queries" in normalized:
+        return "source_urls/source_queries não-Opta ausentes"
+    if "benchmark reservado" in normalized or "opta" in normalized:
+        return "benchmark reservado/Opta não pode entrar no Modelo Principal"
+    if "alocacao fixa" in normalized or "quanti/quali" in normalized:
+        return "alocação fixa quanti/quali proibida"
+    if "busca/fetch externo indisponivel" in normalized or "sem permissao" in normalized:
+        return "busca/fetch externo indisponível ou sem permissão"
+    if "429" in normalized or "too many requests" in normalized or "quota" in normalized:
+        return "quota/rate-limit impede reentrada automática"
+    if "prepayment credits" in normalized or "comprar creditos" in normalized or "billing action required" in normalized:
+        return "créditos Gemini/prepayment esgotados"
+    if "adversario impossivel" in normalized or "cruzamento oficial" in normalized:
+        return "adversário impossível pelo bracket oficial"
+    if "resposta parcial" in normalized or "json parcial" in normalized or "sem campos auditaveis" in normalized:
+        return "resposta parcial ou sem campos auditáveis"
+    return reason or "violação de contrato operacional"
+
+
+def _semantic_policy_recoverability(*, kind: str, diagnostic_text: str, semantic_policy_stage: str) -> str:
+    """Semantic policy hits start repairable; only post-repair affirmative reuse becomes terminal.
+
+    The initial matcher is intentionally conservative: Opta/fixed-allocation hits are language-level
+    policies, and negation detection has already produced false positives. Structural gates such as
+    bracket impossibility stay terminal elsewhere because they are machine-checkable.
+    """
+    stage = str(semantic_policy_stage or "initial").strip().lower()
+    if stage != "post_repair":
+        return "policy_suspected"
+    if kind == "opta" and _has_opta_negation_or_compliance_language(diagnostic_text):
+        return "policy_suspected"
+    if kind == "fixed_allocation" and _has_fixed_allocation_negation_or_compliance_language(diagnostic_text):
+        return "policy_suspected"
+    return "policy"
+
+
+def _validation_issue_from_reason(
+    *,
+    gate_name: str,
+    reason: str,
+    opinion: Any | None = None,
+    source_items: list[str] | None = None,
+    field: str = "summary",
+    semantic_policy_stage: str = "initial",
+) -> dict[str, Any]:
+    normalized = _normalize_text(reason)
+    diagnostic_text = _opinion_diagnostic_text(opinion, source_items) if opinion is not None else reason
+    markers: tuple[str, ...] = ()
+    matched_rule = "operational_contract"
+    severity = "blocking"
+    recoverability = "fatal"
+    repair_hint = "Não reentrar automaticamente; requer correção manual ou nova rodada operacional."
+
+    if _is_format_repairable_planning_reason(reason):
+        matched_rule = "partial_or_unparseable_payload"
+        recoverability = "format"
+        markers = ("resposta parcial", "json parcial", "sem campos auditáveis", "sem campos auditaveis")
+        repair_hint = "Retry curto: reenviar somente JSON completo e auditável, sem prosa fora do objeto."
+    elif "prepayment credits" in normalized or "billing action required" in normalized or "comprar creditos" in normalized:
+        matched_rule = "provider_billing_or_prepay_depleted"
+        recoverability = "fatal"
+        markers = ("prepayment credits", "billing action required", "comprar créditos", "comprar creditos")
+        repair_hint = "Não reentrar neste run; comprar créditos/regularizar billing antes de tentar Gemini novamente."
+    elif "429" in normalized or "too many requests" in normalized or "rate limit" in normalized or "quota" in normalized:
+        matched_rule = "provider_rate_limit_or_quota"
+        recoverability = "source"
+        markers = ("429", "too many requests", "quota", "rate limit")
+        repair_hint = "Não reentrar até cooldown/quota renovar; evitar probes repetidos na mesma janela."
+    elif "timeout no planejamento" in normalized or "timed out" in normalized or "timeout" in normalized:
+        matched_rule = "planning_timeout"
+        recoverability = "source"
+        markers = ("timeout", "timed out")
+        repair_hint = "Pode reentrar se o probe trouxer fontes auditáveis; não confundir com 429/quota."
+    elif "source_urls/source_queries" in normalized:
+        matched_rule = "missing_auditable_sources"
+        recoverability = "source"
+        markers = ("source_urls", "source_queries")
+        repair_hint = "Pode reentrar apenas se trouxer source_urls HTTP ou source_queries específicas executadas agora."
+    elif "fora do escopo" in normalized or "futebol competitivo" in normalized:
+        matched_rule = "source_relevance_off_scope"
+        recoverability = "source"
+        markers = ("fora do escopo", "fontes", "tipogra", "camisa", "font")
+        repair_hint = (
+            "Repair direcionado: trocar fontes fora de escopo por odds, rankings, notícias de escalação/lesão, "
+            "resultados e previews esportivos verificáveis."
+        )
+    elif "nao trouxe plano de fontes" in normalized or "não trouxe plano de fontes" in reason or "sem fonte auditavel" in normalized:
+        matched_rule = "missing_auditable_sources"
+        recoverability = "source"
+        markers = ("plano de fontes", "fonte auditável", "fonte auditavel")
+        repair_hint = "Pode reentrar apenas se trouxer source_urls HTTP ou source_queries específicas executadas agora."
+    elif "benchmark reservado" in normalized or "opta" in normalized:
+        matched_rule = "reserved_benchmark_opta"
+        recoverability = _semantic_policy_recoverability(
+            kind="opta",
+            diagnostic_text=diagnostic_text,
+            semantic_policy_stage=semantic_policy_stage,
+        )
+        markers = ("Opta", "opta", "benchmark reservado")
+        repair_hint = (
+            "Repair direcionado: reescrever sem mencionar Opta/benchmark reservado e confirmar fontes não reservadas."
+            if recoverability == "policy_suspected"
+            else "Não reentrar; remover Opta/benchmark reservado e trazer fontes não reservadas em novo planejamento."
+        )
+    elif "adversario impossivel" in normalized or "cruzamento oficial" in normalized:
+        matched_rule = "impossible_bracket_opponent"
+        recoverability = "bracket"
+        markers = ("adversário impossível", "adversario impossivel", "cruzamento oficial")
+        repair_hint = "Não reentrar; respeitar adversários possíveis pelo bracket oficial configurado."
+    elif "alocacao fixa" in normalized or "quanti/quali" in normalized:
+        matched_rule = "fixed_quantitative_qualitative_allocation"
+        recoverability = _semantic_policy_recoverability(
+            kind="fixed_allocation",
+            diagnostic_text=diagnostic_text,
+            semantic_policy_stage=semantic_policy_stage,
+        )
+        markers = ("70/30", "60/40", "quanti", "qualit")
+        repair_hint = (
+            "Repair direcionado: reescrever sem citar fórmula/alocação fixa e confirmar que o peso quanti/quali é livre."
+            if recoverability == "policy_suspected"
+            else "Não reentrar; modelos devem decidir livremente o peso entre dados quantitativos e qualitativos."
+        )
+    elif "busca/fetch externo indisponivel" in normalized or "sem permissao" in normalized or "permission" in normalized:
+        matched_rule = "external_fetch_unavailable"
+        recoverability = "source"
+        markers = ("busca/fetch", "sem permissão", "sem permissao", "permission")
+        repair_hint = "Não reentrar enquanto a ferramenta/permissão de busca estiver indisponível."
+
+    excerpt = _validation_excerpt(diagnostic_text or _issue_text_from_reason(reason), markers)
+    if not excerpt:
+        excerpt = _issue_text_from_reason(reason)
+    return _validation_issue(
+        gate_name=gate_name,
+        matched_rule=matched_rule,
+        offending_excerpt=excerpt,
+        field=field,
+        severity=severity,
+        recoverability=recoverability,
+        repair_hint=repair_hint,
+    )
+
+
+def _reentry_policy_for_validation_issue(issue: dict[str, Any] | None) -> dict[str, Any]:
+    if not issue:
+        return {
+            "eligible": True,
+            "decision_reason": "sem issue estruturada; mantendo compatibilidade com política antiga",
+        }
+    recoverability = str(issue.get("recoverability", "")).strip().lower()
+    matched_rule = str(issue.get("matched_rule", "")).strip().lower()
+    if recoverability == "format":
+        return {
+            "eligible": True,
+            "decision_reason": "erro de formato é recuperável por retry curto",
+        }
+    if matched_rule in {
+        "missing_auditable_sources",
+        "planning_timeout",
+        "legacy_reentry_candidate",
+        "consecutive_invalid_votes",
+        "source_relevance_off_scope",
+    }:
+        return {
+            "eligible": True,
+            "decision_reason": "falha recuperável pode reentrar somente se o probe trouxer fonte auditável",
+        }
+    if matched_rule in {"provider_rate_limit_or_quota", "provider_billing_or_prepay_depleted"}:
+        return {
+            "eligible": False,
+            "decision_reason": "429/quota/billing exige cooldown ou ação externa; probe não resolve",
+        }
+    if matched_rule == "external_fetch_unavailable":
+        return {
+            "eligible": False,
+            "decision_reason": "ferramenta/permissão de busca indisponível; probe repetiria a mesma falha",
+        }
+    if recoverability == "policy_suspected":
+        return {
+            "eligible": True,
+            "decision_reason": "violação semântica ambígua/negada ganha repair direcionado antes de remoção terminal",
+        }
+    if recoverability in {"policy", "bracket", "fatal"}:
+        return {
+            "eligible": False,
+            "decision_reason": "violação real de contrato não ganha reentry automática",
+        }
+    return {
+        "eligible": False,
+        "decision_reason": f"recoverability={recoverability or 'desconhecida'} sem política de reentry segura",
+    }
+
+
+def _primary_validation_issue(issues: list[dict[str, Any]] | None, reason: str = "") -> dict[str, Any]:
+    if issues:
+        return dict(issues[0])
+    if _normalize_text(reason) in {"", "removido no planejamento"}:
+        return _validation_issue(
+            gate_name="legacy_reason",
+            matched_rule="legacy_reentry_candidate",
+            offending_excerpt=reason or "motivo legado sem issue estruturada",
+            field="summary",
+            severity="blocking",
+            recoverability="source",
+            repair_hint="Pode reentrar apenas se o probe trouxer fonte auditável.",
+        )
+    return _validation_issue_from_reason(gate_name="legacy_reason", reason=reason)
+
+
+def _source_planning_issue_repair_class(issue: dict[str, Any] | None) -> str:
+    matched_rule = str((issue or {}).get("matched_rule", "") or "").strip().lower()
+    recoverability = str((issue or {}).get("recoverability", "") or "").strip().lower()
+    if matched_rule == "source_relevance_off_scope":
+        return "targeted_source_repair"
+    if recoverability == "format":
+        return "format_repair"
+    if recoverability == "policy_suspected":
+        return "semantic_policy_repair"
+    if matched_rule in {"missing_auditable_sources", "planning_timeout", "legacy_reentry_candidate"}:
+        return "source_repair"
+    return "none"
+
+
+def _reentry_timeout_for_issue(config: dict[str, Any], issue: dict[str, Any] | None, default_timeout: int) -> int:
+    if str((issue or {}).get("recoverability", "")).lower() == "format":
+        return int(config.get("agent_reentry_format_timeout_seconds", min(60, int(default_timeout))))
+    return int(default_timeout)
+
+
 def _source_planning_relevance_issue(opinion: Any, source_items: list[str]) -> str | None:
     external_search_issue = _external_search_failure_issue(opinion)
     if external_search_issue:
@@ -464,8 +830,12 @@ def _source_planning_relevance_issue(opinion: Any, source_items: list[str]) -> s
     )
     source_text = _normalize_text(" ".join(source_items))
     off_topic_markers = (
+        "fonte visual",
+        "fontes visuais",
         "fonte tipografica",
         "fontes tipograficas",
+        "tipografia",
+        "tipografica",
         "fonte personalizada",
         "fontes personalizadas",
         "jersey font",
@@ -517,6 +887,7 @@ def _source_planning_relevance_issue(opinion: Any, source_items: list[str]) -> s
 def _source_planning_readiness_report(planning_opinions: list[Any], config: dict[str, Any]) -> dict[str, Any]:
     require_source_plan = bool(config.get("require_agent_source_plan", True))
     drop_all_candidates, candidates = _source_planning_drop_candidates(config)
+    semantic_policy_stage = str(config.get("_source_planning_semantic_policy_stage", "initial") or "initial")
     entries: list[dict[str, Any]] = []
     active_agents: list[str] = []
     removed_agents: list[dict[str, Any]] = []
@@ -540,11 +911,38 @@ def _source_planning_readiness_report(planning_opinions: list[Any], config: dict
             reason = relevance_issue
         else:
             reason = "plano de fontes próprio e verificável"
+        validation_issues = []
+        if removed:
+            validation_issues = [
+                _validation_issue_from_reason(
+                    gate_name="source_planning_readiness",
+                    reason=reason,
+                    opinion=opinion,
+                    source_items=source_items,
+                    field=(
+                        "source_urls/source_queries"
+                        if "source_urls/source_queries" in _normalize_text(reason)
+                        else "summary"
+                    ),
+                    semantic_policy_stage=semantic_policy_stage,
+                )
+            ]
+        primary_issue = validation_issues[0] if validation_issues else {}
 
         entry = {
             "agent": agent,
             "ready": not removed,
             "reason": reason,
+            "validation_issues": validation_issues,
+            "gate_name": primary_issue.get("gate_name", ""),
+            "matched_rule": primary_issue.get("matched_rule", ""),
+            "offending_excerpt": primary_issue.get("offending_excerpt", ""),
+            "field": primary_issue.get("field", ""),
+            "severity": primary_issue.get("severity", ""),
+            "recoverability": primary_issue.get("recoverability", ""),
+            "repair_hint": primary_issue.get("repair_hint", ""),
+            "reentry_eligible": primary_issue.get("reentry_eligible", False) if removed else False,
+            "reentry_decision_reason": primary_issue.get("reentry_decision_reason", ""),
             "used_fallback": used_fallback,
             "source_url_count": len([url for url in getattr(opinion, "source_urls", []) if not _has_opta_marker(url)]),
             "source_query_count": len(
@@ -640,7 +1038,8 @@ def _agent_source_planning_watchdog_extra(config: dict[str, Any]) -> dict[str, A
             ],
             "team_context_signal_rule": (
                 "cada sinal precisa de team, category, rating_delta ou probability_delta_pct, "
-                "confidence, rationale e source_url/source_query; sem fonte ou delta numérico, não altera o Monte Carlo"
+                "confidence, rationale e source_url/source_query; use correlation_group/shock_id igual quando "
+                "famílias diferentes reagem ao mesmo evento; sem fonte ou delta numérico, não altera o Monte Carlo"
             ),
             "source_requirement": "source_urls ou source_queries auditáveis escolhidas pelo próprio modelo neste run",
         },
@@ -658,9 +1057,23 @@ def _agent_source_planning_watchdog_extra(config: dict[str, Any]) -> dict[str, A
                     min(90, int(config.get("agent_timeout_seconds", 90))),
                 )
             ),
+            "repair_reentry_eligible_removals_before_meeting": bool(
+                config.get(
+                    "repair_reentry_eligible_removals_before_meeting",
+                    config.get("repair_reentry_eligible_removals_at_quorum_floor", True),
+                )
+            ),
+            "source_planning_floor_repair_timeout_seconds": int(
+                config.get("source_planning_floor_repair_timeout_seconds", config.get("agent_timeout_seconds", 90))
+            ),
             "blind_peer_review_enabled": bool(config.get("blind_peer_review_enabled", False)),
             "blind_peer_review_shadow_only": bool(config.get("blind_peer_review_shadow_only", True)),
+            "blind_peer_review_on_consensus_exit": bool(config.get("blind_peer_review_on_consensus_exit", True)),
             "blind_peer_review_timeout_seconds": int(config.get("blind_peer_review_timeout_seconds", 90)),
+            "blind_peer_review_acceptance_threshold": float(config.get("blind_peer_review_acceptance_threshold", 0.72)),
+            "blind_peer_review_max_self_preference_leakage": float(
+                config.get("blind_peer_review_max_self_preference_leakage", 0.20)
+            ),
             "numeric_chairman_enabled": bool(config.get("numeric_chairman_enabled", True)),
             "llm_council_fast_path_enabled": bool(config.get("llm_council_fast_path_enabled", False)),
             "llm_council_fast_path_shadow_only": bool(config.get("llm_council_fast_path_shadow_only", True)),
@@ -735,6 +1148,8 @@ def _agent_source_planning_watchdog_detail(config: dict[str, Any]) -> str:
         f"self_heal_attempts={knobs['source_planning_repair_attempts']}; "
         f"format_repair={knobs['repair_format_removals_with_quorum']}; "
         f"format_repair_timeout_s={knobs['source_planning_format_repair_timeout_seconds']}; "
+        f"pre_meeting_repair={knobs['repair_reentry_eligible_removals_before_meeting']}; "
+        f"floor_repair_timeout_s={knobs['source_planning_floor_repair_timeout_seconds']}; "
         f"blind_review={knobs['blind_peer_review_enabled']}; "
         f"blind_review_timeout_s={knobs['blind_peer_review_timeout_seconds']}; "
         f"numeric_chairman={knobs['numeric_chairman_enabled']}; "
@@ -766,6 +1181,16 @@ def _emit_source_planning_readiness(
     for entry in report.get("agents", []):
         source_hint = ", ".join(entry.get("source_items", [])[:3]) or "sem fonte dinâmica válida"
         status = "ativo" if entry.get("ready") else "removido"
+        chat_extra: dict[str, Any] = {}
+        if not entry.get("ready"):
+            chat_extra = {
+                "validation_issues": list(entry.get("validation_issues", []) or []),
+                "offending_excerpt": entry.get("offending_excerpt", ""),
+                "reentry_eligible": bool(entry.get("reentry_eligible", False)),
+                "reentry_decision_reason": entry.get("reentry_decision_reason", ""),
+                "recoverability": entry.get("recoverability", ""),
+                "matched_rule": entry.get("matched_rule", ""),
+            }
         watchdog.chat(
             str(entry.get("agent", "Modelo")),
             (
@@ -773,6 +1198,7 @@ def _emit_source_planning_readiness(
                 f"{entry.get('summary', '')} | fontes: {source_hint}"
             ),
             round_name=round_name,
+            extra=chat_extra,
         )
     status = "finish" if report.get("quorum_met") else ("fail" if final else "check")
     watchdog.event(
@@ -836,6 +1262,7 @@ def _source_planning_format_repair_prompt(*, config: dict[str, Any], generated_a
         f"{_effort_latency_instruction()}\n\n"
         "Campos obrigatórios no JSON: self_identification, title_pct, summary, opening_argument, critique, "
         "adjustment, source_urls, source_queries, scenario_probabilities, team_context_signals. "
+        "Em team_context_signals, preserve correlation_group/shock_id quando várias famílias reagem ao mesmo evento. "
         "Use as fontes que você acabou de buscar neste run; se precisar substituir uma fonte quebrada, use "
         "source_queries específicas e auditáveis. Não invente URL, ranking, score, lesão, odd, notícia ou método. "
         "Source_queries só contam quando representam busca realmente executada por você agora.\n\n"
@@ -933,6 +1360,19 @@ def _source_planning_repair_prompt(
     readiness_report: dict[str, Any],
     attempt_index: int,
 ) -> str:
+    repair_classes = {
+        _source_planning_issue_repair_class((entry.get("validation_issues") or [{}])[0])
+        for entry in readiness_report.get("removed_agents", [])
+        if isinstance(entry, dict)
+    }
+    targeted_source_guidance = ""
+    if "targeted_source_repair" in repair_classes:
+        targeted_source_guidance = (
+            "\nREPARO DIRECIONADO DE ESCOPO DE FONTES: você foi removido porque interpretou 'fontes' "
+            "como fontes visuais/tipográficas ou trouxe material fora de futebol competitivo. Refaça apenas "
+            "o planejamento de fontes com odds, rankings, notícias de escalação/lesão, resultados e previews "
+            "esportivos verificáveis. Não estime de novo se não tiver fonte auditável.\n"
+        )
     return (
         _source_planning_prompt(config=config, generated_at=generated_at)
         + "\n\nRODADA DE REPARO OPERACIONAL / SELF-HEALING.\n"
@@ -945,6 +1385,7 @@ def _source_planning_repair_prompt(
         "como verificáveis nesta rodada. Source_queries só contam quando representam busca realmente executada por você agora. "
         "Não invente URL, ranking, score ou método. Campos obrigatórios: self_identification, title_pct, summary, "
         "opening_argument, critique, adjustment, source_urls, source_queries.\n\n"
+        f"{targeted_source_guidance}"
         f"Tentativa de reparo: {attempt_index}\n"
         f"Diagnóstico anterior: {json.dumps(readiness_report, ensure_ascii=False)}\n"
     )
@@ -959,6 +1400,183 @@ def _merge_planning_opinions(current: list[Any], repaired: list[Any], agent_spec
         for spec in agent_specs
         if spec.slot in by_agent
     ]
+
+
+def _quorum_floor_repair_slots(source_readiness_report: dict[str, Any], config: dict[str, Any]) -> list[str]:
+    enabled = bool(
+        config.get(
+            "repair_reentry_eligible_removals_before_meeting",
+            config.get("repair_reentry_eligible_removals_at_quorum_floor", True),
+        )
+    )
+    if not enabled:
+        return []
+    slots: list[str] = []
+    for entry in source_readiness_report.get("removed_agents", []):
+        if bool(entry.get("reentry_eligible", False)):
+            slots.append(str(entry.get("agent", "")))
+    return [slot for slot in slots if slot]
+
+
+def _admit_unresolved_policy_suspected_slots(
+    source_readiness_report: dict[str, Any],
+    *,
+    watchdog: RunWatchdog | None,
+) -> dict[str, Any]:
+    entries: list[dict[str, Any]] = []
+    admitted_agents: list[str] = []
+    for entry in source_readiness_report.get("agents", []):
+        entry_copy = dict(entry)
+        issues = list(entry_copy.get("validation_issues", []) or [])
+        primary_issue = issues[0] if issues else {}
+        if (
+            not bool(entry_copy.get("ready", False))
+            and str(primary_issue.get("recoverability", "")).lower() == "policy_suspected"
+        ):
+            agent = str(entry_copy.get("agent", "Modelo sem nome"))
+            entry_copy["ready"] = True
+            entry_copy["reason"] = (
+                "admitido com ressalva após repair esgotado; hit semântico permaneceu ambíguo, "
+                "mas não houve violação estrutural confirmada"
+            )
+            entry_copy["admitted_with_policy_warning"] = True
+            entry_copy["reentry_eligible"] = False
+            entry_copy["reentry_decision_reason"] = (
+                "policy_suspected esgotou repair; fail-open controlado para não matar a sala por falso-positivo"
+            )
+            admitted_agents.append(agent)
+            if watchdog:
+                watchdog.event(
+                    "agent_source_policy_admit",
+                    "warning",
+                    detail=(
+                        f"{agent} admitido com ressalva após repair esgotado; "
+                        f"trecho que disparou: {entry_copy.get('offending_excerpt', '')}"
+                    ),
+                    extra={
+                        "agent": agent,
+                        "validation_issues": issues,
+                        "offending_excerpt": entry_copy.get("offending_excerpt", ""),
+                        "recoverability": "policy_suspected",
+                    },
+                )
+        entries.append(entry_copy)
+    if not admitted_agents:
+        return source_readiness_report
+    active_agents = [str(entry.get("agent", "")) for entry in entries if bool(entry.get("ready", False))]
+    removed_agents = [entry for entry in entries if not bool(entry.get("ready", False))]
+    updated = dict(source_readiness_report)
+    updated.update(
+        {
+            "agents": entries,
+            "active_agents": active_agents,
+            "removed_agents": removed_agents,
+            "ready_count": len(active_agents),
+            "quorum_met": len(active_agents) >= int(source_readiness_report.get("required_count", 0) or 0),
+        }
+    )
+    return updated
+
+
+def _source_planning_policy_warnings(source_readiness_report: dict[str, Any]) -> list[str]:
+    warnings: list[str] = []
+    for entry in source_readiness_report.get("agents", []):
+        if bool(entry.get("admitted_with_policy_warning", False)):
+            warnings.append(
+                "policy_suspected admitido com ressalva: "
+                f"{entry.get('agent', 'Modelo sem nome')} — trecho: {entry.get('offending_excerpt', '')}"
+            )
+    return warnings
+
+
+async def _repair_quorum_floor_planning_removals(
+    *,
+    config: dict[str, Any],
+    planning_opinions: list[Any],
+    source_readiness_report: dict[str, Any],
+    agent_specs: list[Any],
+    generated_at: datetime,
+    baseline_title_pct: float,
+    allow_agent_fallback: bool,
+    watchdog: RunWatchdog | None,
+    token_cost_ledger: dict[str, Any],
+) -> tuple[list[Any], dict[str, Any]]:
+    attempts = max(0, int(config.get("source_planning_repair_attempts", DEFAULT_SOURCE_PLANNING_REPAIR_ATTEMPTS)))
+    if attempts <= 0:
+        return planning_opinions, source_readiness_report
+    timeout = int(config.get("source_planning_floor_repair_timeout_seconds", config.get("agent_timeout_seconds", 90)))
+    merged_opinions = list(planning_opinions)
+    report = source_readiness_report
+    repaired_at_least_once = False
+    for attempt_index in range(1, attempts + 1):
+        repair_slots = _quorum_floor_repair_slots(report, config)
+        repair_specs = [spec for spec in agent_specs if spec.slot in repair_slots]
+        if not repair_specs:
+            break
+        repaired_at_least_once = True
+        if watchdog:
+            watchdog.start(
+                "agent_source_pre_meeting_repair",
+                detail=(
+                    f"attempt {attempt_index}/{attempts}; removido(s) reparável(eis) antes da sala: "
+                    f"{', '.join(spec.slot for spec in repair_specs)}; timeout_s={timeout}"
+                ),
+                extra={
+                    "attempt": attempt_index,
+                    "agents": [spec.slot for spec in repair_specs],
+                    "timeout_seconds": timeout,
+                    "ready_count": report.get("ready_count"),
+                    "required_count": report.get("required_count"),
+                },
+            )
+        repair_prompt = _source_planning_repair_prompt(
+            config=config,
+            generated_at=generated_at,
+            readiness_report=report,
+            attempt_index=attempt_index,
+        )
+        raw_repair_opinions = await call_all_agents(
+            repair_prompt,
+            specs=repair_specs,
+            baseline_title_pct=baseline_title_pct,
+            timeout=timeout,
+            allow_local_fallback=allow_agent_fallback,
+        )
+        _record_token_costs(
+            token_cost_ledger,
+            config=config,
+            prompt=repair_prompt,
+            opinions=raw_repair_opinions,
+            stage=f"source_planning_pre_meeting_repair_{attempt_index}",
+        )
+        repaired_opinions = _sanitize_source_planning_opinions(
+            raw_repair_opinions,
+            baseline_title_pct=baseline_title_pct,
+            config=config,
+        )
+        merged_opinions = _merge_planning_opinions(merged_opinions, repaired_opinions, agent_specs)
+        report = _source_planning_readiness_report(
+            merged_opinions,
+            {**config, "_source_planning_semantic_policy_stage": "post_repair"},
+        )
+        recovered = [
+            slot
+            for slot in repair_slots
+            if slot not in {str(entry.get("agent", "")) for entry in report.get("removed_agents", [])}
+        ]
+        if watchdog:
+            watchdog.finish(
+                "agent_source_pre_meeting_repair",
+                detail=(
+                    f"attempt {attempt_index}/{attempts}; recuperados antes da sala: "
+                    f"{', '.join(recovered) or 'nenhum'}; "
+                    f"prontos agora: {report.get('ready_count')}/{report.get('required_count')}"
+                ),
+                extra={"attempt": attempt_index, "recovered": recovered},
+            )
+    if repaired_at_least_once:
+        report = _admit_unresolved_policy_suspected_slots(report, watchdog=watchdog)
+    return merged_opinions, report
 
 
 async def _self_heal_source_planning_quorum(
@@ -1021,7 +1639,10 @@ async def _self_heal_source_planning_quorum(
             config=config,
         )
         current_opinions = _merge_planning_opinions(current_opinions, repaired_opinions, agent_specs)
-        report = _source_planning_readiness_report(current_opinions, config)
+        report = _source_planning_readiness_report(
+            current_opinions,
+            {**config, "_source_planning_semantic_policy_stage": "post_repair"},
+        )
         if watchdog:
             _emit_source_planning_readiness(
                 watchdog,
@@ -1042,7 +1663,7 @@ async def _self_heal_source_planning_quorum(
                     detail=status_detail,
                     extra={"attempt": attempt_index, "quorum_met": False},
                 )
-
+    report = _admit_unresolved_policy_suspected_slots(report, watchdog=watchdog)
     return current_opinions, report
 
 
@@ -1068,6 +1689,7 @@ def _agent_reentry_probe_prompt(
         "Não use Opta, não use cache, não invente URL, ranking, odd, lesão, escalação, score ou método. "
         "Campos obrigatórios: self_identification, title_pct, summary, opening_argument, critique, adjustment, "
         "source_urls, source_queries, scenario_probabilities, team_context_signals. "
+        "Em team_context_signals, preserve correlation_group/shock_id quando várias famílias reagem ao mesmo evento. "
         "Inclua pelo menos 2 source_urls HTTP verificáveis ou 2 source_queries específicas não-Opta. "
         "Se não tiver fonte verificável, declare isso em summary e não peça reentrada.\n"
         f"Motivo da saída temporária: {removed_reason or 'sem resposta externa verificável'}\n"
@@ -1172,6 +1794,280 @@ class ReportCoherenceError(RuntimeError):
 
 class MeetingConsensusError(RuntimeError):
     """Raised when the meeting cannot produce a valid consensus (sterile room or ceiling without valid votes)."""
+
+
+_GROUP_DATE_MONTHS = {
+    "jan": 1,
+    "janeiro": 1,
+    "feb": 2,
+    "fev": 2,
+    "fevereiro": 2,
+    "mar": 3,
+    "marco": 3,
+    "março": 3,
+    "apr": 4,
+    "abr": 4,
+    "abril": 4,
+    "may": 5,
+    "mai": 5,
+    "maio": 5,
+    "jun": 6,
+    "junho": 6,
+    "jul": 7,
+    "julho": 7,
+    "aug": 8,
+    "ago": 8,
+    "agosto": 8,
+    "sep": 9,
+    "set": 9,
+    "setembro": 9,
+    "oct": 10,
+    "out": 10,
+    "outubro": 10,
+    "nov": 11,
+    "novembro": 11,
+    "dec": 12,
+    "dez": 12,
+    "dezembro": 12,
+}
+
+
+def _parse_group_fixture_date(raw: Any, *, year: int) -> date | None:
+    text = str(raw or "").strip().lower()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        try:
+            return date.fromisoformat(text)
+        except ValueError:
+            return None
+    match = re.fullmatch(r"(\d{1,2})\s*/\s*([a-zç]{3,9})", text)
+    if not match:
+        return None
+    month_token = _normalize_text(match.group(2))
+    month = _GROUP_DATE_MONTHS.get(month_token)
+    if month is None:
+        return None
+    try:
+        return date(year, month, int(match.group(1)))
+    except ValueError:
+        return None
+
+
+def _completed_match_mentions(item: Any, team_a: str, team_b: str, group: str = "") -> bool:
+    if not isinstance(item, dict):
+        return False
+    item_group = str(item.get("group") or "").strip().upper()
+    if group and item_group and item_group != group:
+        return False
+    text_parts = [
+        item.get("score"),
+        item.get("team_a"),
+        item.get("team_b"),
+        item.get("home"),
+        item.get("away"),
+    ]
+    normalized = _normalize_text(" ".join(str(part or "") for part in text_parts))
+    return _normalize_text(team_a) in normalized and _normalize_text(team_b) in normalized
+
+
+def _brazil_path_relevant_groups(config: dict[str, Any]) -> set[str]:
+    groups = {str(config.get("brazil_group") or "C").strip().upper() or "C"}
+    try:
+        for entry in brazil_bracket_path(config):
+            for group in entry.get("allowed_opponent_groups", []) or []:
+                normalized = str(group or "").strip().upper()
+                if normalized:
+                    groups.add(normalized)
+    except Exception:
+        return groups
+    return groups
+
+
+def _configured_group_fixtures(config: dict[str, Any]) -> list[dict[str, Any]]:
+    fixtures: list[dict[str, Any]] = []
+    seen: set[tuple[str, tuple[str, str]]] = set()
+    brazil_name = str(config.get("brazil_team_name") or "Brasil").strip() or "Brasil"
+
+    def add(raw: dict[str, Any], *, default_team_a: str = "", default_group: str = "") -> None:
+        team_a = str(raw.get("team_a") or raw.get("home") or raw.get("team1") or default_team_a).strip()
+        team_b = str(raw.get("team_b") or raw.get("away") or raw.get("team2") or raw.get("opponent") or "").strip()
+        raw_date = raw.get("date") or raw.get("match_date")
+        group = str(raw.get("group") or default_group or "").strip().upper()
+        if not team_a or not team_b or not raw_date:
+            return
+        key = (group, _group_fixture_pair_key(team_a, team_b))
+        if key in seen:
+            return
+        seen.add(key)
+        fixtures.append(
+            {
+                "group": group,
+                "team_a": team_a,
+                "team_b": team_b,
+                "date": raw_date,
+                "source": raw.get("source") or raw.get("source_url"),
+            }
+        )
+
+    for raw in config.get("group_fixtures") or []:
+        if isinstance(raw, dict):
+            add(raw)
+    for raw in config.get("group_matches") or []:
+        if isinstance(raw, dict):
+            add(raw, default_team_a=brazil_name, default_group=str(config.get("brazil_group") or "C"))
+    return fixtures
+
+
+def _group_fixture_pair_key(team_a: str, team_b: str) -> tuple[str, str]:
+    return tuple(sorted((_normalize_text(team_a), _normalize_text(team_b))))
+
+
+def _fixture_completeness_errors(config: dict[str, Any], relevant_groups: set[str]) -> list[str]:
+    raw_group_fixtures = config.get("group_fixtures") or []
+    fixtures = [fixture for fixture in raw_group_fixtures if isinstance(fixture, dict)]
+    if not fixtures:
+        if bool(config.get("require_complete_group_fixtures", False)):
+            return ["group_fixtures ausente; calendário completo é obrigatório para validar cruzamentos"]
+        return []
+
+    groups_config = config.get("groups_config") if isinstance(config.get("groups_config"), dict) else {}
+    groups = groups_config.get("groups") if isinstance(groups_config.get("groups"), dict) else {}
+    by_group: dict[str, set[tuple[str, str]]] = {}
+    for fixture in fixtures:
+        group = str(fixture.get("group") or "").strip().upper()
+        if not group:
+            continue
+        by_group.setdefault(group, set()).add(
+            _group_fixture_pair_key(str(fixture.get("team_a") or ""), str(fixture.get("team_b") or ""))
+        )
+
+    errors: list[str] = []
+    for group in sorted(relevant_groups):
+        teams = groups.get(group, [])
+        names = [str(team.get("name") or "").strip() for team in teams if isinstance(team, dict) and str(team.get("name") or "").strip()]
+        if len(names) != 4:
+            continue
+        expected = {
+            _group_fixture_pair_key(left, right)
+            for index, left in enumerate(names)
+            for right in names[index + 1 :]
+        }
+        actual = by_group.get(group, set())
+        missing = expected - actual
+        if missing:
+            rendered = ", ".join(f"{left} x {right}" for left, right in sorted(missing)[:3])
+            errors.append(
+                f"calendário de grupo incompleto em {group}: {len(actual)}/6 jogos configurados; faltam {rendered}"
+            )
+    return errors
+
+
+def _missing_past_brazil_group_results(config: dict[str, Any], as_of: date) -> list[str]:
+    """Return configured path-relevant group fixtures already in the past without a canonical score."""
+    brazil_name = str(config.get("brazil_team_name") or "Brasil").strip() or "Brasil"
+    completed = config.get("completed_group_matches") or config.get("group_results") or []
+    if not isinstance(completed, list):
+        completed = []
+    relevant_groups = _brazil_path_relevant_groups(config)
+
+    missing: list[str] = []
+    for match in _configured_group_fixtures(config):
+        group = str(match.get("group") or "").strip().upper()
+        if group and relevant_groups and group not in relevant_groups:
+            continue
+        team_a = str(match.get("team_a") or brazil_name).strip()
+        team_b = str(match.get("team_b") or "").strip()
+        if not team_a or not team_b:
+            continue
+        raw_date = match.get("date")
+        match_date = _parse_group_fixture_date(raw_date, year=as_of.year)
+        if match_date is None or match_date >= as_of:
+            continue
+        if any(_completed_match_mentions(item, team_a, team_b, group) for item in completed):
+            continue
+        date_label = str(raw_date or match_date.isoformat()).strip()
+        match_label = f"{team_a} x {team_b} ({date_label})"
+        missing.append(f"{group}: {match_label}" if group and team_a != brazil_name else match_label)
+    return missing
+
+
+def _validate_completed_group_results_fresh(
+    config: dict[str, Any],
+    generated_at: datetime,
+    watchdog: RunWatchdog | None = None,
+) -> None:
+    if bool(config.get("skip_completed_group_results_freshness_gate", False)):
+        return
+    relevant_groups = _brazil_path_relevant_groups(config)
+    fixture_errors = _fixture_completeness_errors(config, relevant_groups)
+    if fixture_errors:
+        detail = "Gate de calendário de grupos falhou: " + " | ".join(fixture_errors)
+        if watchdog:
+            watchdog.fail("completed_group_results", detail=detail)
+        raise ReportCoherenceError(detail)
+    missing = _missing_past_brazil_group_results(config, generated_at.date())
+    if not missing:
+        return
+    detail = (
+        "Gate de resultados de grupo falhou: jogo(s) de grupos relevantes do caminho do Brasil já no passado sem placar "
+        "em completed_group_matches: "
+        + "; ".join(missing)
+        + ". Atualize completed_group_matches antes de rodar Monte Carlo."
+    )
+    if watchdog:
+        watchdog.fail("completed_group_results", detail=detail)
+    raise ReportCoherenceError(detail)
+
+
+def _completed_knockout_mentions(config: dict[str, Any], *, phase: str, opponent: str) -> bool:
+    brazil_name = str(config.get("brazil_team_name") or "Brasil").strip() or "Brasil"
+    phase_key = _normalize_text(phase)
+    for item in config.get("completed_knockout_matches") or config.get("knockout_results") or []:
+        if not isinstance(item, dict):
+            continue
+        item_phase = str(item.get("phase") or "").strip()
+        if item_phase and _normalize_text(item_phase) != phase_key:
+            continue
+        if _completed_match_mentions(item, brazil_name, opponent):
+            return True
+    return False
+
+
+def _validate_knockout_results_fresh(
+    config: dict[str, Any],
+    knockout_estimates: list[Any],
+    generated_at: datetime,
+    watchdog: RunWatchdog | None = None,
+) -> None:
+    if bool(config.get("skip_completed_knockout_results_freshness_gate", False)):
+        return
+    missing: list[str] = []
+    for estimate in knockout_estimates:
+        if not bool(getattr(estimate, "most_likely", False)):
+            continue
+        phase = str(getattr(estimate, "phase", "") or "").strip()
+        opponent = str(getattr(estimate, "opponent", "") or "").strip()
+        if not phase or not opponent or _is_placeholder_opponent_name(opponent):
+            continue
+        scenario = _float_probability(getattr(estimate, "scenario_pct", None))
+        if scenario is None or scenario < 99.5:
+            continue
+        match_date = _parse_group_fixture_date(getattr(estimate, "match_date", None), year=generated_at.year)
+        if match_date is None or match_date >= generated_at.date():
+            continue
+        if _completed_knockout_mentions(config, phase=phase, opponent=opponent):
+            continue
+        missing.append(f"{phase}: Brasil x {opponent} ({getattr(estimate, 'match_date', match_date.isoformat())})")
+    if not missing:
+        return
+    detail = (
+        "Gate de resultados de mata-mata falhou: jogo(s) do caminho do Brasil já no passado sem placar "
+        "em completed_knockout_matches: "
+        + "; ".join(missing)
+        + ". Atualize completed_knockout_matches antes da sala de modelos."
+    )
+    if watchdog:
+        watchdog.fail("completed_knockout_results", detail=detail)
+    raise ReportCoherenceError(detail)
 
 
 def _specs_after_preflight_exclusion(
@@ -1884,10 +2780,56 @@ def _rationale(
     )
 
 
+def _model_scaled_stage_probabilities(title_pct: float) -> dict[str, float]:
+    return {
+        "quartas": round(min(95.0, max(0.0, title_pct * 5.9)), 1),
+        "semifinal": round(min(90.0, max(0.0, title_pct * 3.7)), 1),
+        "final": round(min(70.0, max(0.0, title_pct * 2.05)), 1),
+        "titulo": round(title_pct, 1),
+    }
+
+
+def _stage_probability_blend_config(config: dict[str, Any]) -> dict[str, Any]:
+    raw = config.get("stage_probability_blend")
+    configured = raw if isinstance(raw, dict) else {}
+    enabled = bool(configured.get("enabled", True))
+    mc_weight = float(configured.get("monte_carlo_weight", 0.60))
+    model_weight = float(configured.get("model_weight", 0.40))
+    mc_weight = max(0.0, mc_weight)
+    model_weight = max(0.0, model_weight)
+    total = mc_weight + model_weight
+    if total <= 0:
+        mc_weight, model_weight = 0.60, 0.40
+        total = 1.0
+    return {
+        "enabled": enabled,
+        "monte_carlo_weight": mc_weight / total,
+        "model_weight": model_weight / total,
+    }
+
+
+def _stage_probability_blend_label(config: dict[str, Any]) -> str:
+    blend = _stage_probability_blend_config(config)
+    mc = round(float(blend["monte_carlo_weight"]) * 100)
+    model = round(float(blend["model_weight"]) * 100)
+    return f"monte_carlo_model_blend_{mc}_{model}"
+
+
+def _stage_probability_blend_metadata(config: dict[str, Any]) -> dict[str, Any]:
+    blend = _stage_probability_blend_config(config)
+    return {
+        "enabled": bool(blend["enabled"]),
+        "monte_carlo_weight": round(float(blend["monte_carlo_weight"]), 2),
+        "model_weight": round(float(blend["model_weight"]), 2),
+        "label": _stage_probability_blend_label(config),
+    }
+
+
 def _stage_probabilities(title_pct: float, config: dict[str, Any]) -> dict[str, float]:
     configured = config.get("stage_probabilities")
     if configured:
         return {key: round(float(value), 1) for key, value in configured.items()}
+    model_scaled = _model_scaled_stage_probabilities(title_pct)
     monte_carlo_result = config.get("_monte_carlo_result")
     if (
         isinstance(monte_carlo_result, dict)
@@ -1895,17 +2837,93 @@ def _stage_probabilities(title_pct: float, config: dict[str, Any]) -> dict[str, 
         and bool((config.get("monte_carlo") or {}).get("use_stage_probabilities", True))
     ):
         stages = monte_carlo_result.get("stage_probabilities") or {}
-        return {
-            "quartas": round(float(stages.get("quartas", title_pct * 5.9)), 1),
-            "semifinal": round(float(stages.get("semifinal", title_pct * 3.7)), 1),
-            "final": round(float(stages.get("final", title_pct * 2.05)), 1),
-            "titulo": round(float(stages.get("titulo", title_pct)), 1),
+        mc_scaled = {
+            "quartas": round(float(stages.get("quartas", model_scaled["quartas"])), 1),
+            "semifinal": round(float(stages.get("semifinal", model_scaled["semifinal"])), 1),
+            "final": round(float(stages.get("final", model_scaled["final"])), 1),
+            "titulo": round(float(stages.get("titulo", model_scaled["titulo"])), 1),
         }
+        blend = _stage_probability_blend_config(config)
+        if bool(blend["enabled"]) and float(blend["model_weight"]) > 0:
+            return {
+                key: round(
+                    float(blend["monte_carlo_weight"]) * mc_scaled[key]
+                    + float(blend["model_weight"]) * model_scaled[key],
+                    1,
+                )
+                for key in ("quartas", "semifinal", "final", "titulo")
+            }
+        return mc_scaled
+    return model_scaled
+
+
+def _stage_exit_distribution(stage_probabilities: dict[str, float]) -> dict[str, Any]:
+    """Derive the exit-stage distribution from reach probabilities.
+
+    The modal exit stage is a deterministic property of the funnel. It should not
+    be inferred from whichever model happened to phrase the last consensus
+    question.
+    """
+
+    ordered_keys = [
+        ("16_avos", "16 avos"),
+        ("oitavas", "oitavas"),
+        ("quartas", "quartas"),
+        ("semifinal", "semifinal"),
+        ("final", "final"),
+        ("titulo", "campeão"),
+    ]
+    available = [
+        (key, label, round(float(stage_probabilities[key]), 1))
+        for key, label in ordered_keys
+        if key in stage_probabilities
+    ]
+    if not available:
+        return {"exit_buckets": [], "modal_exit_stage": "", "modal_exit_pct": None}
+
+    buckets: list[dict[str, Any]] = []
+    first_key, first_label, first_reach = available[0]
+    if first_key != "titulo":
+        buckets.append({"stage": f"antes de {first_label}", "exit_pct": round(max(0.0, 100.0 - first_reach), 1)})
+    for index, (_key, label, reach) in enumerate(available):
+        if label == "campeão":
+            buckets.append({"stage": "campeão", "exit_pct": reach})
+            continue
+        next_reach = available[index + 1][2] if index + 1 < len(available) else 0.0
+        buckets.append({"stage": label, "exit_pct": round(max(0.0, reach - next_reach), 1)})
+
+    exit_only = [bucket for bucket in buckets if bucket["stage"] != "campeão"]
+    modal = max(exit_only or buckets, key=lambda bucket: float(bucket.get("exit_pct") or 0.0))
     return {
-        "quartas": round(min(95.0, max(0.0, title_pct * 5.9)), 1),
-        "semifinal": round(min(90.0, max(0.0, title_pct * 3.7)), 1),
-        "final": round(min(70.0, max(0.0, title_pct * 2.05)), 1),
-        "titulo": round(title_pct, 1),
+        "exit_buckets": buckets,
+        "modal_exit_stage": str(modal.get("stage", "")),
+        "modal_exit_pct": round(float(modal.get("exit_pct") or 0.0), 1),
+    }
+
+
+def _team_context_sensitivity_summary(monte_carlo_result: dict[str, Any]) -> dict[str, Any]:
+    team_context = monte_carlo_result.get("team_context") if isinstance(monte_carlo_result, dict) else {}
+    adjustments = team_context.get("team_adjustments") if isinstance(team_context, dict) else []
+    brazil = next(
+        (
+            item
+            for item in adjustments or []
+            if str(item.get("team", "") or "").strip().casefold() == "brasil"
+        ),
+        None,
+    )
+    if not isinstance(brazil, dict):
+        return {"enabled": False, "reason": "no_brazil_team_context"}
+    return {
+        "enabled": True,
+        "brazil_rating_delta": round(float(brazil.get("rating_delta", 0.0) or 0.0), 1),
+        "requires_recalc": True,
+        "recommended_scenarios": [
+            "current",
+            "rho_1_price_once",
+            "rho_0_full_sum",
+            "no_brazil_context",
+        ],
     }
 
 
@@ -1921,10 +2939,439 @@ def _stage_probability_source(config: dict[str, Any]) -> str:
         stages = monte_carlo_result.get("stage_probabilities") or {}
         required = ("quartas", "semifinal", "final", "titulo")
         if all(key in stages for key in required):
+            blend = _stage_probability_blend_config(config)
+            if bool(blend["enabled"]) and float(blend["model_weight"]) > 0:
+                return _stage_probability_blend_label(config)
             return "monte_carlo_reconciled_funnel"
         if stages:
+            blend = _stage_probability_blend_config(config)
+            if bool(blend["enabled"]) and float(blend["model_weight"]) > 0:
+                return _stage_probability_blend_label(config) + "_partial"
             return "monte_carlo_partial_agent_scaled_fallback"
     return "agent_scaled_fallback"
+
+
+def _normalized_ascii_text(value: Any) -> str:
+    return unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode("ascii").lower()
+
+
+_MARKET_TITLE_PERCENT_RE = re.compile(r"(?<!\d)(\d{1,2}(?:[,.]\d+)?)\s*%")
+_MARKET_TITLE_RANGE_RE = re.compile(
+    r"(?<!\d)(\d{1,2}(?:[,.]\d+)?)\s*[-–]\s*(\d{1,2}(?:[,.]\d+)?)\s*%"
+)
+_MARKET_TITLE_FRACTIONAL_ODDS_RE = re.compile(
+    r"(?<![\d/])(\d{1,2}(?:[,.]\d+)?)\s*/\s*1(?![\d/])"
+)
+_MARKET_TITLE_AMERICAN_ODDS_RE = re.compile(r"(?<![\w.+-])\+(\d{3,4})(?![\w.-])")
+_MARKET_TITLE_TERMS = (
+    "mercado",
+    "market",
+    "odds",
+    "outright",
+    "sportsbook",
+    "bookmaker",
+    "betfair",
+    "polymarket",
+    "prediction market",
+    "de-vig",
+    "devig",
+)
+_TITLE_CONTEXT_TERMS = (
+    "titulo",
+    "title",
+    "hexa",
+    "campeao",
+    "campeonato",
+    "winner",
+    "levanta a taca",
+)
+_MODEL_TITLE_DENY_TERMS = (
+    "modelo principal",
+    "monte carlo",
+    "mc",
+    "funil",
+    "simulacao",
+    "simulation",
+    "modelo",
+    "model",
+)
+_MARKET_TITLE_SOURCE_TERMS = (
+    "http://",
+    "https://",
+    "oddschecker",
+    "squawka",
+    "flashscore",
+    "yahoo",
+    "fox sports",
+    "sky bet",
+    "draftkings",
+    "fanduel",
+    "bet365",
+    "betfair",
+    "sportsbook",
+    "bookmaker",
+)
+
+
+def _market_title_challenge_config(config: dict[str, Any]) -> dict[str, Any]:
+    raw = config.get("market_title_challenge")
+    configured = raw if isinstance(raw, dict) else {}
+    return {
+        "enabled": bool(configured.get("enabled", True)),
+        "absolute_gap_pct": float(configured.get("absolute_gap_pct", 3.0)),
+        "relative_gap_pct": float(configured.get("relative_gap_pct", 0.40)),
+        "min_pct": float(configured.get("min_pct", 1.0)),
+        "max_pct": float(configured.get("max_pct", 25.0)),
+        "max_evidence_items": int(configured.get("max_evidence_items", 4)),
+        "robust_min_candidates": int(configured.get("robust_min_candidates", 3)),
+        "robust_low_quantile": float(configured.get("robust_low_quantile", 0.20)),
+        "robust_high_quantile": float(configured.get("robust_high_quantile", 0.80)),
+    }
+
+
+def _iter_market_title_texts(meeting_transcript: list[dict[str, Any]]) -> list[tuple[str, str]]:
+    texts: list[tuple[str, str]] = []
+    for turn in meeting_transcript or []:
+        if not isinstance(turn, dict):
+            continue
+        round_label = str(turn.get("round") or turn.get("round_index") or "?")
+        for response in turn.get("responses", []) or []:
+            if not isinstance(response, dict):
+                continue
+            if bool(response.get("removed_from_main", False)):
+                continue
+            agent = str(response.get("agent") or "modelo").strip() or "modelo"
+            for key in ("answer", "summary", "rationale"):
+                value = str(response.get(key) or "").strip()
+                if value:
+                    texts.append((f"rodada {round_label} {agent}", value))
+    return texts
+
+
+def _market_title_candidate_is_model_reference(raw_text: str, start: int, end: int) -> bool:
+    prefix = _normalized_ascii_text(raw_text[max(0, start - 80) : start])
+    latest_model = max((prefix.rfind(term) for term in _MODEL_TITLE_DENY_TERMS), default=-1)
+    latest_market = max((prefix.rfind(term) for term in _MARKET_TITLE_TERMS), default=-1)
+    if latest_model != -1 and latest_model > latest_market:
+        return True
+
+    suffix = raw_text[end : min(len(raw_text), end + 100)]
+    suffix_stop_candidates = [
+        position
+        for separator in ",.;!?\n"
+        if (position := suffix.find(separator)) != -1
+    ]
+    suffix_stop = min(suffix_stop_candidates) if suffix_stop_candidates else len(suffix)
+    attached_suffix = _normalized_ascii_text(suffix[:suffix_stop])
+    return any(term in attached_suffix for term in _MODEL_TITLE_DENY_TERMS)
+
+
+def _market_title_text_has_structured_evidence(text: str) -> bool:
+    raw_text = str(text or "")
+    normalized = _normalized_ascii_text(raw_text)
+    if _MARKET_TITLE_FRACTIONAL_ODDS_RE.search(raw_text):
+        return True
+    if _MARKET_TITLE_AMERICAN_ODDS_RE.search(raw_text):
+        return True
+    return any(term in normalized for term in _MARKET_TITLE_SOURCE_TERMS)
+
+
+def _market_title_values_from_text(text: str, *, config: dict[str, Any]) -> list[float]:
+    settings = _market_title_challenge_config(config)
+    values: list[float] = []
+    raw_text = str(text or "")
+    normalized = _normalized_ascii_text(raw_text)
+    if not any(term in normalized for term in _MARKET_TITLE_TERMS):
+        return values
+    if not any(term in normalized for term in _TITLE_CONTEXT_TERMS):
+        return values
+    processed_clauses: set[tuple[int, int]] = set()
+    for match in _MARKET_TITLE_PERCENT_RE.finditer(raw_text):
+        clause_start = max(raw_text.rfind(separator, 0, match.start()) for separator in ".;!?\n") + 1
+        clause_end_candidates = [
+            position
+            for separator in ".;!?\n"
+            if (position := raw_text.find(separator, match.end())) != -1
+        ]
+        clause_end = min(clause_end_candidates) if clause_end_candidates else len(raw_text)
+        if (clause_start, clause_end) in processed_clauses:
+            continue
+        processed_clauses.add((clause_start, clause_end))
+        clause = raw_text[clause_start:clause_end]
+        clause_normalized = _normalized_ascii_text(clause)
+        if not any(term in clause_normalized for term in _MARKET_TITLE_TERMS):
+            continue
+        if not any(term in clause_normalized for term in _TITLE_CONTEXT_TERMS):
+            continue
+        consumed_spans: list[tuple[int, int]] = []
+        for range_match in _MARKET_TITLE_RANGE_RE.finditer(clause):
+            range_start = clause_start + range_match.start()
+            range_end = clause_start + range_match.end()
+            if _market_title_candidate_is_model_reference(raw_text, range_start, range_end):
+                continue
+            range_prefix = _normalized_ascii_text(raw_text[clause_start:range_start])
+            if not any(term in range_prefix for term in _MARKET_TITLE_TERMS):
+                continue
+            try:
+                low_value = float(range_match.group(1).replace(",", "."))
+                high_value = float(range_match.group(2).replace(",", "."))
+            except ValueError:
+                continue
+            for value in sorted((low_value, high_value)):
+                if settings["min_pct"] <= value <= settings["max_pct"]:
+                    values.append(round(value, 1))
+            consumed_spans.append((range_start, range_end))
+        for odds_match in _MARKET_TITLE_FRACTIONAL_ODDS_RE.finditer(clause):
+            odds_start = clause_start + odds_match.start()
+            odds_end = clause_start + odds_match.end()
+            if _market_title_candidate_is_model_reference(raw_text, odds_start, odds_end):
+                continue
+            odds_prefix = _normalized_ascii_text(raw_text[clause_start:odds_start])
+            if not any(term in odds_prefix for term in _MARKET_TITLE_TERMS):
+                continue
+            try:
+                fractional = float(odds_match.group(1).replace(",", "."))
+            except ValueError:
+                continue
+            if fractional <= 0:
+                continue
+            implied_pct = 100.0 / (fractional + 1.0)
+            if settings["min_pct"] <= implied_pct <= settings["max_pct"]:
+                values.append(round(implied_pct, 1))
+        for percent_match in _MARKET_TITLE_PERCENT_RE.finditer(clause):
+            percent_start = clause_start + percent_match.start()
+            percent_end = clause_start + percent_match.end()
+            if any(start <= percent_start < end for start, end in consumed_spans):
+                continue
+            try:
+                value = float(percent_match.group(1).replace(",", "."))
+            except ValueError:
+                continue
+            if not (settings["min_pct"] <= value <= settings["max_pct"]):
+                continue
+            if _market_title_candidate_is_model_reference(raw_text, percent_start, percent_end):
+                continue
+            prefix = _normalized_ascii_text(raw_text[clause_start:percent_start])
+            if not any(term in prefix for term in _MARKET_TITLE_TERMS):
+                continue
+            values.append(round(value, 1))
+    return values
+
+
+def _percentile(values: list[float], quantile: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(float(value) for value in values)
+    bounded_q = max(0.0, min(1.0, float(quantile)))
+    if len(ordered) == 1:
+        return ordered[0]
+    position = bounded_q * (len(ordered) - 1)
+    lower = int(math.floor(position))
+    upper = int(math.ceil(position))
+    if lower == upper:
+        return ordered[lower]
+    fraction = position - lower
+    return ordered[lower] + (ordered[upper] - ordered[lower]) * fraction
+
+
+def _market_title_band_from_candidates(candidates: list[float], settings: dict[str, Any]) -> tuple[float, float, str]:
+    if not candidates:
+        return 0.0, 0.0, "none"
+    minimum_for_robust = max(1, int(settings.get("robust_min_candidates", 5)))
+    if len(candidates) >= minimum_for_robust:
+        low = _percentile(candidates, float(settings.get("robust_low_quantile", 0.20)))
+        high = _percentile(candidates, float(settings.get("robust_high_quantile", 0.80)))
+        return round(low, 1), round(max(low, high), 1), "robust_percentile"
+    return round(min(candidates), 1), round(max(candidates), 1), "min_max"
+
+
+def _devig_outright_title_probabilities(
+    odds_entries: list[dict[str, Any]] | None,
+    *,
+    team_name: str = "Brasil",
+    min_overround: float = 1.02,
+    max_overround: float = 1.40,
+) -> tuple[list[float], list[dict[str, str]]]:
+    """De-vig outright title odds into a market-implied probability for `team_name`.
+
+    Each entry is {team, decimal_odds, bookmaker, source_url}. Per bookmaker the full
+    field is normalised by its overround (proportional de-vig), so the result is a real
+    market-implied probability, not a percentage scraped from debate prose. A book is only
+    used if its overround lands in a plausible [min_overround, max_overround] band; a partial
+    field (overround < 1) would otherwise inflate the de-vig, and American/fractional odds
+    mistaken for decimal fall out of band. Returns one de-vigged probability per accepted
+    bookmaker, plus evidence."""
+    by_book: dict[str, dict[str, Any]] = {}
+    for entry in odds_entries or []:
+        if not isinstance(entry, dict):
+            continue
+        team = str(entry.get("team") or "").strip()
+        book = str(entry.get("bookmaker") or entry.get("book") or "default").strip() or "default"
+        try:
+            decimal_odds = float(entry.get("decimal_odds") or entry.get("odds") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if not team or decimal_odds <= 1.0:
+            continue
+        slot = by_book.setdefault(book, {"odds": {}, "source": ""})
+        slot["odds"][team] = decimal_odds
+        if not slot["source"]:
+            slot["source"] = str(entry.get("source_url") or entry.get("source") or "")
+    probabilities: list[float] = []
+    evidence: list[dict[str, str]] = []
+    for book, slot in sorted(by_book.items()):
+        odds = slot["odds"]
+        if team_name not in odds:
+            continue
+        gross = {team: 1.0 / value for team, value in odds.items()}
+        overround = sum(gross.values())
+        # A real, reasonably complete book overrounds to ~105-130%. Reject anything outside the
+        # plausible band: partial fields (overround < 1) inflate the de-vig, and American/
+        # fractional odds mistaken for decimal, or duplicate-corrupted fields, fall out of band.
+        if not (min_overround <= overround <= max_overround):
+            continue
+        devigged = round(gross[team_name] / overround * 100.0, 1)
+        probabilities.append(devigged)
+        evidence.append(
+            {
+                "source": f"odds {book}",
+                "snippet": (
+                    f"{team_name} de-vig {devigged}% em {book} "
+                    f"(overround {round(overround * 100)}%, {len(odds)} times)"
+                ),
+                "source_url": str(slot["source"]),
+            }
+        )
+    return probabilities, evidence
+
+
+def _market_title_challenge(
+    stage_probabilities: dict[str, float],
+    meeting_transcript: list[dict[str, Any]],
+    *,
+    config: dict[str, Any],
+    source_texts: list[tuple[str, str]] | None = None,
+) -> dict[str, Any]:
+    settings = _market_title_challenge_config(config)
+    model_title_pct = round(float(stage_probabilities.get("titulo", 0.0) or 0.0), 1)
+    base = {
+        "enabled": settings["enabled"],
+        "triggered": False,
+        "status": "disabled" if not settings["enabled"] else "no_market_signal",
+        "decision": "mantem_funil_60_40",
+        "model_title_pct": model_title_pct,
+        "market_low_pct": None,
+        "market_high_pct": None,
+        "market_mid_pct": None,
+        "absolute_gap_pct": None,
+        "relative_gap_pct": None,
+        "threshold_absolute_gap_pct": settings["absolute_gap_pct"],
+        "threshold_relative_gap_pct": settings["relative_gap_pct"],
+        "evidence": [],
+    }
+    if not settings["enabled"]:
+        return base
+
+    candidates: list[float] = []
+    weak_candidates: list[float] = []
+    evidence: list[dict[str, str]] = []
+    weak_evidence: list[dict[str, str]] = []
+    # Real de-vigged outright odds are the strongest anchor: they enter as structured
+    # candidates ahead of any percentage scraped from debate prose.
+    devig_probs, devig_evidence = _devig_outright_title_probabilities(
+        config.get("market_outright_odds"),
+        team_name=str(config.get("brazil_team_name") or "Brasil"),
+        min_overround=float(config.get("market_outright_min_overround", 1.02)),
+        max_overround=float(config.get("market_outright_max_overround", 1.40)),
+    )
+    has_devig = bool(devig_probs)
+    for prob in devig_probs:
+        if abs(prob - model_title_pct) >= 0.05:
+            candidates.append(prob)
+    evidence.extend(devig_evidence[: settings["max_evidence_items"]])
+    for label, text in [*_iter_market_title_texts(meeting_transcript), *(source_texts or [])]:
+        values = _market_title_values_from_text(text, config=config)
+        values = [value for value in values if abs(float(value) - model_title_pct) >= 0.05]
+        if not values:
+            continue
+        snippet = re.sub(r"\s+", " ", str(text or "").strip())
+        item = {"source": label, "snippet": snippet[:260]}
+        # When a real de-vigged odds anchor exists it is authoritative: debate-prose
+        # percentages stay informational (weak) and never pool into the market band.
+        if _market_title_text_has_structured_evidence(text) and not has_devig:
+            candidates.extend(values)
+            if len(evidence) < settings["max_evidence_items"]:
+                evidence.append(item)
+        else:
+            weak_candidates.extend(values)
+            if len(weak_evidence) < settings["max_evidence_items"]:
+                weak_evidence.append(item)
+
+    if not candidates:
+        if weak_candidates:
+            return {
+                **base,
+                "status": "debate_claim_only",
+                "evidence": weak_evidence,
+                "debate_claim_candidate_count": len(weak_candidates),
+            }
+        base["evidence"] = evidence
+        return base
+
+    market_low, market_high, band_method = _market_title_band_from_candidates(candidates, settings)
+    market_mid = round((market_low + market_high) / 2.0, 1)
+    absolute_gap = round(abs(market_mid - model_title_pct), 1)
+    relative_gap = round(absolute_gap / max(0.1, model_title_pct), 2)
+    triggered = (
+        absolute_gap >= settings["absolute_gap_pct"]
+        and relative_gap >= settings["relative_gap_pct"]
+    )
+    return {
+        **base,
+        "triggered": triggered,
+        "status": "challenged" if triggered else "within_threshold",
+        "decision": "mantem_funil_60_40_mercado_como_desafio" if triggered else "mantem_funil_60_40",
+        "market_low_pct": market_low,
+        "market_high_pct": market_high,
+        "market_mid_pct": market_mid,
+        "market_band_method": band_method,
+        "market_candidate_count": len(candidates),
+        "market_source": "devigged_odds" if has_devig else "structured_text",
+        "absolute_gap_pct": absolute_gap,
+        "relative_gap_pct": relative_gap,
+        "evidence": evidence,
+    }
+
+
+def _market_title_source_texts_from_opinions(opinions: list[Any]) -> list[tuple[str, str]]:
+    texts: list[tuple[str, str]] = []
+    for opinion in opinions or []:
+        agent = str(getattr(opinion, "agent", "") or "modelo").strip() or "modelo"
+        chunks = [
+            str(getattr(opinion, "summary", "") or "").strip(),
+            str(getattr(opinion, "opening_argument", "") or "").strip(),
+            str(getattr(opinion, "critique", "") or "").strip(),
+            str(getattr(opinion, "adjustment", "") or "").strip(),
+            " ".join(str(item) for item in (getattr(opinion, "source_queries", []) or [])),
+            " ".join(str(item) for item in (getattr(opinion, "source_urls", []) or [])),
+        ]
+        text = " ".join(chunk for chunk in chunks if chunk)
+        if text:
+            texts.append((f"planejamento {agent}", text))
+    return texts
+
+
+def _market_title_challenge_warning(challenge: dict[str, Any]) -> str:
+    if not bool(challenge.get("triggered")):
+        return ""
+    model = float(challenge.get("model_title_pct") or 0.0)
+    low = float(challenge.get("market_low_pct") or 0.0)
+    high = float(challenge.get("market_high_pct") or low)
+    market = f"{low:.1f}%-{high:.1f}%" if abs(high - low) >= 0.05 else f"{low:.1f}%"
+    return (
+        "Mercado desafia o funil final 60/40: "
+        f"modelo={model:.1f}%, mercado={market}; número principal mantido pelo funil e divergência exposta."
+    )
 
 
 def _bounded_confidence_level(value: Any, *, default: float = 0.95) -> float:
@@ -2131,6 +3578,69 @@ def _report_uncertainty_metadata(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _team_context_warning_messages(monte_carlo_result: dict[str, Any]) -> list[str]:
+    team_context = monte_carlo_result.get("team_context")
+    if not isinstance(team_context, dict):
+        return []
+    warnings = team_context.get("warnings")
+    if not isinstance(warnings, list):
+        return []
+    messages: list[str] = []
+    for warning in warnings:
+        if not isinstance(warning, dict):
+            continue
+        team = str(warning.get("team", "") or "").strip()
+        reason = str(warning.get("reason", "") or "").strip()
+        if not team:
+            continue
+        if reason in {
+            "team_context_event_reactive_under_merge_guard",
+            "team_context_reactive_families_without_calendar_anchor",
+        }:
+            raw_families = warning.get("source_families") or []
+            families = ", ".join(str(item) for item in raw_families) if isinstance(raw_families, list) else ""
+            suffix = f" ({families})" if families else ""
+            messages.append(
+                "Ajuste contextual pode estar subagrupado: "
+                f"{team} teve famílias reativas com âncora de calendário sem grupo multifamília{suffix}; "
+                "validar completed_group_matches e correlation_group antes de publicar."
+            )
+            continue
+        if reason == "team_context_model_match_shock_without_calendar_anchor":
+            source_family = str(warning.get("source_family", "") or "").strip() or "família não informada"
+            model_hint = str(warning.get("model_correlation_group_hint", "") or "").strip()
+            derived_event = str(warning.get("derived_match_event", "") or "").strip()
+            hint_text = f" com hint {model_hint}" if model_hint else ""
+            event_text = f" e evento derivado {derived_event}" if derived_event else ""
+            messages.append(
+                "Ajuste contextual sem âncora de calendário: "
+                f"{team} teve sinal {source_family}{hint_text}{event_text}; "
+                "validar completed_group_matches antes de publicar."
+            )
+            continue
+        try:
+            rating_delta = float(warning.get("rating_delta"))
+        except (TypeError, ValueError):
+            continue
+        try:
+            threshold = float(warning.get("threshold"))
+        except (TypeError, ValueError):
+            threshold = 0.0
+        if reason == "team_context_delta_above_warning_threshold":
+            threshold_text = f"{threshold:.1f}" if threshold > 0 else "configurado"
+            messages.append(
+                "Ajuste contextual fora da faixa de revisão: "
+                f"{team} teve {rating_delta:+.1f} pontos de rating, acima do limiar {threshold_text}; "
+                "validar se há dupla contagem ou reação excessiva antes de publicar."
+            )
+        else:
+            messages.append(
+                f"Aviso de contexto do Monte Carlo para {team}: {reason or 'sem razão informada'} "
+                f"({rating_delta:+.1f} pontos de rating)."
+            )
+    return messages
+
+
 def _stage_confidence_intervals(
     probabilities: dict[str, float],
     *,
@@ -2276,6 +3786,7 @@ def _agent_prompt(
         "source_queries (lista de buscas), team_context_signals (lista). Antes de estimar, escolha as fontes que você usaria dentro do "
         "direcionamento macro; priorize sportsbooks, prediction markets, ratings, notícias de elenco/lesão "
         "performance dos jogadores via Sofascore, avaliação de arbitragem/VAR/cartões/disciplina e simulações públicas independentes. "
+        "Em team_context_signals, inclua correlation_group/shock_id; use o mesmo grupo quando odds, ratings, performance, lesões ou imprensa reagirem ao mesmo evento, e outro grupo para fatores estruturais independentes. "
         f"{_agent_owned_fresh_search_contract()} "
         "Não use torcida. Use dados quantitativos e qualitativos conforme a força das fontes encontradas, "
         "sem declarar percentual de divisão metodológica entre eles. "
@@ -2308,7 +3819,8 @@ def _source_planning_prompt(*, config: dict[str, Any], generated_at: datetime) -
         "Números importam; combine análise quantitativa e análise qualitativa, fatos, especialistas e futebol. "
         "Use dados quantitativos e qualitativos para formular hipótese auditável, com número, fonte/query e efeito em probabilidade; não declare percentual, razão ou peso metodológico para dividir quanti e quali. "
         "Pesquisa simétrica: Brasil e adversários/cenários, mesmas famílias de fontes: mercados/odds, Elo/FIFA/ratings, Sofascore/performance, lesões/cortes/cartões, arbitragem/VAR, descanso, chaveamento, elenco. "
-        "Para team_context_signals, traga sinais por seleção, inclusive adversários prováveis, com team, category, rating_delta ou probability_delta_pct, confidence, rationale e source_url/source_query. "
+        "Para team_context_signals, traga sinais por seleção, inclusive adversários prováveis, com team, category, rating_delta ou probability_delta_pct, confidence, rationale, source_url/source_query e correlation_group/shock_id. "
+        "Use o mesmo correlation_group quando odds, ratings, performance, lesões ou imprensa estiverem reagindo ao mesmo choque/evento; fatores estruturais de elenco/talento devem usar outro grupo. "
         "Famílias válidas incluem bets/prediction markets, ratings, Sofascore/performance, lesões/cortes/notícias recentes, amistosos recentes, arbitragem/VAR/cartões e opinião de imprensa especializada. "
         "Sem fonte auditável ou sem delta numérico, o sinal será ignorado pelo Monte Carlo. "
         "Monte Carlo: quando o escopo trouxer monte_carlo.enabled=true, trate a simulação como insumo quantitativo auditável "
@@ -2389,6 +3901,32 @@ def _reported_source_labels_from_agent_opinions(opinions: list[Any]) -> list[str
                 seen.add(label)
                 labels.append(label)
     return labels
+
+
+LOW_AUTHORITY_SOURCE_DOMAINS = (
+    "youtube.com",
+    "youtu.be",
+    "facebook.com",
+    "instagram.com",
+    "capcut.com",
+    "tiktok.com",
+)
+
+
+def _is_low_authority_public_source(label_or_url: str) -> bool:
+    text = str(label_or_url or "").strip()
+    candidate = text.rsplit(" ", 1)[-1]
+    if "://" not in candidate and ": " in text:
+        candidate = text.rsplit(": ", 1)[-1]
+    parsed = urllib.parse.urlparse(candidate)
+    host = parsed.netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return any(host == domain or host.endswith("." + domain) for domain in LOW_AUTHORITY_SOURCE_DOMAINS)
+
+
+def _low_authority_public_source_labels(labels: list[str]) -> list[str]:
+    return [label for label in labels if _is_low_authority_public_source(label)]
 
 
 def _reported_event_source_labels(config: dict[str, Any]) -> list[str]:
@@ -2473,10 +4011,18 @@ def _normalize_text(value: str) -> str:
 
 
 def _configured_matches_for_prompt(config: dict[str, Any]) -> dict[str, Any]:
+    monte_carlo_summary = monte_carlo_compact_summary(config.get("_monte_carlo_result", {"enabled": False}))
     return {
         "group_matches": _default_group_matches(config),
+        "group_fixtures": list(config.get("group_fixtures", []) or []),
+        "completed_group_matches": list(config.get("completed_group_matches", []) or []),
+        "completed_knockout_matches": list(config.get("completed_knockout_matches", []) or []),
         "knockout_matches": _default_knockout_matches(config),
-        "monte_carlo": monte_carlo_compact_summary(config.get("_monte_carlo_result", {"enabled": False})),
+        "monte_carlo": monte_carlo_summary,
+        "path_phase_relevant_groups": config.get("_path_phase_relevant_groups")
+        or monte_carlo_summary.get("phase_relevant_groups", {}),
+        "path_relevant_group_states": config.get("_path_relevant_group_states")
+        or monte_carlo_summary.get("relevant_group_states", {}),
         "parallel_opponent_briefing": config.get("_parallel_opponent_briefing", {}),
         "recent_event_impacts": _recent_event_impacts(config),
         "event_impact_criteria": _event_impact_criteria_for_prompt(),
@@ -2581,11 +4127,25 @@ def _compact_source_planning_scope(config: dict[str, Any]) -> dict[str, Any]:
         for entry in brazil_bracket_path(config)
     ]
 
+    monte_carlo_summary = monte_carlo_compact_summary(config.get("_monte_carlo_result", {"enabled": False}))
+    group_fixtures = [fixture for fixture in (config.get("group_fixtures", []) or []) if isinstance(fixture, dict)]
+    fixture_groups = sorted(
+        {
+            str(fixture.get("group") or "").strip().upper()
+            for fixture in group_fixtures
+            if str(fixture.get("group") or "").strip()
+        }
+    )
     return {
         "group_matches": [_compact_group_match_label(match) for match in _default_group_matches(config)],
+        "group_fixtures": {"count": len(group_fixtures), "groups": fixture_groups},
+        "completed_group_matches": list(config.get("completed_group_matches", []) or []),
+        "completed_knockout_matches": list(config.get("completed_knockout_matches", []) or []),
         "knockout_matches": [_compact_knockout_match_label(match) for match in _default_knockout_matches(config)],
         "bracket_path": bracket_path,
-        "monte_carlo": monte_carlo_compact_summary(config.get("_monte_carlo_result", {"enabled": False})),
+        "monte_carlo": monte_carlo_summary,
+        "path_phase_relevant_groups": monte_carlo_summary.get("phase_relevant_groups", {}),
+        "path_relevant_group_states": monte_carlo_summary.get("relevant_group_states", {}),
         "recent_event_impacts": [_compact_dict(event, event_keys) for event in _recent_event_impacts(config)],
         "event_impact_criteria": {
             "rule": "mesmos critérios da fase de grupos até a Final; não invente evento, fonte ou efeito",
@@ -2692,6 +4252,65 @@ def _configured_opponents(config: dict[str, Any]) -> set[str]:
 def _mentioned_national_teams(text: str) -> set[str]:
     normalized = _normalize_text(text)
     return {team for team in COMMON_NATIONAL_TEAM_MARKERS if re.search(rf"\b{re.escape(team)}\b", normalized)}
+
+
+_COMPLETED_MATCH_CONTEXT_MARKERS = (
+    "depois dos jogos",
+    "apos os jogos",
+    "após os jogos",
+    "depois do jogo",
+    "apos o jogo",
+    "após o jogo",
+    "com o placar",
+    "placar real",
+    "resultado real",
+    "jogo de ontem",
+    "jogos do final de semana",
+    "jogos ja disputados",
+    "jogos já disputados",
+)
+
+
+def _completed_match_pairs_from_config(config: dict[str, Any]) -> set[tuple[str, str]]:
+    pairs: set[tuple[str, str]] = set()
+    for raw in config.get("completed_group_matches", []) or []:
+        if not isinstance(raw, dict):
+            continue
+        team_a = str(raw.get("team_a") or raw.get("home") or raw.get("team1") or "").strip()
+        team_b = str(raw.get("team_b") or raw.get("away") or raw.get("team2") or "").strip()
+        if team_a and team_b:
+            pairs.add(tuple(sorted((_normalize_text(team_a), _normalize_text(team_b)))))
+    return pairs
+
+
+def _match_pairs_mentioned(text: str) -> set[tuple[str, str]]:
+    normalized = _normalize_text(text)
+    teams = sorted(_mentioned_national_teams(text), key=len, reverse=True)
+    pairs: set[tuple[str, str]] = set()
+    for team_a in teams:
+        for team_b in teams:
+            if team_a >= team_b:
+                continue
+            direct = rf"\b{re.escape(team_a)}\b\s*(?:x|vs|v|contra)\s*\b{re.escape(team_b)}\b"
+            reverse = rf"\b{re.escape(team_b)}\b\s*(?:x|vs|v|contra)\s*\b{re.escape(team_a)}\b"
+            if re.search(direct, normalized) or re.search(reverse, normalized):
+                pairs.add(tuple(sorted((team_a, team_b))))
+    return pairs
+
+
+def _unverified_completed_match_claim_detail(text: str, config: dict[str, Any]) -> str | None:
+    normalized = _normalize_text(text)
+    if not any(marker in normalized for marker in _COMPLETED_MATCH_CONTEXT_MARKERS):
+        return None
+    mentioned_pairs = _match_pairs_mentioned(text)
+    if not mentioned_pairs:
+        return None
+    completed_pairs = _completed_match_pairs_from_config(config)
+    missing = sorted(mentioned_pairs - completed_pairs)
+    if not missing:
+        return None
+    rendered = ", ".join(f"{left} x {right}" for left, right in missing[:3])
+    return f"jogo(s) tratado(s) como passado sem placar no ledger: {rendered}"
 
 
 
@@ -2912,6 +4531,9 @@ def _invalid_protagonist_question_reason(question: str, config: dict[str, Any]) 
         return "benchmark reservado para a comparação separada"
     if _has_fixed_quanti_quali_allocation(question):
         return "alocação fixa quanti/quali proibida"
+    completed_claim_detail = _unverified_completed_match_claim_detail(question, config)
+    if completed_claim_detail:
+        return completed_claim_detail
     if _impossible_bracket_opponent_detail(question, config):
         return "adversário impossível para o cruzamento oficial do mata-mata"
     if _mentions_unconfigured_opponent(question, config):
@@ -2947,6 +4569,20 @@ def _sanitize_protagonist_question(question: str, *, config: dict[str, Any], pro
             "Modelos da sala: ignorem a fala anterior e debatam apenas esses candidatos oficiais, trazendo "
             "scenario_probabilities e match_probabilities com fonte/query auditável."
         )
+    if invalid_reason and "sem placar no ledger" in invalid_reason:
+        completed = config.get("completed_group_matches", []) or []
+        completed_scores = [
+            f"{item.get('team_a')} {item.get('score_a')}-{item.get('score_b')} {item.get('team_b')}"
+            for item in completed
+            if isinstance(item, dict) and item.get("team_a") and item.get("team_b")
+        ]
+        rendered = "; ".join(completed_scores) if completed_scores else "nenhum placar realizado configurado"
+        return _ensure_consensus_request(
+            "A fala do protagonista foi invalidada pela sala por tratar jogo sem placar no ledger como fato consumado. "
+            f"Placar(es) realizados disponíveis no ledger: {rendered}. "
+            "Modelos da sala: ignorem a fala anterior e recalibrem somente com jogos realizados configurados, "
+            "fontes auditáveis e cenários futuros explicitamente marcados como futuros."
+        )
     if invalid_reason is None:
         return _ensure_consensus_request(question)
     opponents = ", ".join(match["opponent"] for match in _default_group_matches(config))
@@ -2976,6 +4612,8 @@ def _has_implausible_title_jump(
 ) -> bool:
     max_shift_pct = float((config or {}).get("max_agent_title_shift_pct", 5.0))
     if max_shift_pct <= 0:
+        return False
+    if getattr(opinion, "title_pct", None) is None:
         return False
     try:
         title_pct = float(getattr(opinion, "title_pct"))
@@ -3210,6 +4848,8 @@ def _sanitize_main_meeting_opinions(
     *,
     baseline_title_pct: float,
     config: dict[str, Any] | None = None,
+    semantic_policy_stage: str = "initial",
+    admit_policy_suspected: bool = False,
 ) -> list[Any]:
     sanitized: list[Any] = []
     for opinion in opinions:
@@ -3258,26 +4898,73 @@ def _sanitize_main_meeting_opinions(
         ):
             sanitized.append(_with_inherited_meeting_sources(opinion, config))
             continue
+        issue_reasons: list[str] = []
         if has_reserved_benchmark:
+            issue_reasons.append("tentar usar benchmark reservado")
+        if has_impossible_bracket_opponent:
+            issue_reasons.append(_format_impossible_opponent_reason(impossible_bracket_detail))
+        if has_unconfigured_group_opponent:
+            issue_reasons.append("citar adversário de grupo fora do JSON configurado")
+        if has_unusable_payload:
+            issue_reasons.append("devolver resposta parcial ou sem campos auditáveis")
+        if external_search_issue:
+            issue_reasons.append(external_search_issue)
+        if has_fixed_quanti_quali_allocation:
+            issue_reasons.append("usar alocação fixa quanti/quali proibida")
+        if has_unsupported_meeting_vote:
+            issue_reasons.append("responder concordância/discordância sem hipótese auditável")
+        if has_implausible_title_jump:
+            issue_reasons.append("inconsistência quantitativa no title_pct")
+
+        validation_issues = [
+            _validation_issue_from_reason(
+                gate_name="main_meeting_sanitizer",
+                reason=reason,
+                opinion=opinion,
+                field="answer",
+                semantic_policy_stage=semantic_policy_stage,
+            )
+            for reason in issue_reasons
+        ]
+        terminal_issues = [
+            issue
+            for issue in validation_issues
+            if str(issue.get("recoverability", "")).strip().lower() != "policy_suspected"
+        ]
+        if admit_policy_suspected and validation_issues and not terminal_issues:
+            sanitized.append(
+                replace(
+                    _with_inherited_meeting_sources(opinion, config),
+                    used_fallback=False,
+                    removed_from_main=False,
+                    removal_reason="",
+                    validation_issues=validation_issues,
+                )
+            )
+            continue
+
+        primary_issue = terminal_issues[0] if terminal_issues else validation_issues[0]
+        removal_reason = _issue_text_from_reason(str(primary_issue.get("offending_excerpt") or ""))
+        matched_rule = str(primary_issue.get("matched_rule") or "")
+        sanitized_source_urls = [
+            url for url in (getattr(opinion, "source_urls", []) or []) if not _has_opta_marker(url)
+        ]
+        sanitized_source_queries = [
+            query for query in (getattr(opinion, "source_queries", []) or []) if not _has_opta_marker(query)
+        ]
+        if matched_rule == "reserved_benchmark_opta":
             removal_reason = "tentar usar benchmark reservado"
-        elif has_impossible_bracket_opponent:
+        elif matched_rule == "impossible_bracket_opponent":
             removal_reason = _format_impossible_opponent_reason(impossible_bracket_detail)
-        elif has_unconfigured_group_opponent:
-            removal_reason = "citar adversário de grupo fora do JSON configurado"
-        elif has_unusable_payload:
-            removal_reason = "devolver resposta parcial ou sem campos auditáveis"
-        elif external_search_issue:
-            removal_reason = external_search_issue
-        elif has_fixed_quanti_quali_allocation:
+        elif matched_rule == "fixed_quantitative_qualitative_allocation":
             removal_reason = "usar alocação fixa quanti/quali proibida"
-        elif has_unsupported_meeting_vote:
-            removal_reason = "responder concordância/discordância sem hipótese auditável"
-        else:
-            removal_reason = "inconsistência quantitativa no title_pct"
+        elif issue_reasons:
+            removal_reason = issue_reasons[0]
         sanitized.append(
             replace(
                 opinion,
                 title_pct=round(float(baseline_title_pct), 1),
+                title_pct_source="fallback",
                 summary=(
                     f"Resposta removida do Modelo Principal por {removal_reason}; "
                     "não conta como consenso do Modelo Principal."
@@ -3291,12 +4978,8 @@ def _sanitize_main_meeting_opinions(
                 ),
                 critique="",
                 adjustment="",
-                source_urls=[
-                    url for url in (getattr(opinion, "source_urls", []) or []) if not _has_opta_marker(url)
-                ],
-                source_queries=[
-                    query for query in (getattr(opinion, "source_queries", []) or []) if not _has_opta_marker(query)
-                ],
+                source_urls=sanitized_source_urls,
+                source_queries=sanitized_source_queries,
                 match_probabilities={},
                 scenario_probabilities={},
                 agrees_with_protagonist=None,
@@ -3306,6 +4989,9 @@ def _sanitize_main_meeting_opinions(
                 used_fallback=True,
                 removed_from_main=True,
                 removal_reason=removal_reason,
+                validation_issues=validation_issues,
+                numeric_vote_usable=False,
+                evidence_usable=bool(sanitized_source_urls or sanitized_source_queries),
             )
         )
     return sanitized
@@ -3374,10 +5060,20 @@ def _sanitize_source_planning_opinions(
             )
             if original_summary:
                 rendered_summary = f"{rendered_summary} Motivo original: {original_summary}"
+            validation_issues = [
+                _validation_issue_from_reason(
+                    gate_name="source_planning_sanitizer",
+                    reason=reason,
+                    opinion=opinion,
+                    source_items=source_urls + source_queries,
+                    field="summary",
+                )
+            ]
             sanitized.append(
                 replace(
                     opinion,
                     title_pct=round(float(baseline_title_pct), 1),
+                    title_pct_source="fallback",
                     summary=rendered_summary,
                     opening_argument="",
                     question="",
@@ -3395,6 +5091,7 @@ def _sanitize_source_planning_opinions(
                     used_fallback=True,
                     removed_from_main=True,
                     removal_reason=reason,
+                    validation_issues=validation_issues,
                 )
             )
             continue
@@ -3402,7 +5099,8 @@ def _sanitize_source_planning_opinions(
             sanitized.append(
                 replace(
                     opinion,
-                    title_pct=round(float(baseline_title_pct), 1),
+                    title_pct=None,
+                    title_pct_source="parser_default_rejected",
                     summary=(
                         f"{getattr(opinion, 'summary', '')} "
                         "[payload parcial, mas fontes auditáveis foram extraídas e preservadas para o quórum.]"
@@ -3412,6 +5110,7 @@ def _sanitize_source_planning_opinions(
                     used_fallback=False,
                     removed_from_main=False,
                     removal_reason="",
+                    validation_issues=[],
                 )
             )
             continue
@@ -3419,7 +5118,8 @@ def _sanitize_source_planning_opinions(
             sanitized.append(
                 replace(
                     opinion,
-                    title_pct=round(float(baseline_title_pct), 1),
+                    title_pct=None,
+                    title_pct_source="parser_default_rejected",
                     summary=(
                         f"{getattr(opinion, 'summary', '')} "
                         "[title_pct neutralizado no planejamento por salto quantitativo implausível; "
@@ -3430,6 +5130,7 @@ def _sanitize_source_planning_opinions(
                     used_fallback=False,
                     removed_from_main=False,
                     removal_reason="",
+                    validation_issues=[],
                 )
             )
             continue
@@ -3441,6 +5142,7 @@ def _sanitize_source_planning_opinions(
                 used_fallback=False,
                 removed_from_main=False,
                 removal_reason="",
+                validation_issues=[],
             )
         )
     return sanitized
@@ -3631,24 +5333,38 @@ async def _protagonist_question(
     baseline_title_pct: float,
     allow_agent_fallback: bool,
     timeout: int,
+    cancel_event: threading.Event | None = None,
 ) -> tuple[str, Any, str | None]:
     by_slot = _agent_spec_by_slot(agent_specs)
     spec = by_slot.get(protagonist)
     if spec is None:
         question = _fallback_question(protagonist, previous_turn)
         return _sanitize_protagonist_question(question, config=config, protagonist=protagonist), None, None
-    opinion = await call_agent(
-        spec,
-        _protagonist_question_prompt(
-            config=config,
-            protagonist=protagonist,
-            previous_turn=previous_turn,
-            generated_at=generated_at,
-        ),
-        baseline_title_pct=baseline_title_pct,
-        timeout=timeout,
-        allow_local_fallback=allow_agent_fallback,
+    prompt = _protagonist_question_prompt(
+        config=config,
+        protagonist=protagonist,
+        previous_turn=previous_turn,
+        generated_at=generated_at,
     )
+    try:
+        opinion = await call_agent(
+            spec,
+            prompt,
+            baseline_title_pct=baseline_title_pct,
+            timeout=timeout,
+            allow_local_fallback=allow_agent_fallback,
+            cancel_event=cancel_event,
+        )
+    except TypeError as exc:
+        if "cancel_event" not in str(exc):
+            raise
+        opinion = await call_agent(
+            spec,
+            prompt,
+            baseline_title_pct=baseline_title_pct,
+            timeout=timeout,
+            allow_local_fallback=allow_agent_fallback,
+        )
     question = opinion.question or _fallback_question(protagonist, previous_turn)
     invalid_reason = _invalid_protagonist_question_reason(question, config)
     return _sanitize_protagonist_question(question, config=config, protagonist=protagonist), opinion, invalid_reason
@@ -3689,12 +5405,18 @@ def _blind_peer_review_acceptance_threshold(config: dict[str, Any]) -> float:
     return float(config.get("blind_peer_review_acceptance_threshold", 0.72))
 
 
+def _blind_peer_review_max_self_preference_leakage(config: dict[str, Any]) -> float:
+    return float(config.get("blind_peer_review_max_self_preference_leakage", 0.20))
+
+
 def _blind_peer_review_empty_metadata(config: dict[str, Any]) -> dict[str, Any]:
     return {
         "enabled": _blind_peer_review_enabled(config),
         "mode": "shadow",
         "shadow_only": _blind_peer_review_shadow_only(config),
         "acted_on_decision": False,
+        "gate_blocked": False,
+        "gate_blocked_reasons": [],
         "rounds_reviewed": [],
         "blind_review_score": {},
         "blind_acceptance_count": 0,
@@ -3703,7 +5425,11 @@ def _blind_peer_review_empty_metadata(config: dict[str, Any]) -> dict[str, Any]:
             "value": 0.0,
             "self_score_count": 0,
             "reviewer_count": 0,
+            "threshold": _blind_peer_review_max_self_preference_leakage(config),
+            "exceeds_threshold": False,
         },
+        "self_preference_by_reviewer": {},
+        "self_preference_by_author": {},
         "errors": [],
     }
 
@@ -3730,6 +5456,9 @@ _BLIND_REVIEW_MASK_STOPWORDS = {
 
 
 def _blind_peer_review_mask_pattern(term: str) -> str:
+    stripped = str(term or "").strip()
+    if re.fullmatch(r"\d+(?:\.\d+)+", stripped):
+        return rf"(?<![\d.]){re.escape(stripped)}(?![\d.])"
     tokens = [token for token in re.split(r"[\s_\-/.]+", str(term or "").strip()) if token]
     if not tokens:
         return ""
@@ -3740,7 +5469,10 @@ def _blind_peer_review_mask_pattern(term: str) -> str:
 
 def _blind_peer_review_identity_fragments(term: str) -> set[str]:
     fragments: set[str] = set()
-    raw_tokens = [token for token in re.split(r"[\s_\-/.]+", str(term or "").strip()) if token]
+    text = str(term or "").strip()
+    for version in re.findall(r"(?<![\d.])\d+(?:\.\d+)+(?![\d.])", text):
+        fragments.add(version)
+    raw_tokens = [token for token in re.split(r"[\s_\-/]+", text) if token]
     for token in raw_tokens:
         normalized = token.strip().lower()
         if re.fullmatch(r"\d+(?:\.\d+)+", normalized):
@@ -3789,6 +5521,21 @@ def _blind_peer_review_mask_terms(*, agent_specs: list[Any] | None, agent_slots:
                 normalized = token.strip().lower()
                 if len(normalized) >= 4 and normalized not in _BLIND_REVIEW_MASK_STOPWORDS:
                     terms.add(token)
+    return sorted(terms, key=lambda value: (-len(value), value.lower()))
+
+
+def _blind_peer_review_opinion_mask_terms(opinions: list[Any]) -> list[str]:
+    terms: set[str] = set()
+    for opinion in opinions:
+        for value in (
+            getattr(opinion, "self_declared_name", ""),
+            getattr(opinion, "self_declared_version", ""),
+        ):
+            term = str(value or "").strip()
+            if not term:
+                continue
+            terms.add(term)
+            terms.update(_blind_peer_review_identity_fragments(term))
     return sorted(terms, key=lambda value: (-len(value), value.lower()))
 
 
@@ -3844,7 +5591,11 @@ def _blind_peer_review_positions(
         raw_positions.append(
             {
                 "_agent": slot,
-                "title_pct": round(float(getattr(opinion, "title_pct", 0.0) or 0.0), 1),
+                "title_pct": (
+                    round(float(getattr(opinion, "title_pct")), 1)
+                    if getattr(opinion, "title_pct", None) is not None
+                    else None
+                ),
                 "summary": _blind_peer_review_public_text(
                     str(getattr(opinion, "summary", "") or ""),
                     agent_slots=agent_slots,
@@ -3965,21 +5716,29 @@ def _aggregate_blind_peer_reviews(
     accepts_by_position: dict[str, int] = {position["position_id"]: 0 for position in positions}
     self_scores: list[float] = []
     external_scores_by_reviewer: dict[str, list[float]] = {}
+    self_scores_by_reviewer: dict[str, list[float]] = {}
+    self_scores_by_author: dict[str, list[float]] = {}
+    external_scores_by_author: dict[str, list[float]] = {position["_agent"]: [] for position in positions}
     threshold = _blind_peer_review_acceptance_threshold(config)
 
     for opinion in review_opinions:
         reviewer = str(getattr(opinion, "agent", "") or "")
         external_scores_by_reviewer.setdefault(reviewer, [])
+        self_scores_by_reviewer.setdefault(reviewer, [])
         for item in _blind_peer_review_score_items(opinion):
             position_id = item["position_id"]
             if position_id not in author_by_position:
                 continue
             score = float(item["score"])
-            if author_by_position[position_id] == reviewer:
+            author = author_by_position[position_id]
+            if author == reviewer:
                 self_scores.append(score)
+                self_scores_by_reviewer[reviewer].append(score)
+                self_scores_by_author.setdefault(author, []).append(score)
                 continue
             scores_by_position[position_id].append(score)
             external_scores_by_reviewer[reviewer].append(score)
+            external_scores_by_author.setdefault(author, []).append(score)
             if bool(item.get("accepted", False)) or score >= threshold:
                 accepts_by_position[position_id] += 1
 
@@ -4007,6 +5766,38 @@ def _aggregate_blind_peer_reviews(
     self_mean = sum(self_scores) / len(self_scores) if self_scores else 0.0
     external_mean = sum(external_means) / len(external_means) if external_means else 0.0
     leakage = round(max(0.0, self_mean - external_mean), 3) if self_scores else 0.0
+    leakage_threshold = _blind_peer_review_max_self_preference_leakage(config)
+
+    def _mean(values: list[float]) -> float:
+        return sum(values) / len(values) if values else 0.0
+
+    reviewer_leakage: dict[str, dict[str, Any]] = {}
+    for reviewer in sorted(set(self_scores_by_reviewer) | set(external_scores_by_reviewer)):
+        reviewer_self = self_scores_by_reviewer.get(reviewer, [])
+        reviewer_external = external_scores_by_reviewer.get(reviewer, [])
+        self_avg = _mean(reviewer_self)
+        external_avg = _mean(reviewer_external)
+        reviewer_leakage[reviewer] = {
+            "self_mean": round(self_avg, 3),
+            "external_mean": round(external_avg, 3),
+            "leakage": round(max(0.0, self_avg - external_avg), 3) if reviewer_self else 0.0,
+            "self_score_count": len(reviewer_self),
+            "external_score_count": len(reviewer_external),
+        }
+
+    author_leakage: dict[str, dict[str, Any]] = {}
+    for author in sorted(set(self_scores_by_author) | set(external_scores_by_author)):
+        author_self = self_scores_by_author.get(author, [])
+        author_external = external_scores_by_author.get(author, [])
+        self_avg = _mean(author_self)
+        external_avg = _mean(author_external)
+        author_leakage[author] = {
+            "self_mean": round(self_avg, 3),
+            "external_mean": round(external_avg, 3),
+            "leakage": round(max(0.0, self_avg - external_avg), 3) if author_self else 0.0,
+            "self_score_count": len(author_self),
+            "external_score_count": len(author_external),
+        }
 
     base.update(
         {
@@ -4018,7 +5809,11 @@ def _aggregate_blind_peer_reviews(
                 "value": leakage,
                 "self_score_count": len(self_scores),
                 "reviewer_count": len(review_opinions),
+                "threshold": leakage_threshold,
+                "exceeds_threshold": bool(self_scores) and leakage > leakage_threshold,
             },
+            "self_preference_by_reviewer": reviewer_leakage,
+            "self_preference_by_author": author_leakage,
             "reviewer_count": len(review_opinions),
             "position_count": len(positions),
         }
@@ -4048,6 +5843,7 @@ async def _run_blind_peer_review_shadow(
         metadata["errors"] = ["skipped_non_main_room"]
         return metadata
     mask_terms = _blind_peer_review_mask_terms(agent_specs=agent_specs, agent_slots=active_slots)
+    mask_terms.extend(_blind_peer_review_opinion_mask_terms(consensus_opinions))
     positions = _blind_peer_review_positions(
         consensus_opinions,
         agent_slots=active_slots,
@@ -4125,6 +5921,96 @@ async def _run_blind_peer_review_shadow(
             extra=metadata,
         )
     return metadata
+
+
+async def _ensure_blind_peer_review_for_turn(
+    turn: dict[str, Any],
+    *,
+    mode: str,
+    config: dict[str, Any],
+    round_index: int,
+    consensus_opinions: list[Any],
+    agent_specs: list[Any],
+    active_slots: list[str],
+    generated_at: datetime,
+    baseline_title_pct: float,
+    allow_agent_fallback: bool,
+    token_cost_ledger: dict[str, Any] | None,
+    watchdog: RunWatchdog | None,
+) -> None:
+    if not _blind_peer_review_enabled(config):
+        return
+    if isinstance(turn.get("blind_peer_review"), dict):
+        return
+    if mode != "shadow" and not bool(config.get("blind_peer_review_on_consensus_exit", True)):
+        return
+    metadata = await _run_blind_peer_review_shadow(
+        config=config,
+        round_index=round_index,
+        consensus_opinions=consensus_opinions,
+        agent_specs=agent_specs,
+        active_slots=active_slots,
+        generated_at=generated_at,
+        baseline_title_pct=baseline_title_pct,
+        allow_agent_fallback=allow_agent_fallback,
+        token_cost_ledger=token_cost_ledger,
+        watchdog=watchdog,
+    )
+    metadata["mode"] = mode
+    turn["blind_peer_review"] = metadata
+
+
+def _blind_peer_review_exit_blocked_reasons(
+    turn: dict[str, Any],
+    *,
+    config: dict[str, Any],
+    room_quorum: int,
+) -> list[str]:
+    if not _blind_peer_review_enabled(config) or _blind_peer_review_shadow_only(config):
+        return []
+    review = turn.get("blind_peer_review") if isinstance(turn.get("blind_peer_review"), dict) else {}
+    if not review:
+        return ["blind_review_missing"]
+    blocked: list[str] = []
+    if review.get("errors"):
+        blocked.append("blind_review_errors")
+    if int(review.get("blind_acceptance_count", 0) or 0) < int(room_quorum):
+        blocked.append("blind_acceptance_missing")
+    leakage = review.get("self_preference_leakage") if isinstance(review, dict) else {}
+    if isinstance(leakage, dict) and bool(leakage.get("exceeds_threshold", False)):
+        blocked.append("self_preference_leakage_high")
+    return blocked
+
+
+def _mark_blind_peer_review_exit_blocked(
+    turn: dict[str, Any],
+    *,
+    blocked_reasons: list[str],
+    room_quorum: int,
+    watchdog: RunWatchdog | None,
+) -> None:
+    review = turn.get("blind_peer_review") if isinstance(turn.get("blind_peer_review"), dict) else None
+    if review is not None:
+        review["gate_blocked"] = True
+        review["gate_blocked_reasons"] = list(blocked_reasons)
+        review["minimum_blind_acceptances"] = int(room_quorum)
+    if watchdog:
+        watchdog.event(
+            "blind_peer_review",
+            "blocked",
+            detail=(
+                "saída por consenso bloqueada pela revisão cega: "
+                + ", ".join(blocked_reasons)
+            ),
+            extra={
+                "round": int(turn.get("round", 0) or 0),
+                "mode": (review or {}).get("mode", ""),
+                "blocked_reasons": list(blocked_reasons),
+                "minimum_blind_acceptances": int(room_quorum),
+                "blind_acceptance_count": int((review or {}).get("blind_acceptance_count", 0) or 0),
+                "self_preference_leakage": (review or {}).get("self_preference_leakage", {}),
+            },
+        )
 
 
 def _blind_peer_review_metadata_from_transcript(
@@ -4253,6 +6139,9 @@ def _llm_council_fast_path_evaluation(
         blocked.append("blind_review_errors")
     elif int(metadata["blind_acceptance_count"]) < int(metadata["minimum_blind_acceptances"]):
         blocked.append("blind_acceptance_missing")
+    leakage = (blind_review or {}).get("self_preference_leakage") if isinstance(blind_review, dict) else {}
+    if isinstance(leakage, dict) and bool(leakage.get("exceeds_threshold", False)):
+        blocked.append("self_preference_leakage_high")
     if not _parallel_opponent_briefing_allows_fast_path(config):
         blocked.append("parallel_opponent_room_unusable")
     if metadata["enabled"] and not report_coherence_error:
@@ -4306,15 +6195,64 @@ def _numeric_chairman_metadata(
     return {
         "enabled": bool(config.get("numeric_chairman_enabled", True)),
         "number_owner": stage_source,
-        "primary_number_owner": "monte_carlo_reconciled_funnel",
+        "primary_number_owner": _stage_probability_blend_label(config),
         "stage_probability_source": stage_source,
-        "llm_role": "narrative_and_bounded_adjustment",
+        "stage_probability_blend": _stage_probability_blend_metadata(config),
+        "llm_role": "40_percent_weighted_input_after_consensus",
         "llm_decides_number": False,
         "bounded_adjustment_only": True,
         "hard_gate": "ReportCoherenceError",
         "post_gate": "report_coherence",
         "stage_probabilities_snapshot": {key: round(float(value), 1) for key, value in stage_probabilities.items()},
     }
+
+
+def _should_force_exact_mc_challenger(
+    meeting_transcript: list[dict[str, Any]],
+    config: dict[str, Any],
+    *,
+    challenge_already_satisfied: bool = False,
+) -> bool:
+    if challenge_already_satisfied:
+        return False
+    if not bool(config.get("meeting_require_challenger_when_exact_mc_consensus", True)):
+        return False
+    needed = max(1, int(config.get("meeting_exact_mc_consensus_rounds_before_challenge", 2)))
+    if len(meeting_transcript) < needed:
+        return False
+    monte_carlo_result = config.get("_monte_carlo_result")
+    if not isinstance(monte_carlo_result, dict):
+        return False
+    stages = monte_carlo_result.get("stage_probabilities") or {}
+    if "titulo" not in stages:
+        return False
+    mc_title = round(float(stages.get("titulo", 0.0) or 0.0), 1)
+    recent = meeting_transcript[-needed:]
+    def _turn_float(turn: dict[str, Any], key: str, default: float) -> float:
+        value = turn.get(key, default)
+        if value is None:
+            return default
+        return float(value)
+
+    return all(
+        round(_turn_float(turn, "consensus_title_pct", -999.0), 1) == mc_title
+        and _turn_float(turn, "consensus_spread_pct", 999.0) <= 0.2
+        for turn in recent
+    )
+
+
+def _exact_mc_challenger_prompt(config: dict[str, Any]) -> str:
+    mc_title = (
+        ((config.get("_monte_carlo_result") or {}).get("stage_probabilities") or {}).get("titulo")
+        if isinstance(config.get("_monte_carlo_result"), dict)
+        else None
+    )
+    title_text = f"{float(mc_title):.1f}%" if mc_title is not None else "o número do Monte Carlo"
+    return (
+        f"A sala está aceitando exatamente {title_text} do Monte Carlo. Antes de sair, faça papel de challenger: "
+        "qual premissa moveria o título pelo menos 1 p.p. para cima ou para baixo? Teste mercado, posição no Grupo C, "
+        "adversário 2F e team_context. Se nada mover, diga por quê com fonte e peça consenso explicitamente."
+    )
 
 
 async def _run_model_meeting(
@@ -4329,7 +6267,10 @@ async def _run_model_meeting(
     token_cost_ledger: dict[str, Any] | None = None,
     reentry_candidate_specs: list[Any] | None = None,
     reentry_removed_reasons: dict[str, str] | None = None,
+    reentry_removed_issues: dict[str, list[dict[str, Any]]] | None = None,
     fast_path_report_coherence_check: Callable[[Any], str] | None = None,
+    progress_sink: dict[str, Any] | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> tuple[Any, list[Any], list[dict[str, Any]], list[Any]]:
     agent_specs = list(agent_specs)
     planning_opinions = list(planning_opinions)
@@ -4341,23 +6282,38 @@ async def _run_model_meeting(
     final_opinions: list[Any] = []
     last_valid_consensus = None
     last_valid_opinions: list[Any] = []
+    last_valid_coverage_complete = False
     max_rounds = int(config.get("meeting_max_rounds", 9))
     min_rounds = int(config.get("meeting_min_rounds", 6))
     configured_min_participants = int(config.get("meeting_min_participants", config.get("meeting_min_real_agents", 3)))
     threshold = float(config.get("meeting_consensus_threshold_pct", 2.5))
     require_peer_acceptance = bool(config.get("meeting_require_peer_acceptance", True))
+    require_full_coverage = bool(config.get("meeting_require_full_path_coverage", True))
     timeout = int(config.get("agent_timeout_seconds", 90))
     protagonist_timeout = int(config.get("protagonist_timeout_seconds", timeout))
     breaker_threshold = max(1, int(config.get("meeting_slot_breaker_threshold", 3)))
     stability_delta_pp = float(config.get("meeting_stability_delta_pp", 1.0))
     stability_rounds_required = max(1, int(config.get("meeting_stability_rounds", 2)))
+    round_budget_seconds = max(0.0, float(config.get("meeting_round_budget_seconds", 0) or 0))
     sterile_round_limit = max(1, int(config.get("meeting_sterile_round_limit", 2)))
     max_reentries_per_slot = max(0, int(config.get("meeting_max_reentries_per_slot", 1)))
     probe_max_attempts = max(1, int(config.get("agent_reentry_probe_max_attempts", 2)))
     active_slots = _slots_from_specs(agent_specs)
+    if progress_sink is not None:
+        progress_sink.update(
+            {
+                "participants": list(active_slots),
+                "meeting_transcript": meeting_transcript,
+                "all_opinions": all_opinions,
+            }
+        )
     reentry_enabled = bool(config.get("agent_reentry_probe_enabled", False))
     reentry_timeout = int(config.get("agent_reentry_probe_timeout_seconds", 180))
     reentry_removed_reasons = dict(reentry_removed_reasons or {})
+    reentry_removed_issues = {
+        str(slot): list(issues or [])
+        for slot, issues in (reentry_removed_issues or {}).items()
+    }
     reentry_candidates = {
         str(getattr(spec, "slot", "")): spec
         for spec in (reentry_candidate_specs or [])
@@ -4375,11 +6331,17 @@ async def _run_model_meeting(
     consecutive_sterile = 0
     last_round_consensus_valid = False
     exited_with_consensus = False
+    round_budget_exhausted = False
+    round_budget_warning = ""
     breaker_counts: dict[str, int] = {}
     reentry_counts: dict[str, int] = {}
     probe_attempts: dict[str, int] = {}
     fallback_question_streak: dict[str, int] = {}
     reentry_skip_announced: dict[str, str] = {}
+    last_invalid_issues: dict[str, list[dict[str, Any]]] = {}
+    forced_coverage_question: str | None = None
+    forced_exact_mc_challenge_question: str | None = None
+    exact_mc_challenge_satisfied = False
 
     if watchdog:
         watchdog.start("model_meeting", detail=f"starting dynamic meeting with protagonist {protagonist}")
@@ -4390,6 +6352,9 @@ async def _run_model_meeting(
         for slot, spec in list(reentry_candidates.items()):
             if slot in active_slots or slot in pending_reentry_tasks:
                 continue
+            reason = reentry_removed_reasons.get(slot, "sem resposta externa verificável")
+            primary_issue = _primary_validation_issue(reentry_removed_issues.get(slot, []), reason)
+            issue_policy = _reentry_policy_for_validation_issue(primary_issue)
             if reentry_counts.get(slot, 0) >= max_reentries_per_slot:
                 reentry_candidates.pop(slot, None)
                 if watchdog:
@@ -4400,7 +6365,14 @@ async def _run_model_meeting(
                             f"{slot} já usou {reentry_counts.get(slot, 0)} reentrada(s) "
                             f"(limite {max_reentries_per_slot}); fora até o fim do run"
                         ),
-                        extra={"round": round_index, "agent": slot},
+                        extra={
+                            "round": round_index,
+                            "agent": slot,
+                            "validation_issue": primary_issue,
+                            "offending_excerpt": primary_issue.get("offending_excerpt", ""),
+                            "reentry_eligible": False,
+                            "reentry_decision_reason": "cooldown de reentry atingido",
+                        },
                     )
                 continue
             if probe_attempts.get(slot, 0) >= probe_max_attempts:
@@ -4413,7 +6385,14 @@ async def _run_model_meeting(
                             f"{slot} esgotou {probe_attempts.get(slot, 0)} tentativa(s) de probe "
                             f"(limite {probe_max_attempts}); sem novas sondagens neste run"
                         ),
-                        extra={"round": round_index, "agent": slot},
+                        extra={
+                            "round": round_index,
+                            "agent": slot,
+                            "validation_issue": primary_issue,
+                            "offending_excerpt": primary_issue.get("offending_excerpt", ""),
+                            "reentry_eligible": False,
+                            "reentry_decision_reason": "orçamento de probes atingido",
+                        },
                     )
                 continue
             allowed, schedule_reason = _should_schedule_reentry_probe(
@@ -4423,6 +6402,29 @@ async def _run_model_meeting(
                 configured_min_participants=configured_min_participants,
                 consecutive_sterile=consecutive_sterile,
             )
+            if not bool(issue_policy["eligible"]):
+                reentry_candidates.pop(slot, None)
+                if watchdog:
+                    watchdog.event(
+                        "agent_reentry_probe",
+                        "skipped",
+                        detail=(
+                            f"round={round_index}; agent={slot}; reentry inelegível; "
+                            f"motivo={issue_policy['decision_reason']}; "
+                            f"trecho={primary_issue.get('offending_excerpt', '') or 'não disponível'}"
+                        ),
+                        extra={
+                            "round": round_index,
+                            "agent": slot,
+                            "reason": issue_policy["decision_reason"],
+                            "validation_issue": primary_issue,
+                            "offending_excerpt": primary_issue.get("offending_excerpt", ""),
+                            "reentry_eligible": False,
+                            "reentry_decision_reason": issue_policy["decision_reason"],
+                            "active_slots": active_slots,
+                        },
+                    )
+                continue
             if not allowed:
                 if watchdog and reentry_skip_announced.get(slot) != schedule_reason:
                     watchdog.event(
@@ -4433,13 +6435,17 @@ async def _run_model_meeting(
                             "round": round_index,
                             "agent": slot,
                             "reason": schedule_reason,
+                            "validation_issue": primary_issue,
+                            "offending_excerpt": primary_issue.get("offending_excerpt", ""),
+                            "reentry_eligible": True,
+                            "reentry_decision_reason": issue_policy["decision_reason"],
                             "active_slots": active_slots,
                         },
                     )
                 reentry_skip_announced[slot] = schedule_reason
                 continue
             probe_attempts[slot] = probe_attempts.get(slot, 0) + 1
-            reason = reentry_removed_reasons.get(slot, "sem resposta externa verificável")
+            probe_timeout = _reentry_timeout_for_issue(config, primary_issue, reentry_timeout)
             pending_reentry_tasks[slot] = asyncio.create_task(
                 _run_agent_reentry_probe(
                     spec=spec,
@@ -4447,19 +6453,28 @@ async def _run_model_meeting(
                     generated_at=generated_at,
                     baseline_title_pct=baseline_title_pct,
                     removed_reason=reason,
-                    timeout=reentry_timeout,
+                    timeout=probe_timeout,
                 )
             )
             if watchdog:
                 watchdog.event(
                     "agent_reentry_probe",
                     "start",
-                    detail=f"round={round_index}; agent={slot}; timeout_s={reentry_timeout}; reason={reason}",
+                    detail=(
+                        f"round={round_index}; agent={slot}; timeout_s={probe_timeout}; "
+                        f"removido por {primary_issue.get('matched_rule') or 'contrato'}; "
+                        f"trecho que disparou: {primary_issue.get('offending_excerpt', '') or 'não disponível'}; "
+                        f"reentry elegível: sim; motivo da decisão: {issue_policy['decision_reason']}"
+                    ),
                     extra={
                         "round": round_index,
                         "agent": slot,
-                        "timeout_seconds": reentry_timeout,
+                        "timeout_seconds": probe_timeout,
                         "removed_reason": reason,
+                        "validation_issue": primary_issue,
+                        "offending_excerpt": primary_issue.get("offending_excerpt", ""),
+                        "reentry_eligible": True,
+                        "reentry_decision_reason": issue_policy["decision_reason"],
                     },
                 )
 
@@ -4472,12 +6487,36 @@ async def _run_model_meeting(
             except Exception as exc:
                 opinion, reason, prompt = None, str(exc), ""
             if opinion is None:
+                failure_issue = _validation_issue_from_reason(
+                    gate_name="agent_reentry_probe",
+                    reason=reason,
+                    field="summary",
+                )
+                failure_policy = _reentry_policy_for_validation_issue(failure_issue)
+                original_issue = _primary_validation_issue(
+                    reentry_removed_issues.get(slot, []),
+                    reentry_removed_reasons.get(slot, reason),
+                )
+                primary_issue = failure_issue if not bool(failure_policy["eligible"]) else original_issue
+                if not bool(failure_policy["eligible"]):
+                    reentry_candidates.pop(slot, None)
+                    reentry_removed_reasons[slot] = reason
+                    reentry_removed_issues[slot] = [failure_issue]
                 if watchdog:
                     watchdog.event(
                         "agent_reentry_probe",
                         "fail",
                         detail=f"round={round_index}; agent={slot}; {reason}",
-                        extra={"round": round_index, "agent": slot, "reason": reason},
+                        extra={
+                            "round": round_index,
+                            "agent": slot,
+                            "reason": reason,
+                            "validation_issue": primary_issue,
+                            "offending_excerpt": primary_issue.get("offending_excerpt", ""),
+                            "reentry_eligible": bool(primary_issue.get("reentry_eligible", False))
+                            and bool(failure_policy["eligible"]),
+                            "reentry_decision_reason": primary_issue.get("reentry_decision_reason", ""),
+                        },
                     )
                 continue
             if reentry_counts.get(slot, 0) >= max_reentries_per_slot:
@@ -4506,6 +6545,10 @@ async def _run_model_meeting(
                     stage=f"agent_reentry_probe_round_{round_index}",
                 )
             if watchdog:
+                primary_issue = _primary_validation_issue(
+                    reentry_removed_issues.get(slot, []),
+                    reentry_removed_reasons.get(slot, ""),
+                )
                 watchdog.chat(
                     slot,
                     (
@@ -4513,6 +6556,12 @@ async def _run_model_meeting(
                         f"fontes={', '.join(_non_opta_source_items(opinion)[:3]) or 'fonte auditável'}"
                     ),
                     round_name="agent-reentry",
+                    extra={
+                        "validation_issue": primary_issue,
+                        "offending_excerpt": primary_issue.get("offending_excerpt", ""),
+                        "reentry_eligible": True,
+                        "reentry_decision_reason": primary_issue.get("reentry_decision_reason", ""),
+                    },
                 )
                 watchdog.event(
                     "agent_reentry_probe",
@@ -4522,10 +6571,36 @@ async def _run_model_meeting(
                         "round": round_index,
                         "agent": slot,
                         "active_slots": active_slots,
+                        "validation_issue": primary_issue,
+                        "offending_excerpt": primary_issue.get("offending_excerpt", ""),
+                        "reentry_eligible": True,
+                        "reentry_decision_reason": primary_issue.get("reentry_decision_reason", ""),
                     },
                 )
 
+    meeting_started_at = asyncio.get_running_loop().time()
     for round_index in range(1, max_rounds + 1):
+        if round_budget_seconds > 0 and round_index > 1:
+            elapsed_seconds = asyncio.get_running_loop().time() - meeting_started_at
+            allowed_seconds = round_budget_seconds * round_index
+            if elapsed_seconds > allowed_seconds:
+                round_budget_exhausted = True
+                round_budget_warning = (
+                    f"orçamento acumulado de rodada excedido antes da rodada {round_index}: "
+                    f"{elapsed_seconds:.2f}s usados para limite de {allowed_seconds:.2f}s"
+                )
+                if watchdog:
+                    watchdog.event(
+                        "model_meeting",
+                        "round_budget_exhausted",
+                        detail=round_budget_warning,
+                        extra={
+                            "round": round_index,
+                            "elapsed_seconds": round(elapsed_seconds, 3),
+                            "allowed_seconds": round(allowed_seconds, 3),
+                        },
+                    )
+                break
         collect_finished_reentry_probes(round_index)
         schedule_reentry_probes(round_index)
         protagonist_counts[protagonist] = protagonist_counts.get(protagonist, 0) + 1
@@ -4545,6 +6620,13 @@ async def _run_model_meeting(
                     "timeout_seconds": protagonist_timeout,
                 },
             )
+        if progress_sink is not None:
+            progress_sink["pending_round"] = {
+                "round": round_index,
+                "protagonist": protagonist,
+                "question": "pergunta do protagonista ainda em geração",
+                "status": "question_in_progress",
+            }
         try:
             question, question_opinion, invalid_question_reason = await _protagonist_question(
                 config=config,
@@ -4555,6 +6637,7 @@ async def _run_model_meeting(
                 baseline_title_pct=baseline_title_pct,
                 allow_agent_fallback=allow_agent_fallback,
                 timeout=protagonist_timeout,
+                cancel_event=cancel_event,
             )
         finally:
             if watchdog:
@@ -4564,6 +6647,50 @@ async def _run_model_meeting(
                     "agent_call_finish",
                     detail=f"question_phase; round={round_index}; agent={protagonist}; elapsed_ms={elapsed_ms}",
                     extra={"phase": "question", "round": round_index, "agent": protagonist, "elapsed_ms": elapsed_ms},
+                )
+        exact_mc_challenge_question_active = False
+        if forced_coverage_question:
+            original_question = question
+            question = forced_coverage_question
+            forced_coverage_question = None
+            invalid_question_reason = None
+            if question_opinion is not None:
+                question_opinion = replace(
+                    question_opinion,
+                    question=question,
+                    answer=(
+                        "Moderador redirecionou a rodada para a lacuna obrigatória de cobertura. "
+                        f"Pergunta original do protagonista: {original_question}"
+                    ),
+                )
+            if watchdog:
+                watchdog.event(
+                    "model_room",
+                    "coverage_followup",
+                    detail="moderador substituiu a pauta por cobertura obrigatória faltante",
+                        extra={"round": round_index, "question": question, "original_question": original_question},
+                )
+        elif forced_exact_mc_challenge_question:
+            original_question = question
+            question = forced_exact_mc_challenge_question
+            forced_exact_mc_challenge_question = None
+            exact_mc_challenge_question_active = True
+            invalid_question_reason = None
+            if question_opinion is not None:
+                question_opinion = replace(
+                    question_opinion,
+                    question=question,
+                    answer=(
+                        "Moderador redirecionou a rodada para challenger anti-eco do Monte Carlo. "
+                        f"Pergunta original do protagonista: {original_question}"
+                    ),
+                )
+            if watchdog:
+                watchdog.event(
+                    "model_room",
+                    "exact_mc_challenge_question",
+                    detail="moderador substituiu a pauta por challenger porque a sala ecoou exatamente o MC",
+                    extra={"round": round_index, "question": question, "original_question": original_question},
                 )
         question_was_fallback = (
             question_opinion is None
@@ -4599,6 +6726,7 @@ async def _run_model_meeting(
             protagonist_position = AgentOpinion(
                 agent=protagonist,
                 title_pct=round(float(baseline_title_pct), 1),
+                title_pct_source="fallback",
                 summary="Protagonista manteve a tese da pergunta; posição sintética criada por ausência de resposta parseável.",
                 question=question,
                 answer=question,
@@ -4609,6 +6737,13 @@ async def _run_model_meeting(
 
         if watchdog:
             watchdog.meeting_question(round_index=round_index, protagonist=protagonist, question=question)
+        if progress_sink is not None:
+            progress_sink["pending_round"] = {
+                "round": round_index,
+                "protagonist": protagonist,
+                "question": question,
+                "status": "question_ready",
+            }
 
         responder_specs = [spec for spec in agent_specs if getattr(spec, "slot", None) != protagonist]
         response_prompt = _meeting_response_prompt(
@@ -4619,18 +6754,35 @@ async def _run_model_meeting(
             previous_turn=previous_turn,
             generated_at=generated_at,
         )
-        raw_opinions = await call_all_agents(
-            response_prompt,
-            specs=responder_specs,
-            baseline_title_pct=baseline_title_pct,
-            timeout=timeout,
-            allow_local_fallback=allow_agent_fallback,
-            progress_callback=_meeting_agent_progress_callback(
-                watchdog,
-                phase="response",
-                round_index=round_index,
-            ),
-        )
+        try:
+            raw_opinions = await call_all_agents(
+                response_prompt,
+                specs=responder_specs,
+                baseline_title_pct=baseline_title_pct,
+                timeout=timeout,
+                allow_local_fallback=allow_agent_fallback,
+                progress_callback=_meeting_agent_progress_callback(
+                    watchdog,
+                    phase="response",
+                    round_index=round_index,
+                ),
+                cancel_event=cancel_event,
+            )
+        except TypeError as exc:
+            if "cancel_event" not in str(exc):
+                raise
+            raw_opinions = await call_all_agents(
+                response_prompt,
+                specs=responder_specs,
+                baseline_title_pct=baseline_title_pct,
+                timeout=timeout,
+                allow_local_fallback=allow_agent_fallback,
+                progress_callback=_meeting_agent_progress_callback(
+                    watchdog,
+                    phase="response",
+                    round_index=round_index,
+                ),
+            )
         if token_cost_ledger is not None:
             _record_token_costs(
                 token_cost_ledger,
@@ -4691,6 +6843,34 @@ async def _run_model_meeting(
                 for pending_slot, pending_task in pending_reentry_tasks.items():
                     if not pending_task.done():
                         pending_task.cancel()
+                if last_valid_consensus is not None and (last_valid_coverage_complete or not require_full_coverage):
+                    final_consensus = last_valid_consensus
+                    final_opinions = last_valid_opinions
+                    exited_with_consensus = True
+                    object.__setattr__(final_consensus, "exit_status", "conditional_last_valid_after_sterile")
+                    object.__setattr__(
+                        final_consensus,
+                        "exit_warning",
+                        (
+                            f"sala estéril por {consecutive_sterile} rodadas consecutivas após consenso válido; "
+                            "publicado último consenso válido em modo condicional"
+                        ),
+                    )
+                    if watchdog:
+                        watchdog.event(
+                            "model_meeting",
+                            "conditional_publish",
+                            detail=(
+                                f"sala estéril na rodada {round_index}; usando último consenso válido "
+                                f"(título {last_valid_consensus.title_pct:.1f}%) em modo condicional"
+                            ),
+                            extra={
+                                "round": round_index,
+                                "consecutive_sterile": consecutive_sterile,
+                                "last_valid_title_pct": last_valid_consensus.title_pct,
+                            },
+                        )
+                    break
                 if watchdog:
                     watchdog.fail(
                         "model_meeting",
@@ -4736,9 +6916,24 @@ async def _run_model_meeting(
                     current_protagonist=protagonist,
                 )
         turn["coverage"] = _meeting_coverage_report([*meeting_transcript, turn], config)
+        if last_round_consensus_valid:
+            last_valid_coverage_complete = bool(turn.get("coverage", {}).get("complete", False))
+        if exact_mc_challenge_question_active:
+            exact_mc_challenge_satisfied = True
+            turn["forced_exact_mc_challenge_question"] = True
+            turn["exact_mc_challenge"] = {
+                "required": False,
+                "satisfied": True,
+                "reason": "rodada challenger executada antes da saída por consenso",
+            }
         meeting_transcript.append(turn)
+        if progress_sink is not None:
+            progress_sink["pending_round"] = None
+            progress_sink["last_completed_round"] = round_index
         if _blind_peer_review_enabled(config) and round_index == 1:
-            turn["blind_peer_review"] = await _run_blind_peer_review_shadow(
+            await _ensure_blind_peer_review_for_turn(
+                turn,
+                mode="shadow",
                 config=config,
                 round_index=round_index,
                 consensus_opinions=consensus_opinions,
@@ -4809,8 +7004,12 @@ async def _run_model_meeting(
                 consecutive_invalid[vote_slot] = 0
                 if vote_slot != protagonist:
                     fallback_question_streak[vote_slot] = 0
+                last_invalid_issues.pop(vote_slot, None)
             else:
                 consecutive_invalid[vote_slot] = consecutive_invalid.get(vote_slot, 0) + 1
+                issues = list(getattr(vote_opinion, "validation_issues", []) or [])
+                if issues:
+                    last_invalid_issues[vote_slot] = issues
         for broken_slot in [
             slot for slot in list(active_slots) if consecutive_invalid.get(slot, 0) >= breaker_threshold
         ]:
@@ -4834,6 +7033,19 @@ async def _run_model_meeting(
                 f"circuit breaker: {consecutive_invalid.get(broken_slot, 0)} respostas consecutivas sem voto válido "
                 "(removida da sala principal ou fallback sem fonte auditável)"
             )
+            breaker_issues = list(last_invalid_issues.get(broken_slot, []))
+            if not breaker_issues:
+                breaker_issues = [
+                    _validation_issue(
+                        gate_name="meeting_circuit_breaker",
+                        matched_rule="consecutive_invalid_votes",
+                        offending_excerpt=breaker_reason,
+                        field="answer",
+                        severity="blocking",
+                        recoverability="source",
+                        repair_hint="Pode reentrar apenas se o probe trouxer resposta auditável com fontes próprias.",
+                    )
+                ]
             agent_specs = [spec for spec in agent_specs if str(getattr(spec, "slot", "")) != broken_slot]
             active_slots = _slots_from_specs(agent_specs)
             room_quorum = _room_majority_quorum(
@@ -4850,8 +7062,10 @@ async def _run_model_meeting(
             ):
                 reentry_candidates[broken_slot] = removed_spec
                 reentry_removed_reasons[broken_slot] = breaker_reason
+                reentry_removed_issues[broken_slot] = breaker_issues
             else:
                 reentry_candidates.pop(broken_slot, None)
+                reentry_removed_issues.pop(broken_slot, None)
                 if watchdog and reentry_counts.get(broken_slot, 0) >= max_reentries_per_slot:
                     watchdog.event(
                         "model_room",
@@ -4935,7 +7149,6 @@ async def _run_model_meeting(
             last_turn=turn,
             require_peer_acceptance=require_peer_acceptance,
         )
-        require_full_coverage = bool(config.get("meeting_require_full_path_coverage", True))
         coverage_complete = bool(turn.get("coverage", {}).get("complete", False))
         coverage_ok = coverage_complete or not require_full_coverage
         majority_accepts = _enough_peer_acceptances(turn, required_acceptances=minimum_peer_acceptances)
@@ -4954,6 +7167,45 @@ async def _run_model_meeting(
             active_slots=active_slots,
             report_coherence_error=report_coherence_error,
         )
+        exact_mc_challenge_due = _should_force_exact_mc_challenger(
+            meeting_transcript,
+            config,
+            challenge_already_satisfied=exact_mc_challenge_satisfied,
+        )
+        if exact_mc_challenge_due:
+            forced_exact_mc_challenge_question = _exact_mc_challenger_prompt(config)
+            turn["exact_mc_challenge"] = {
+                "required": True,
+                "satisfied": False,
+                "reason": "consenso recente repetiu exatamente o título do Monte Carlo com dispersão nula",
+            }
+            fast_path_meta = turn.get("llm_council_fast_path")
+            if isinstance(fast_path_meta, dict):
+                blocked = list(fast_path_meta.get("blocked_reasons", []) or [])
+                if "exact_mc_challenge_required" not in blocked:
+                    blocked.append("exact_mc_challenge_required")
+                fast_path_meta["blocked_reasons"] = blocked
+                fast_path_meta["eligible"] = False
+                fast_path_meta["acted_on_decision"] = False
+            if watchdog:
+                watchdog.event(
+                    "model_room",
+                    "exact_mc_challenge",
+                    detail=(
+                        "consenso está ecoando exatamente o Monte Carlo; próxima rodada força challenger "
+                        "antes de permitir saída"
+                    ),
+                    extra={"round": round_index, "question": forced_exact_mc_challenge_question},
+                )
+        else:
+            turn.setdefault(
+                "exact_mc_challenge",
+                {
+                    "required": False,
+                    "satisfied": bool(exact_mc_challenge_satisfied),
+                    "reason": "",
+                },
+            )
         if bool(turn["llm_council_fast_path"].get("acted_on_decision", False)):
             exited_with_consensus = True
             object.__setattr__(consensus, "exit_status", "fast_path_consensus")
@@ -4980,10 +7232,72 @@ async def _run_model_meeting(
         else:
             stable_rounds = 0
         previous_consensus_title = float(consensus.title_pct)
-        if consensus_ready and coverage_ok:
+        if consensus_ready and coverage_ok and not exact_mc_challenge_due:
+            await _ensure_blind_peer_review_for_turn(
+                turn,
+                mode="consensus_exit_candidate",
+                config=config,
+                round_index=round_index,
+                consensus_opinions=consensus_opinions,
+                agent_specs=agent_specs,
+                active_slots=active_slots,
+                generated_at=generated_at,
+                baseline_title_pct=baseline_title_pct,
+                allow_agent_fallback=allow_agent_fallback,
+                token_cost_ledger=token_cost_ledger,
+                watchdog=watchdog,
+            )
+            blind_exit_blocked = _blind_peer_review_exit_blocked_reasons(
+                turn,
+                config=config,
+                room_quorum=room_quorum,
+            )
+            if blind_exit_blocked:
+                _mark_blind_peer_review_exit_blocked(
+                    turn,
+                    blocked_reasons=blind_exit_blocked,
+                    room_quorum=room_quorum,
+                    watchdog=watchdog,
+                )
+                protagonist = turn["next_protagonist"]
+                previous_turn = turn
+                if pending_reentry_tasks:
+                    await asyncio.sleep(0)
+                continue
             exited_with_consensus = True
             break
-        if stable_rounds >= stability_rounds_required:
+        if stable_rounds >= stability_rounds_required and not exact_mc_challenge_due:
+            await _ensure_blind_peer_review_for_turn(
+                turn,
+                mode="stable_exit_candidate",
+                config=config,
+                round_index=round_index,
+                consensus_opinions=consensus_opinions,
+                agent_specs=agent_specs,
+                active_slots=active_slots,
+                generated_at=generated_at,
+                baseline_title_pct=baseline_title_pct,
+                allow_agent_fallback=allow_agent_fallback,
+                token_cost_ledger=token_cost_ledger,
+                watchdog=watchdog,
+            )
+            blind_exit_blocked = _blind_peer_review_exit_blocked_reasons(
+                turn,
+                config=config,
+                room_quorum=room_quorum,
+            )
+            if blind_exit_blocked:
+                _mark_blind_peer_review_exit_blocked(
+                    turn,
+                    blocked_reasons=blind_exit_blocked,
+                    room_quorum=room_quorum,
+                    watchdog=watchdog,
+                )
+                protagonist = turn["next_protagonist"]
+                previous_turn = turn
+                if pending_reentry_tasks:
+                    await asyncio.sleep(0)
+                continue
             exited_with_consensus = True
             if watchdog:
                 watchdog.event(
@@ -5007,6 +7321,7 @@ async def _run_model_meeting(
                 detail="consensus numerically ready but full path coverage is incomplete",
                 extra=turn.get("coverage", {}),
             )
+            forced_coverage_question = _coverage_followup_question(turn.get("coverage", {}))
         protagonist = turn["next_protagonist"]
         previous_turn = turn
         if pending_reentry_tasks:
@@ -5016,12 +7331,22 @@ async def _run_model_meeting(
         if task.done():
             continue
         task.cancel()
+        primary_issue = _primary_validation_issue(
+            reentry_removed_issues.get(slot, []),
+            reentry_removed_reasons.get(slot, ""),
+        )
         if watchdog:
             watchdog.event(
                 "agent_reentry_probe",
                 "cancel",
                 detail=f"agent={slot}; meeting ended before async probe completed",
-                extra={"agent": slot},
+                extra={
+                    "agent": slot,
+                    "validation_issue": primary_issue,
+                    "offending_excerpt": primary_issue.get("offending_excerpt", ""),
+                    "reentry_eligible": bool(primary_issue.get("reentry_eligible", False)),
+                    "reentry_decision_reason": primary_issue.get("reentry_decision_reason", ""),
+                },
             )
 
     if final_consensus is None:
@@ -5065,6 +7390,13 @@ async def _run_model_meeting(
                 f"teto de {max_rounds} rodadas atingido sem nenhum voto válido na rodada final; "
                 "consenso não pode ser publicado a partir de fallbacks"
             )
+    elif round_budget_exhausted:
+        object.__setattr__(final_consensus, "exit_status", "round_budget_exhausted")
+        object.__setattr__(
+            final_consensus,
+            "exit_warning",
+            round_budget_warning or "orçamento acumulado de rodada excedido; publicado último consenso parcial",
+        )
     elif not exited_with_consensus:
         object.__setattr__(final_consensus, "exit_status", "max_rounds_no_consensus")
         object.__setattr__(
@@ -5339,8 +7671,43 @@ def _validate_report_coherence(
     stage_probabilities: dict[str, float],
     knockout_estimates: list[Any],
     monte_carlo_result: dict[str, Any] | None,
+    group_estimates: list[Any] | None = None,
 ) -> None:
     errors: list[str] = []
+    probability_tolerance = 0.2
+
+    for estimate in group_estimates or []:
+        phase = str(getattr(estimate, "phase", "Fase de grupos") or "Fase de grupos")
+        opponent = str(getattr(estimate, "opponent", "") or "")
+        brazil_pct = _float_probability(getattr(estimate, "brazil_pct", None))
+        opponent_pct = _float_probability(getattr(estimate, "opponent_pct", None))
+        draw_pct = _float_probability(getattr(estimate, "draw_pct", None))
+        if brazil_pct is None or opponent_pct is None:
+            continue
+        if draw_pct is None:
+            total = brazil_pct + opponent_pct
+            if abs(total - 100.0) > probability_tolerance:
+                errors.append(
+                    f"{phase} vs {opponent}: Brasil+adversário={total:.1f}% deveria somar 100.0%"
+                )
+            continue
+        total = brazil_pct + draw_pct + opponent_pct
+        if abs(total - 100.0) > probability_tolerance:
+            errors.append(f"{phase} vs {opponent}: V+E+D={total:.1f}% deveria somar 100.0%")
+
+    for estimate in knockout_estimates:
+        phase = str(getattr(estimate, "phase", ""))
+        if not _is_knockout_estimate(phase):
+            continue
+        opponent = str(getattr(estimate, "opponent", "") or "")
+        brazil_pct = _float_probability(getattr(estimate, "brazil_pct", None))
+        opponent_pct = _float_probability(getattr(estimate, "opponent_pct", None))
+        if brazil_pct is None or opponent_pct is None:
+            continue
+        total = brazil_pct + opponent_pct
+        if abs(total - 100.0) > probability_tolerance:
+            errors.append(f"{phase} vs {opponent}: Brasil+adversário={total:.1f}% deveria somar 100.0%")
+
     stage_order = ("quartas", "semifinal", "final", "titulo")
     for previous_key, next_key in zip(stage_order, stage_order[1:]):
         if previous_key not in stage_probabilities or next_key not in stage_probabilities:
@@ -5539,6 +7906,7 @@ def _opponent_debriefing_config(config: dict[str, Any]) -> dict[str, Any]:
         )
     if not knockout_matches:
         knockout_matches = [dict(match) for match in _default_knockout_matches(config)]
+    monte_carlo_summary = monte_carlo_compact_summary(config.get("_monte_carlo_result", {"enabled": False}))
 
     return {
         **config,
@@ -5550,15 +7918,22 @@ def _opponent_debriefing_config(config: dict[str, Any]) -> dict[str, Any]:
         "meeting_min_rounds": int(config.get("opponent_debriefing_min_rounds", 1)),
         "meeting_max_rounds": int(config.get("opponent_debriefing_max_rounds", 3)),
         "meeting_stability_rounds": int(config.get("opponent_debriefing_stability_rounds", 1)),
+        "meeting_round_budget_seconds": float(config.get("opponent_debriefing_round_budget_seconds", 0) or 0),
         "agent_timeout_seconds": int(config.get("opponent_debriefing_agent_timeout_seconds", 120)),
         # Sem este override, a 1ª chamada de TODA rodada (pergunta do protagonista)
         # herdava os 210s da sala principal e furava o modelo de orçamento.
         "protagonist_timeout_seconds": int(config.get("opponent_debriefing_protagonist_timeout_seconds", 120)),
         "group_matches": [],
         "knockout_matches": knockout_matches,
+        "_path_relevant_group_states": monte_carlo_summary.get("relevant_group_states", {}),
+        "_path_phase_relevant_groups": monte_carlo_summary.get("phase_relevant_groups", {}),
         "macro_direction": (
             "Sala paralela de debriefing para adversários prováveis do cruzamento do Brasil. "
             "Simule 16 avos, Oitavas, Quartas, Semifinal e Final dentro do bracket oficial; "
+            "use os placares realizados e as tabelas vivas dos grupos de cruzamento expostos em "
+            "monte_carlo.relevant_group_states/_path_relevant_group_states como baseline auditável e desafiável, "
+            "não como premissa fixa; "
+            "placar realizado substitui probabilidade pré-jogo, e tabela viva muda seed, cenário e adversário provável; "
             "para cada candidato permitido, estime scenario_probabilities e match_probabilities com as "
             "mesmas famílias de dados usadas para o Brasil: bets/prediction markets, ratings, Monte Carlo, "
             "Sofascore/performance, lesões/cortes/notícias, amistosos recentes, arbitragem/VAR/cartões, descanso "
@@ -5581,6 +7956,13 @@ def _opponent_debriefing_budget_warning(config: dict[str, Any]) -> str | None:
     min_rounds = max(1, int(sub_config.get("meeting_min_rounds", 1)))
     worst_case_seconds = min_rounds * per_round_worst_seconds
     budget_seconds = max(0.001, float(config.get("parallel_opponent_debriefing_timeout_seconds", 900)))
+    round_budget_seconds = float(sub_config.get("meeting_round_budget_seconds", 0) or 0)
+    if round_budget_seconds > 0 and per_round_worst_seconds > round_budget_seconds:
+        return (
+            f"sala paralela: ~{per_round_worst_seconds:.0f}s de pior caso por rodada excede "
+            f"o orçamento acumulado de rodada ({round_budget_seconds:.0f}s); ajuste "
+            "opponent_debriefing_round_budget_seconds ou reduza timeouts da sala lateral"
+        )
     if worst_case_seconds > budget_seconds:
         return (
             f"sala paralela: {min_rounds} rodada(s) mínima(s) × ~{per_round_worst_seconds:.0f}s de pior caso "
@@ -5615,6 +7997,8 @@ def _parallel_opponent_briefing_for_prompt(result: dict[str, Any], estimates: li
             "enabled": bool(result.get("enabled", False)),
             "failed": bool(result.get("failed", False)),
             "error": str(result.get("error", "")),
+            "usable_for_main_room": bool(result.get("usable_for_main_room", False)),
+            "exit_status": str(result.get("exit_status", "") or ""),
         }
     top_by_phase: dict[str, list[dict[str, Any]]] = {}
     for estimate in estimates:
@@ -5631,10 +8015,132 @@ def _parallel_opponent_briefing_for_prompt(result: dict[str, Any], estimates: li
         )
     return {
         "enabled": True,
+        "failed": False,
         "rounds": int(result.get("rounds", 0) or 0),
         "participants": list(result.get("participants", [])),
+        "usable_for_main_room": bool(result.get("usable_for_main_room", False)),
+        "exit_status": str(result.get("exit_status", "") or ""),
+        "degraded": bool(result.get("degraded", False)),
+        "degraded_shadow_only": bool(result.get("degraded_shadow_only", False)),
+        "degraded_would_be_usable": bool(result.get("degraded_would_be_usable", False)),
         "top_by_phase": top_by_phase,
         "rule": "sala principal deve usar estes adversários prováveis já reconciliados com bracket/Monte Carlo",
+    }
+
+
+_OPPONENT_ROOM_PHASE_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "16_avos": ("16 avos", "16avos", "r32", "round of 32"),
+    "oitavas": ("oitavas", "r16", "round of 16"),
+    "quartas": ("quartas", "quarter", "quartas de final"),
+    "semifinal": ("semifinal", "semi"),
+    "final": ("final",),
+}
+
+
+def _opponent_room_phase_key(text: str) -> str | None:
+    normalized = _normalize_text(text)
+    for phase_key, aliases in _OPPONENT_ROOM_PHASE_KEYWORDS.items():
+        if any(_normalize_text(alias) in normalized for alias in aliases):
+            return phase_key
+    return None
+
+
+def _iter_opponent_room_probability_maps(result: dict[str, Any]) -> Iterable[dict[str, Any]]:
+    for opinion in [
+        *(result.get("final_opinions") or []),
+        *(result.get("all_opinions") or []),
+    ]:
+        for attr in ("scenario_probabilities", "match_probabilities"):
+            payload = getattr(opinion, attr, None)
+            if isinstance(payload, dict):
+                yield payload
+    for turn in result.get("meeting_transcript", []) or []:
+        if not isinstance(turn, dict):
+            continue
+        for response in turn.get("responses", []) or []:
+            if not isinstance(response, dict):
+                continue
+            if bool(response.get("removed_from_main", False)):
+                continue
+            for field in ("scenario_probabilities", "match_probabilities"):
+                payload = response.get(field)
+                if isinstance(payload, dict):
+                    yield payload
+
+
+def _opponent_room_phase_coverage(result: dict[str, Any]) -> dict[str, int]:
+    opponents_by_phase: dict[str, set[str]] = {phase: set() for phase in _OPPONENT_ROOM_PHASE_KEYWORDS}
+    for probability_map in _iter_opponent_room_probability_maps(result):
+        for raw_key in probability_map:
+            key = str(raw_key or "").strip()
+            if not key:
+                continue
+            phase_key = _opponent_room_phase_key(key)
+            if not phase_key:
+                continue
+            opponent = key.split(":", 1)[1] if ":" in key else key
+            opponent = _normalize_text(opponent)
+            if opponent and opponent != _normalize_text(key):
+                opponents_by_phase[phase_key].add(opponent)
+    return {phase: len(opponents) for phase, opponents in opponents_by_phase.items()}
+
+
+def _opponent_room_has_sufficient_phase_coverage(
+    result: dict[str, Any],
+    *,
+    min_candidates_per_phase: int = 2,
+    min_covered_phases: int = 4,
+) -> bool:
+    coverage = _opponent_room_phase_coverage(result)
+    covered = sum(1 for count in coverage.values() if count >= min_candidates_per_phase)
+    return covered >= min_covered_phases
+
+
+def _side_room_latest_coverage_complete(transcript: list[dict[str, Any]]) -> bool:
+    for turn in reversed(transcript):
+        coverage = turn.get("coverage")
+        if isinstance(coverage, dict):
+            return bool(coverage.get("complete", False))
+    return False
+
+
+def _side_room_valid_participant_count(opinions: list[Any]) -> int:
+    return sum(1 for opinion in opinions if _counts_as_consensus_participant(opinion))
+
+
+def _opponent_debriefing_degraded_decision(
+    *,
+    config: dict[str, Any],
+    exit_status: str,
+    transcript: list[dict[str, Any]],
+    final_opinions: list[Any],
+) -> dict[str, Any]:
+    enabled = bool(config.get("opponent_debriefing_degraded_consensus_enabled", False))
+    shadow_only = bool(config.get("opponent_debriefing_degraded_shadow_only", True))
+    minimum_participants = int(config.get("meeting_min_participants", config.get("meeting_min_real_agents", 3)))
+    valid_participants = _side_room_valid_participant_count(final_opinions)
+    coverage_complete = _side_room_latest_coverage_complete(transcript)
+    reasons: list[str] = []
+    if not enabled:
+        reasons.append("degraded_disabled")
+    if exit_status != "degraded_last_valid":
+        reasons.append(f"exit_status_{exit_status or 'missing'}")
+    if not transcript:
+        reasons.append("no_transcript")
+    if not coverage_complete:
+        reasons.append("coverage_incomplete")
+    if valid_participants < minimum_participants:
+        reasons.append("insufficient_valid_participants")
+    would_be_usable = not reasons
+    return {
+        "enabled": enabled,
+        "shadow_only": shadow_only,
+        "would_be_usable": would_be_usable,
+        "usable": bool(would_be_usable and not shadow_only),
+        "reasons": reasons,
+        "valid_participants": valid_participants,
+        "minimum_participants": minimum_participants,
+        "coverage_complete": coverage_complete,
     }
 
 
@@ -5648,6 +8154,8 @@ async def _run_parallel_opponent_debriefing(
     allow_agent_fallback: bool,
     token_cost_ledger: dict[str, Any],
     watchdog: RunWatchdog | None = None,
+    progress_sink: dict[str, Any] | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
     opponent_config = _opponent_debriefing_config(config)
     meeting_watchdog = (
@@ -5668,10 +8176,20 @@ async def _run_parallel_opponent_debriefing(
         allow_agent_fallback=allow_agent_fallback,
         watchdog=meeting_watchdog,
         token_cost_ledger=token_cost_ledger,
+        progress_sink=progress_sink,
+        cancel_event=cancel_event,
     )
     exit_status = str(getattr(consensus, "exit_status", "consensus") or "consensus")
     exit_warning = str(getattr(consensus, "exit_warning", "") or "")
-    return {
+    degraded_decision = _opponent_debriefing_degraded_decision(
+        config=opponent_config,
+        exit_status=exit_status,
+        transcript=transcript,
+        final_opinions=final_opinions,
+    )
+    degraded_usable = bool(degraded_decision.get("usable", False))
+    usable_for_main_room = exit_status == "consensus" or degraded_usable
+    result = {
         "enabled": True,
         "consensus": consensus,
         "final_opinions": final_opinions,
@@ -5681,8 +8199,22 @@ async def _run_parallel_opponent_debriefing(
         "participants": _slots_from_specs(agent_specs),
         "exit_status": exit_status,
         "exit_warning": exit_warning,
-        "usable_for_main_room": exit_status == "consensus",
+        "usable_for_main_room": usable_for_main_room,
+        "degraded": degraded_usable,
+        "degraded_shadow_only": bool(degraded_decision.get("shadow_only", True)),
+        "degraded_would_be_usable": bool(degraded_decision.get("would_be_usable", False)),
+        "degraded_decision": degraded_decision,
     }
+    phase_coverage = _opponent_room_phase_coverage(result)
+    phase_coverage_sufficient = _opponent_room_has_sufficient_phase_coverage(result)
+    result["phase_coverage"] = phase_coverage
+    result["phase_coverage_sufficient"] = phase_coverage_sufficient
+    if usable_for_main_room and not phase_coverage_sufficient:
+        result["phase_coverage_warning"] = (
+            "Sala lateral teve consenso, mas cobertura de adversários por fase ficou rasa; "
+            "caminho principal usa MC como base e sala como validação qualitativa."
+        )
+    return result
 
 
 def _agent_debate_prompt(
@@ -5692,13 +8224,17 @@ def _agent_debate_prompt(
     generated_at: datetime,
     opening_opinions: list[Any],
 ) -> str:
-    opening_lines = [
-        (
-            f"- {opinion.agent}: título={opinion.title_pct:.1f}%; "
+    opening_lines = []
+    for opinion in opening_opinions:
+        title_text = (
+            f"{float(opinion.title_pct):.1f}%"
+            if getattr(opinion, "title_pct", None) is not None
+            else "sem número próprio"
+        )
+        opening_lines.append(
+            f"- {opinion.agent}: título={title_text}; "
             f"tese={opinion.summary}; crítica={opinion.critique or 'não informada'}"
         )
-        for opinion in opening_opinions
-    ]
     return (
         _agent_prompt(config=config, evidence=evidence, generated_at=generated_at)
         + "\n\nRodada 1 dos outros modelos:\n"
@@ -5706,6 +8242,35 @@ def _agent_debate_prompt(
         + "\n\nAgora faça a Rodada 2: critique explicitamente pelo menos uma premissa de outro modelo, "
         "diga se move sua probabilidade de título para cima/baixo/igual e responda em JSON estrito "
         "com self_identification, title_pct, summary, opening_argument, critique e adjustment."
+    )
+
+
+def _room_specific_protagonist_instruction(config: dict[str, Any]) -> str:
+    if str(config.get("_meeting_room", "main_brazil") or "main_brazil") != "opponent_path":
+        return ""
+    return (
+        "Nesta sala lateral de cruzamentos, formule uma pergunta decisória: peça aos modelos que escolham "
+        "um top-2 por fase entre os adversários permitidos pelo bracket oficial, estimem a chance de cada "
+        "cenário acontecer, apontem o dado que moveria essa ordem e digam se o baseline auditável e "
+        "desafiável do Monte Carlo deve ser mantido, corrigido ou substituído por evidência fresca. "
+        "Não trate o Monte Carlo como premissa fixa; ele é o ponto de partida a ser auditado."
+    )
+
+
+def _opponent_room_top_two_response_contract(config: dict[str, Any]) -> str:
+    if str(config.get("_meeting_room", "main_brazil") or "main_brazil") != "opponent_path":
+        return ""
+    phases = ["16 avos", "Oitavas", "Quartas", "Semifinal", "Final"]
+    phase_list = ", ".join(phases)
+    return (
+        "Contrato específico da sala lateral de cruzamentos: responda fase por fase para "
+        f"{phase_list}. Para cada fase, escolha exatamente top-2 adversários permitidos pelo bracket, "
+        "inclua a chance do cenário acontecer em scenario_probabilities com chaves no formato "
+        "'Fase: Seleção', inclua a chance do Brasil no confronto em match_probabilities quando houver "
+        "base auditável, e cite pelo menos uma fonte/query por fase ou explique por que o Monte Carlo/bracket "
+        "permanece melhor que a evidência fresca. Cubra explicitamente todas as fases na answer. "
+        "Se não houver duas opções fortes numa fase, preencha a segunda como 'Fase: Adversário alternativo a definir' "
+        "com rationale, em vez de omitir a fase."
     )
 
 
@@ -5736,7 +8301,8 @@ def _protagonist_question_prompt(
         "title_pct deve ser sempre um número da chance de título do Brasil, nunca um objeto; "
         "probabilidades jogo a jogo devem ir somente em match_probabilities quando forem necessárias; "
         "probabilidade de um confronto específico acontecer deve ir em scenario_probabilities. "
-        "Se uma premissa por seleção deve afetar a simulação de adversários, inclua team_context_signals com team, category, rating_delta ou probability_delta_pct, confidence, rationale e source_url/source_query. "
+        "Se uma premissa por seleção deve afetar a simulação de adversários, inclua team_context_signals com team, category, rating_delta ou probability_delta_pct, confidence, rationale, source_url/source_query e correlation_group/shock_id. "
+        "Use o mesmo correlation_group para sinais de famílias diferentes que reagem ao mesmo choque; use outro grupo para fatores estruturais independentes. "
         "Na sua question, exponha sua opinião/racional em uma frase e pergunte explicitamente se os outros modelos "
         "concordam ou discordam dela, se concordam integralmente e se a sala pode sair com consenso para avançar "
         "para as próximas etapas. "
@@ -5745,8 +8311,10 @@ def _protagonist_question_prompt(
         f"{_opponent_research_instruction(config)} "
         f"{_quantitative_qualitative_decision_instruction()} "
         f"{_meeting_full_path_instruction(config)} "
+        f"{_opponent_room_top_two_response_contract(config)} "
         f"{_event_impact_prompt_instruction()} "
         f"{_auditable_sources_instruction(config)} "
+        f"{_room_specific_protagonist_instruction(config)} "
         "Não faça comparação com benchmarks externos nesta sala; esse passo acontece em prompt separado depois. "
         f"{_meeting_scope_instruction(config)}\n\n"
         f"Data: {generated_at.isoformat()}\n"
@@ -5790,7 +8358,9 @@ def _meeting_response_prompt(
         "'16 avos: Uruguai' ou 'Oitavas: Uruguai' e valores percentuais de chance do Brasil vencer/passar. "
         "Em scenario_probabilities, use chaves como '16 avos: Holanda' para a chance daquele confronto acontecer; "
         "só use candidatos permitidos por allowed_opponents/bracket_opponent_slots. "
-        "Em team_context_signals, registre sinais por seleção com team, category, rating_delta ou probability_delta_pct, confidence, rationale e source_url/source_query; "
+        f"{_opponent_room_top_two_response_contract(config)} "
+        "Em team_context_signals, registre sinais por seleção com team, category, rating_delta ou probability_delta_pct, confidence, rationale, source_url/source_query e correlation_group/shock_id; "
+        "use o mesmo correlation_group para odds, ratings, performance, lesões ou imprensa que reagem ao mesmo evento, e outro grupo para fatores estruturais independentes; "
         "use as mesmas famílias de dados do Brasil para adversários: bets/prediction markets, ratings, Sofascore/performance, lesões/cortes/notícias recentes, amistosos recentes, arbitragem/VAR/cartões e imprensa especializada. "
         "A decisão não é do orquestrador: ela deve sair do debate. Este é o Modelo Principal: use sportsbooks, "
         "prediction markets, ratings independentes, Monte Carlo, Sofascore/performance de jogadores, lesões, cortes, cartões, "
@@ -5912,6 +8482,26 @@ def _meeting_coverage_report(meeting_transcript: list[dict[str, Any]], config: d
     }
 
 
+def _coverage_followup_question(coverage: dict[str, Any]) -> str:
+    missing_group = [str(item).strip() for item in coverage.get("missing_group_opponents", []) if str(item).strip()]
+    missing_phases = [str(item).strip() for item in coverage.get("missing_knockout_phases", []) if str(item).strip()]
+    missing_parts: list[str] = []
+    if missing_group:
+        missing_parts.append("fase de grupos: " + ", ".join(missing_group))
+    if missing_phases:
+        missing_parts.append("mata-mata: " + ", ".join(missing_phases))
+    if not bool(coverage.get("title_covered", False)):
+        missing_parts.append("chance de título")
+    missing_text = "; ".join(missing_parts) or "cobertura obrigatória pendente"
+    return _ensure_consensus_request(
+        "Rodada de cobertura obrigatória: o consenso numérico está pronto, mas o caminho ainda não está completo. "
+        f"Cubram somente o que falta ({missing_text}) antes de encerrar. "
+        "Para cada fase faltante, tragam top-2 adversários possíveis pelo bracket, probabilidade do cenário em "
+        "scenario_probabilities, probabilidade do Brasil no confronto em match_probabilities quando houver base "
+        "auditável, fontes/queries verificáveis, e digam se concordam integralmente com manter o consenso salvo."
+    )
+
+
 async def _repair_invalid_meeting_responses(
     *,
     config: dict[str, Any],
@@ -5932,7 +8522,7 @@ async def _repair_invalid_meeting_responses(
         return sanitized_opinions, []
 
     spec_by_slot = _agent_spec_by_slot(responder_specs)
-    repaired_by_agent: dict[str, Any] = {}
+    checked_by_agent: dict[str, Any] = {}
     raw_repairs: list[Any] = []
 
     for raw_opinion, sanitized_opinion in zip(raw_opinions, sanitized_opinions, strict=False):
@@ -5963,28 +8553,30 @@ async def _repair_invalid_meeting_responses(
             [repaired],
             baseline_title_pct=baseline_title_pct,
             config=config,
+            semantic_policy_stage="post_repair",
+            admit_policy_suspected=True,
         )[0]
-        if not bool(getattr(checked, "used_fallback", False)):
-            repaired_by_agent[checked.agent] = checked
+        checked_by_agent[checked.agent] = checked
 
-    if not repaired_by_agent:
+    if not checked_by_agent:
         return sanitized_opinions, raw_repairs
 
     merged = [
-        repaired_by_agent.get(str(getattr(opinion, "agent", "")), opinion)
+        checked_by_agent.get(str(getattr(opinion, "agent", "")), opinion)
         for opinion in sanitized_opinions
     ]
     return merged, raw_repairs
 
 
 def _compose_debate_transcript(opening_opinions: list[Any], final_consensus: Any) -> list[str]:
-    lines = [
-        (
-            f"Rodada 1 - {opinion.agent}: {opinion.summary} "
-            f"Projeção inicial de título: {opinion.title_pct:.1f}%."
+    lines = []
+    for opinion in opening_opinions:
+        title_text = (
+            f"{float(opinion.title_pct):.1f}%"
+            if getattr(opinion, "title_pct", None) is not None
+            else "sem número próprio"
         )
-        for opinion in opening_opinions
-    ]
+        lines.append(f"Rodada 1 - {opinion.agent}: {opinion.summary} Projeção inicial de título: {title_text}.")
     for line in final_consensus.debate_transcript:
         if line.startswith("Rodada 1"):
             lines.append(line.replace("Rodada 1", "Rodada 2 - ajuste pós-crítica", 1))
@@ -6021,7 +8613,13 @@ def calculate_model_influence(opening_opinions: list[Any], final_opinions: list[
             score += 0.25
         if getattr(final, "adjustment", ""):
             score += 0.20
-        distance = abs(float(final.title_pct) - float(consensus.title_pct))
+        try:
+            final_title_pct = float(final.title_pct) if getattr(final, "title_pct", None) is not None else float(
+                consensus.title_pct
+            )
+        except (TypeError, ValueError):
+            final_title_pct = float(consensus.title_pct)
+        distance = abs(final_title_pct - float(consensus.title_pct))
         score += max(0.0, 0.8 - distance * 0.08)
         scores[agent] = max(score, 0.05)
 
@@ -6147,13 +8745,32 @@ def calculate_model_participation(
 ) -> dict[str, Any]:
     by_model: dict[str, dict[str, int]] = {}
     total_messages = 0
+    valid_messages = 0
     total_questions = 0
     total_responses = 0
+    valid_responses = 0
+    invalid_responses = 0
     protagonist_counts: dict[str, int] = {}
     rounds: list[dict[str, Any]] = []
 
     def entry(agent: str) -> dict[str, int]:
-        return by_model.setdefault(agent, {"messages": 0, "questions": 0, "responses": 0})
+        return by_model.setdefault(
+            agent,
+            {
+                "messages": 0,
+                "questions": 0,
+                "responses": 0,
+                "valid_responses": 0,
+                "invalid_responses": 0,
+            },
+        )
+
+    def response_is_valid(response: dict[str, Any]) -> bool:
+        if bool(response.get("removed_from_main")):
+            return False
+        if bool(response.get("used_fallback")) and int(response.get("source_count", 0) or 0) <= 0:
+            return False
+        return True
 
     for turn in meeting_transcript:
         protagonist = str(turn.get("protagonist", "")).strip()
@@ -6165,6 +8782,7 @@ def calculate_model_participation(
             stats["questions"] += 1
             protagonist_counts[protagonist] = protagonist_counts.get(protagonist, 0) + 1
             total_messages += 1
+            valid_messages += 1
             total_questions += 1
             participants.append(protagonist)
             seen_participants.add(protagonist)
@@ -6180,6 +8798,13 @@ def calculate_model_participation(
             stats["responses"] += 1
             total_messages += 1
             total_responses += 1
+            if response_is_valid(response):
+                stats["valid_responses"] += 1
+                valid_messages += 1
+                valid_responses += 1
+            else:
+                stats["invalid_responses"] += 1
+                invalid_responses += 1
         if protagonist or participants:
             rounds.append(
                 {
@@ -6195,8 +8820,11 @@ def calculate_model_participation(
 
     return {
         "total_messages": total_messages,
+        "valid_messages": valid_messages,
         "total_questions": total_questions,
         "total_responses": total_responses,
+        "valid_responses": valid_responses,
+        "invalid_responses": invalid_responses,
         "total_rounds": len(meeting_transcript),
         "protagonist_counts": protagonist_counts,
         "rounds": rounds,
@@ -6212,8 +8840,14 @@ def calculate_model_participation(
 def _model_predictions_no_opta(opinions: list[Any]) -> dict[str, dict[str, Any]]:
     predictions: dict[str, dict[str, Any]] = {}
     for opinion in opinions:
+        raw_title_pct = getattr(opinion, "title_pct", None)
+        try:
+            title_pct = round(float(raw_title_pct), 1) if raw_title_pct is not None else None
+        except (TypeError, ValueError):
+            title_pct = None
         predictions[opinion.agent] = {
-            "title_pct": round(float(opinion.title_pct), 1),
+            "title_pct": title_pct,
+            "title_pct_source": str(getattr(opinion, "title_pct_source", "") or "explicit"),
             "summary": opinion.summary,
             "answer": opinion.answer,
             "source_urls": [url for url in getattr(opinion, "source_urls", []) if not _has_opta_marker(url)],
@@ -6245,6 +8879,31 @@ def _model_self_identification(opinions: list[Any]) -> dict[str, dict[str, str]]
     return identities
 
 
+def _group_summary_from_monte_carlo(config: dict[str, Any], monte_carlo_result: dict[str, Any]) -> str:
+    group_state = monte_carlo_result.get("group_state") if isinstance(monte_carlo_result, dict) else {}
+    if not isinstance(group_state, dict) or not group_state:
+        return str(config.get("group_summary", ""))
+    first_pct = group_state.get("brazil_first_pct")
+    top2_pct = group_state.get("brazil_top2_pct")
+    if first_pct is None and top2_pct is None:
+        return str(config.get("group_summary", ""))
+    parts: list[str] = []
+    if first_pct is not None:
+        parts.append(f"Brasil em 1º: ~{float(first_pct):.1f}%")
+    if top2_pct is not None:
+        parts.append(f"Top-2 do grupo: ~{float(top2_pct):.1f}%")
+    completed = group_state.get("completed_results") or []
+    if completed:
+        scores = [
+            str(item.get("score") or "").strip()
+            for item in completed
+            if isinstance(item, dict) and str(item.get("score") or "").strip()
+        ]
+        if scores:
+            parts.append("placares já condicionados: " + "; ".join(scores[:4]))
+    return ". ".join(parts) + "." if parts else str(config.get("group_summary", ""))
+
+
 async def build_report_bundle(
     *,
     config: dict[str, Any],
@@ -6255,6 +8914,8 @@ async def build_report_bundle(
 ) -> RunArtifacts:
     _apply_runtime_env_overrides(config)
     generated_at = generated_at or datetime.now(timezone.utc)
+    run_id = str(getattr(watchdog, "run_id", "") or config.get("run_id") or "").strip()
+    _validate_completed_group_results_fresh(config, generated_at, watchdog)
     baseline_title_pct = float(config.get("baseline_title_pct", 11.0))
     agent_specs = load_agent_specs_from_config(config)
     agent_specs = _specs_after_preflight_exclusion(agent_specs, config, watchdog)
@@ -6339,10 +9000,31 @@ async def build_report_bundle(
             watchdog=watchdog,
             token_cost_ledger=token_cost_ledger,
         )
+        planning_opinions, source_readiness_report = await _repair_quorum_floor_planning_removals(
+            config=config,
+            planning_opinions=planning_opinions,
+            source_readiness_report=source_readiness_report,
+            agent_specs=agent_specs,
+            generated_at=generated_at,
+            baseline_title_pct=baseline_title_pct,
+            allow_agent_fallback=allow_agent_fallback,
+            watchdog=watchdog,
+            token_cost_ledger=token_cost_ledger,
+        )
+    source_planning_warnings = _source_planning_policy_warnings(source_readiness_report)
     removed_agent_slots = [str(entry["agent"]) for entry in source_readiness_report["removed_agents"]]
+    removed_issues_by_agent = {
+        str(entry.get("agent", "")): list(entry.get("validation_issues", []) or [])
+        for entry in source_readiness_report.get("removed_agents", [])
+    }
+    reentry_eligible_removed_slots = {
+        str(entry.get("agent", ""))
+        for entry in source_readiness_report.get("removed_agents", [])
+        if bool(entry.get("reentry_eligible", False))
+    }
     active_agent_specs = [spec for spec in agent_specs if spec.slot not in removed_agent_slots]
     reentry_candidate_specs = (
-        [spec for spec in agent_specs if spec.slot in removed_agent_slots]
+        [spec for spec in agent_specs if spec.slot in reentry_eligible_removed_slots]
         if bool(config.get("agent_reentry_probe_enabled", False))
         else []
     )
@@ -6363,10 +9045,28 @@ async def build_report_bundle(
         _token_cost_entry(token_cost_ledger, agent)["removed_from_decision"] = True
         if watchdog:
             reason = removed_reason_by_agent.get(agent, "não trouxe plano de fontes próprio e verificável")
+            issues = removed_issues_by_agent.get(agent, [])
+            primary_issue = _primary_validation_issue(issues, reason)
+            reentry_eligible = bool(primary_issue.get("reentry_eligible", False))
+            decision_reason = str(primary_issue.get("reentry_decision_reason", ""))
+            excerpt = str(primary_issue.get("offending_excerpt", ""))
+            detail = (
+                f"removido por {primary_issue.get('gate_name') or 'source_planning'}"
+                f"/{primary_issue.get('matched_rule') or 'contrato'}: {reason}; "
+                f"trecho que disparou: {excerpt or 'não disponível'}; "
+                f"reentry elegível: {'sim' if reentry_eligible else 'não'}; "
+                f"motivo da decisão: {decision_reason or 'sem política explícita'}"
+            )
             watchdog.chat(
                 agent,
-                f"removido da jogada: {reason}; sem resposta auditável, não entra no pool ativo da sala",
+                detail,
                 round_name="agent-removal",
+                extra={
+                    "validation_issues": issues,
+                    "offending_excerpt": excerpt,
+                    "reentry_eligible": reentry_eligible,
+                    "reentry_decision_reason": decision_reason,
+                },
             )
 
     team_context_report = _apply_agent_team_context_to_monte_carlo_config(config, active_planning_opinions)
@@ -6401,6 +9101,9 @@ async def build_report_bundle(
         f"Configuração de bracket inválida: {error}"
         for error in invalid_configured_knockout_opponents(config)
     ]
+    for team_context_warning in _team_context_warning_messages(monte_carlo_result):
+        if team_context_warning not in warnings:
+            warnings.append(team_context_warning)
 
     if watchdog:
         watchdog.start("estimate_matches", detail="building directional quant/qual match estimates with confidence intervals")
@@ -6464,6 +9167,7 @@ async def build_report_bundle(
         _widen_ci_for_bracket_uncertainty(estimate, match, config=config)
         knockout_estimates.append(estimate)
     _apply_monte_carlo_knockout_scenarios(knockout_estimates, monte_carlo_result)
+    _validate_knockout_results_fresh(config, knockout_estimates, generated_at, watchdog)
     mc_config_for_ci = config.get("monte_carlo") if isinstance(config.get("monte_carlo"), dict) else {}
     for estimate in knockout_estimates:
         widen_ci_for_monte_carlo_path_uncertainty(
@@ -6489,6 +9193,8 @@ async def build_report_bundle(
     }
     opponent_debriefing_task = None
     opponent_debriefing_result: dict[str, Any] = {"enabled": False}
+    opponent_debriefing_progress: dict[str, Any] = {}
+    opponent_cancel_event = threading.Event()
     if _parallel_opponent_debriefing_enabled(config) and active_agent_specs:
         budget_warning = _opponent_debriefing_budget_warning(config)
         if budget_warning:
@@ -6505,6 +9211,8 @@ async def build_report_bundle(
                 allow_agent_fallback=allow_agent_fallback,
                 token_cost_ledger=token_cost_ledger,
                 watchdog=watchdog,
+                progress_sink=opponent_debriefing_progress,
+                cancel_event=opponent_cancel_event,
             )
         )
         if watchdog:
@@ -6535,6 +9243,9 @@ async def build_report_bundle(
                     monte_carlo_result=monte_carlo_result,
                 )
                 _apply_meeting_match_probabilities(knockout_estimates, opponent_opinions)
+                phase_warning = str(opponent_debriefing_result.get("phase_coverage_warning", "") or "")
+                if phase_warning:
+                    warnings.append(phase_warning)
             else:
                 exit_status = str(opponent_debriefing_result.get("exit_status", "unknown") or "unknown")
                 exit_warning = str(opponent_debriefing_result.get("exit_warning", "") or "")
@@ -6590,11 +9301,19 @@ async def build_report_bundle(
                 )
         except asyncio.TimeoutError:
             opponent_timeout = max(0.001, float(config.get("parallel_opponent_debriefing_timeout_seconds", 900)))
+            opponent_cancel_event.set()
             opponent_debriefing_result = {
                 "enabled": True,
                 "failed": True,
                 "timed_out": True,
                 "timeout_seconds": opponent_timeout,
+                "rounds": len(opponent_debriefing_progress.get("meeting_transcript", []) or []),
+                "participants": list(opponent_debriefing_progress.get("participants", []) or []),
+                "meeting_transcript": list(opponent_debriefing_progress.get("meeting_transcript", []) or []),
+                "all_opinions": list(opponent_debriefing_progress.get("all_opinions", []) or []),
+                "pending_round": opponent_debriefing_progress.get("pending_round"),
+                "partial_progress_available": bool(opponent_debriefing_progress),
+                "usable_for_main_room": False,
                 "error": f"sala paralela excedeu timeout total de {opponent_timeout}s",
             }
             meeting_config["_parallel_opponent_briefing"] = _parallel_opponent_briefing_for_prompt(
@@ -6634,6 +9353,7 @@ async def build_report_bundle(
                     float(getattr(candidate_consensus, "title_pct", 0.0) or 0.0),
                     meeting_config,
                 ),
+                group_estimates=group_estimates,
                 knockout_estimates=knockout_estimates,
                 monte_carlo_result=monte_carlo_result,
             )
@@ -6652,6 +9372,7 @@ async def build_report_bundle(
         token_cost_ledger=token_cost_ledger,
         reentry_candidate_specs=reentry_candidate_specs,
         reentry_removed_reasons=removed_reason_by_agent,
+        reentry_removed_issues=removed_issues_by_agent,
         fast_path_report_coherence_check=_main_room_fast_path_report_coherence_check,
     )
     meeting_exit_status = str(getattr(consensus, "exit_status", "consensus") or "consensus")
@@ -6700,6 +9421,14 @@ async def build_report_bundle(
         warnings.append(
             "Nenhum modelo reportou source_urls/source_queries auditáveis; revise APIs/bridges antes de publicar."
         )
+    low_authority_sources = _low_authority_public_source_labels(used_sources)
+    if low_authority_sources:
+        warnings.append(
+            "Fontes sociais/vídeo de baixa autoridade foram mantidas apenas como evidência relatada pelo modelo, "
+            "não como base estatística: "
+            + ", ".join(low_authority_sources[:5])
+            + ("." if len(low_authority_sources) <= 5 else f" (+{len(low_authority_sources) - 5} outras).")
+        )
 
     model_influence_pct = calculate_model_influence([*active_planning_opinions, *meeting_opinions], opinions, consensus)
     _emit_low_influence_cost_alerts(
@@ -6711,6 +9440,30 @@ async def build_report_bundle(
     )
 
     stage_probabilities = _stage_probabilities(consensus.title_pct, config)
+    market_title_challenge = _market_title_challenge(
+        stage_probabilities,
+        meeting_transcript,
+        config=config,
+        source_texts=_market_title_source_texts_from_opinions(active_planning_opinions),
+    )
+    market_title_warning = _market_title_challenge_warning(market_title_challenge)
+    if market_title_warning:
+        warnings.append(market_title_warning)
+        if watchdog:
+            watchdog.event(
+                "market_title_challenge",
+                "warn",
+                detail=market_title_warning,
+                extra=market_title_challenge,
+            )
+    exit_stage_probabilities = (
+        dict(monte_carlo_result.get("stage_probabilities") or {})
+        if isinstance(monte_carlo_result, dict)
+        else {}
+    )
+    if not exit_stage_probabilities:
+        exit_stage_probabilities = dict(stage_probabilities)
+    stage_exit_distribution = _stage_exit_distribution(exit_stage_probabilities)
     stage_confidence_intervals = _stage_confidence_intervals(
         stage_probabilities,
         dispersion_pct=consensus.dispersion_pct,
@@ -6723,6 +9476,7 @@ async def build_report_bundle(
     try:
         _validate_report_coherence(
             stage_probabilities=stage_probabilities,
+            group_estimates=group_estimates,
             knockout_estimates=knockout_estimates,
             monte_carlo_result=monte_carlo_result,
         )
@@ -6742,6 +9496,7 @@ async def build_report_bundle(
     )
 
     bundle = ReportBundle(
+        run_id=run_id,
         generated_at_iso=generated_at.isoformat(),
         group_matches=group_estimates,
         knockout_matches=knockout_estimates,
@@ -6752,7 +9507,7 @@ async def build_report_bundle(
         warnings=warnings,
         custom_hashtag=str(config.get("custom_hashtag", DEFAULT_CUSTOM_HASHTAG)),
         group_name=str(config.get("group_name", "GRUPO A")),
-        group_summary=str(config.get("group_summary", "")),
+        group_summary=_group_summary_from_monte_carlo(config, monte_carlo_result),
         stage_confidence_intervals=stage_confidence_intervals,
         debate_transcript=[],
         meeting_transcript=meeting_transcript,
@@ -6764,12 +9519,15 @@ async def build_report_bundle(
         model_predictions_no_opta=_model_predictions_no_opta(opinions),
         model_self_identification=_model_self_identification([*active_planning_opinions, *meeting_opinions, *opinions]),
         metadata={
+            "run_id": run_id,
             "agent_title_consensus_pct": consensus.title_pct,
             "agent_opening_consensus_pct": meeting_transcript[0]["consensus_title_pct"] if meeting_transcript else consensus.title_pct,
             "agent_dispersion_pct": consensus.dispersion_pct,
             "uncertainty": _report_uncertainty_metadata(config),
             "stage_interval_metadata": config.get("_stage_interval_metadata", {}),
             "monte_carlo": monte_carlo_compact_summary(monte_carlo_result),
+            "team_context_sensitivity": _team_context_sensitivity_summary(monte_carlo_result),
+            "group_state": monte_carlo_result.get("group_state", {}),
             "meeting_rounds": len(meeting_transcript),
             "meeting_exit_status": meeting_exit_status,
             "meeting_exit_warning": meeting_exit_warning,
@@ -6786,6 +9544,8 @@ async def build_report_bundle(
                 config=config,
                 stage_probabilities=stage_probabilities,
             ),
+            "stage_exit_distribution": stage_exit_distribution,
+            "market_title_challenge": market_title_challenge,
             "parallel_opponent_debriefing": {
                 "enabled": bool(opponent_debriefing_result.get("enabled", False)),
                 "failed": bool(opponent_debriefing_result.get("failed", False)),
@@ -6797,13 +9557,27 @@ async def build_report_bundle(
                 "rounds": int(opponent_debriefing_result.get("rounds", 0) or 0),
                 "participants": list(opponent_debriefing_result.get("participants", [])),
                 "meeting_transcript": list(opponent_debriefing_result.get("meeting_transcript", [])),
+                "pending_round": opponent_debriefing_result.get("pending_round"),
+                "partial_progress_available": bool(opponent_debriefing_result.get("partial_progress_available", False)),
                 "error": str(opponent_debriefing_result.get("error", "")),
                 "exit_status": str(opponent_debriefing_result.get("exit_status", "") or ""),
                 "exit_warning": str(opponent_debriefing_result.get("exit_warning", "") or ""),
                 "usable_for_main_room": bool(opponent_debriefing_result.get("usable_for_main_room", False)),
+                "phase_coverage": dict(opponent_debriefing_result.get("phase_coverage", {}) or {}),
+                "phase_coverage_sufficient": bool(
+                    opponent_debriefing_result.get("phase_coverage_sufficient", True)
+                ),
+                "phase_coverage_warning": str(opponent_debriefing_result.get("phase_coverage_warning", "") or ""),
+                "degraded": bool(opponent_debriefing_result.get("degraded", False)),
+                "degraded_shadow_only": bool(opponent_debriefing_result.get("degraded_shadow_only", False)),
+                "degraded_would_be_usable": bool(opponent_debriefing_result.get("degraded_would_be_usable", False)),
+                "degraded_decision": opponent_debriefing_result.get("degraded_decision", {}),
             },
+            "_parallel_opponent_briefing": dict(meeting_config.get("_parallel_opponent_briefing", {})),
             "removed_agent_slots": removed_agent_slots,
             "removed_agent_reasons": removed_reason_by_agent,
+            "removed_agent_validation_issues": removed_issues_by_agent,
+            "source_planning_warnings": source_planning_warnings,
             "agent_source_planning": {
                 opinion.agent: {
                     "source_urls": opinion.source_urls,

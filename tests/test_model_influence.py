@@ -91,8 +91,59 @@ def test_calculate_model_participation_counts_questions_responses_and_total_mess
     assert participation["last_consensus_protagonist"] == "DeepSeek V4 Pro"
     assert participation["last_consensus_question"] == "Ajustamos oitavas?"
     assert participation["last_consensus_participants"] == ["DeepSeek V4 Pro", "Perplexity Pro"]
-    assert participation["by_model"]["Perplexity Pro"] == {"messages": 3, "questions": 1, "responses": 2}
-    assert participation["by_model"]["DeepSeek V4 Pro"] == {"messages": 3, "questions": 1, "responses": 2}
+    assert participation["valid_messages"] == 6
+    assert participation["valid_responses"] == 4
+    assert participation["invalid_responses"] == 0
+    assert participation["by_model"]["Perplexity Pro"] == {
+        "messages": 3,
+        "questions": 1,
+        "responses": 2,
+        "valid_responses": 2,
+        "invalid_responses": 0,
+    }
+    assert participation["by_model"]["DeepSeek V4 Pro"] == {
+        "messages": 3,
+        "questions": 1,
+        "responses": 2,
+        "valid_responses": 2,
+        "invalid_responses": 0,
+    }
+
+
+def test_calculate_model_participation_counts_removed_responses_as_invalid() -> None:
+    transcript = [
+        {
+            "round": 1,
+            "protagonist": "Perplexity Pro",
+            "question": "Qual premissa testar?",
+            "responses": [
+                {"agent": "Perplexity Pro", "answer": "válida", "title_pct": 5.0},
+                {
+                    "agent": "DeepSeek V4 Pro",
+                    "answer": "removida",
+                    "title_pct": 11.0,
+                    "removed_from_main": True,
+                },
+                {
+                    "agent": "Gemini Pro",
+                    "answer": "fallback sem fonte",
+                    "title_pct": 5.0,
+                    "used_fallback": True,
+                    "source_count": 0,
+                },
+            ],
+        }
+    ]
+
+    participation = calculate_model_participation(transcript)
+
+    assert participation["total_messages"] == 4
+    assert participation["valid_messages"] == 2
+    assert participation["valid_responses"] == 1
+    assert participation["invalid_responses"] == 2
+    assert participation["by_model"]["Perplexity Pro"]["valid_responses"] == 1
+    assert participation["by_model"]["DeepSeek V4 Pro"]["invalid_responses"] == 1
+    assert participation["by_model"]["Gemini Pro"]["invalid_responses"] == 1
 
 
 def test_calculate_model_participation_tracks_consensus_question_by_phase() -> None:

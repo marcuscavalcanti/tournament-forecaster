@@ -13,7 +13,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from worldcup_brazil.agents import call_all_agents, load_agent_specs_from_config, run_agent_preflights
+from worldcup_brazil.agents import (
+    call_all_agents,
+    load_agent_specs_from_config,
+    preflight_exclusion_slots,
+    preflight_warning_slots,
+    run_agent_preflights,
+)
 from worldcup_brazil.cli import load_env_file
 from worldcup_brazil.pipeline import (
     _apply_runtime_env_overrides,
@@ -63,7 +69,9 @@ def _doctor_source_planning_prompt(config: dict, generated_at: datetime) -> str:
         "self_identification{name,version}, title_pct, summary, opening_argument, critique, adjustment, "
         "source_urls, source_queries, team_context_signals. Regras: sem cache; o mediador não busca dados; "
         "cada modelo escolhe as próprias fontes; dados da Opta não contam e não devem aparecer em "
-        "source_urls/source_queries; não invente URL, ranking, lesão, odd, score ou método. Use fontes "
+        "source_urls/source_queries; não invente URL, ranking, lesão, odd, score ou método. "
+        "Aqui 'fontes/source' significa fonte de INFORMAÇÃO esportiva verificável; não significa fonte tipográfica, "
+        "camisa, uniforme, design, Instagram/Reels, YouTube visual ou identidade visual. Use fontes "
         "quantitativas e qualitativas como achar melhor, sem percentual fixo entre elas. Cubra Brasil e "
         "adversários/cenários com pelo menos 3 famílias entre odds/mercados, Elo/FIFA/ratings, "
         "Sofascore/performance, lesões/cortes/cartões, arbitragem/VAR, descanso/logística, imprensa "
@@ -86,6 +94,7 @@ async def run_harness(args: argparse.Namespace) -> int:
     original_agent_slots = [spec.slot for spec in agent_specs]
     preflight_results = []
     preflight_failed_slots: list[str] = []
+    preflight_warning_slots_list: list[str] = []
     if not getattr(args, "no_model_preflight", False) and bool(config.get("model_preflight_enabled", True)):
         timeout = int(config.get("doctor_preflight_timeout_seconds", config.get("model_preflight_timeout_seconds", 180)))
         contract_preflight = bool(config.get("model_preflight_contract_enabled", True))
@@ -94,7 +103,8 @@ async def run_harness(args: argparse.Namespace) -> int:
             timeout=timeout,
             contract=contract_preflight,
         )
-        preflight_failed_slots = [result.slot for result in preflight_results if not result.ok]
+        preflight_failed_slots = preflight_exclusion_slots(preflight_results)
+        preflight_warning_slots_list = preflight_warning_slots(preflight_results)
         if (
             preflight_failed_slots
             and not args.strict_agents
@@ -123,6 +133,7 @@ async def run_harness(args: argparse.Namespace) -> int:
         "agent_slots": original_agent_slots,
         "active_agent_slots_after_preflight": [spec.slot for spec in agent_specs],
         "preflight_failed_slots": preflight_failed_slots,
+        "preflight_warning_slots": preflight_warning_slots_list,
         "preflight_results": [
             {
                 "slot": result.slot,

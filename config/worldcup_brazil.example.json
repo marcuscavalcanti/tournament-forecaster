@@ -1,10 +1,12 @@
 {
-  "custom_hashtag": "#copaComAchismo",
+  "custom_hashtag": "#CopaComAchismo",
   "macro_direction": "Brasil na Copa do Mundo de 2026, usando dados quantitativos e qualitativos como direcional inicial. Os modelos devem escolher fontes, comparar premissas e chegar a consenso jogo a jogo sem viés pró-Brasil, sem percentual fixo entre quanti e quali.",
   "group_name": "GRUPO C",
-  "group_summary": "Brasil em 1º: ~66% (faixa 61% modelo conservador-72% mercado). Avança: ~97%. Único rival real: Marrocos (lidera ~29%).",
+  "group_summary": "Resumo do grupo recalculado pelo Monte Carlo condicionado aos placares realizados no ledger.",
   "groups_config_path": "groups.config.json",
   "bracket_config_path": "bracket.config.json",
+  "group_fixtures_config_path": "group_fixtures.config.json",
+  "require_complete_group_fixtures": true,
   "brazil_team_name": "Brasil",
   "brazil_group": "C",
   "brazil_expected_group_position": 1,
@@ -15,6 +17,24 @@
     "confidence_level": 0.99,
     "minimum_declared_coverage": 0.95,
     "model_dispersion_method": "logit_student_t"
+  },
+  "market_title_challenge": {
+    "enabled": true,
+    "absolute_gap_pct": 3.0,
+    "relative_gap_pct": 0.4,
+    "min_pct": 1.0,
+    "max_pct": 25.0,
+    "robust_min_candidates": 5,
+    "robust_low_quantile": 0.2,
+    "robust_high_quantile": 0.8
+  },
+  "market_outright_odds": [],
+  "market_outright_min_overround": 1.02,
+  "market_outright_max_overround": 1.40,
+  "stage_probability_blend": {
+    "enabled": true,
+    "monte_carlo_weight": 0.6,
+    "model_weight": 0.4
   },
   "monte_carlo": {
     "enabled": true,
@@ -38,6 +58,11 @@
     "probability_pct_to_rating_points": 8.0,
     "max_signal_rating_delta": 120.0,
     "max_team_context_rating_delta": 180.0,
+    "team_context_warning_delta": 40.0,
+    "team_context_correlation_default_rho": 0.7,
+    "team_context_evidence_regression_enabled": true,
+    "team_context_evidence_regression_prior": 2.0,
+    "team_context_evidence_material_delta": 1.0,
     "use_stage_probabilities": true,
     "path_gate_min_iterations": 10000,
     "path_gate_min_rating_coverage_pct": 65.0,
@@ -108,6 +133,7 @@
   "protagonist_timeout_seconds": 210,
   "agent_reentry_probe_enabled": true,
   "agent_reentry_probe_timeout_seconds": 180,
+  "agent_reentry_format_timeout_seconds": 60,
   "http_max_attempts": 3,
   "http_backoff_base_seconds": 1.0,
   "http_backoff_max_seconds": 12.0,
@@ -128,6 +154,8 @@
   "meeting_min_participants": 3,
   "meeting_require_peer_acceptance": true,
   "meeting_require_full_path_coverage": true,
+  "meeting_require_challenger_when_exact_mc_consensus": true,
+  "meeting_exact_mc_consensus_rounds_before_challenge": 2,
   "meeting_slot_breaker_threshold": 3,
   "meeting_stability_delta_pp": 1.0,
   "meeting_stability_rounds": 2,
@@ -139,6 +167,14 @@
   "agent_reentry_probe_max_attempts": 2,
   "parallel_opponent_debriefing_enabled": true,
   "parallel_opponent_debriefing_timeout_seconds": 900,
+  "opponent_debriefing_min_rounds": 1,
+  "opponent_debriefing_max_rounds": 3,
+  "opponent_debriefing_stability_rounds": 1,
+  "opponent_debriefing_agent_timeout_seconds": 120,
+  "opponent_debriefing_protagonist_timeout_seconds": 120,
+  "opponent_debriefing_round_budget_seconds": 360,
+  "opponent_debriefing_degraded_consensus_enabled": true,
+  "opponent_debriefing_degraded_shadow_only": true,
   "require_agent_source_plan": true,
   "require_auditable_source_urls_for_meeting_votes": true,
   "minimum_source_ready_agents": 3,
@@ -146,8 +182,10 @@
   "meeting_response_repair_attempts": 1,
   "blind_peer_review_enabled": false,
   "blind_peer_review_shadow_only": true,
+  "blind_peer_review_on_consensus_exit": true,
   "blind_peer_review_timeout_seconds": 90,
   "blind_peer_review_acceptance_threshold": 0.72,
+  "blind_peer_review_max_self_preference_leakage": 0.2,
   "numeric_chairman_enabled": true,
   "llm_council_fast_path_enabled": false,
   "llm_council_fast_path_shadow_only": true,
@@ -187,6 +225,15 @@
       "model": "sonar-pro",
       "env_api_key": "PERPLEXITY_API_KEY",
       "endpoint": "https://api.perplexity.ai/chat/completions",
+      "max_output_tokens_by_role": {
+        "preflight": 1200,
+        "source_planning": 3500,
+        "source_planning_repair": 2000,
+        "format_repair": 1200,
+        "protagonist_question": 1200,
+        "meeting_response": 1500,
+        "agent_reentry_probe": 1800
+      },
       "max_output_tokens": 6000
     },
     {
@@ -265,6 +312,62 @@
       "brazil_pct": 73.0,
       "draw_pct": 19.0,
       "qualitative_shift_pct": 0.0
+    }
+  ],
+  "completed_group_matches": [
+    {
+      "group": "C",
+      "team_a": "Brasil",
+      "team_b": "Marrocos",
+      "score_a": 1,
+      "score_b": 1,
+      "date": "2026-06-13",
+      "source_url": "https://www.theguardian.com/football/2026/jun/14/ayyoub-bouaddi-morocco-brazil-world-cup-football-vinicius-junior"
+    },
+    {
+      "group": "C",
+      "team_a": "Escócia",
+      "team_b": "Haiti",
+      "score_a": 1,
+      "score_b": 0,
+      "date": "2026-06-13",
+      "source_url": "https://www.axios.com/local/boston/2026/06/14/scotland-world-cup-boston-stadium"
+    },
+    {
+      "group": "E",
+      "team_a": "Costa do Marfim",
+      "team_b": "Equador",
+      "score_a": 1,
+      "score_b": 0,
+      "date": "2026-06-14",
+      "source_url": "https://www.theguardian.com/football/live/2026/jun/14/cote-d-ivoire-v-ecuador-world-cup-2026-live"
+    },
+    {
+      "group": "E",
+      "team_a": "Alemanha",
+      "team_b": "Curaçau",
+      "score_a": 7,
+      "score_b": 1,
+      "date": "2026-06-14",
+      "source_url": "https://www.theguardian.com/football/2026/jun/14/germany-curacao-world-cup-match-report"
+    },
+    {
+      "group": "F",
+      "team_a": "Holanda",
+      "team_b": "Japão",
+      "score_a": 2,
+      "score_b": 2,
+      "date": "2026-06-14",
+      "source_url": "https://www.theguardian.com/football/2026/jun/14/netherlands-japan-world-cup-match-report"
+    },
+    {
+      "group": "F",
+      "team_a": "Suécia",
+      "team_b": "Tunísia",
+      "score_a": 5,
+      "score_b": 1,
+      "date": "2026-06-15",
+      "source_url": "https://www.theguardian.com/football/live/2026/jun/15/fifa-world-cup-2026-live-sweden-v-tunisia-updates-swe-vs-tun-group-f-match-score-latest"
     }
   ],
   "knockout_matches": [
@@ -373,6 +476,8 @@
   "allow_informed_agreement_votes": true,
   "repair_format_removals_with_quorum": true,
   "source_planning_format_repair_timeout_seconds": 60,
+  "repair_reentry_eligible_removals_before_meeting": true,
+  "source_planning_floor_repair_timeout_seconds": 120,
   "post_editor_enabled": false,
   "post_editor_agent_slot": "Opus 4.8",
   "post_editor_timeout_seconds": 120

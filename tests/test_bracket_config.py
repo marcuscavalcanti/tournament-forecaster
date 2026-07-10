@@ -22,6 +22,31 @@ def test_example_config_hydrates_official_groups_and_bracket_files() -> None:
     assert config["bracket_config"]["round_of_32"][2]["slots"] == ["1F", "2C"]
     assert config["bracket_config"]["round_of_32"][3]["match_id"] == 76
     assert config["bracket_config"]["round_of_32"][3]["slots"] == ["1C", "2F"]
+    assert config["group_fixtures"][0] == {
+        "group": "A",
+        "date": "2026-06-11",
+        "team_a": "México",
+        "team_b": "África do Sul",
+        "venue": "Estadio Azteca; Mexico City, MEX",
+    }
+    assert len(config["group_fixtures"]) == 72
+
+
+def test_example_group_fixtures_cover_all_group_pairs_once() -> None:
+    config = load_config(Path("config/worldcup_brazil.example.json"))
+
+    for group, teams in config["groups_config"]["groups"].items():
+        expected = {
+            tuple(sorted((left["name"], right["name"])))
+            for index, left in enumerate(teams)
+            for right in teams[index + 1 :]
+        }
+        actual = {
+            tuple(sorted((fixture["team_a"], fixture["team_b"])))
+            for fixture in config["group_fixtures"]
+            if fixture["group"] == group
+        }
+        assert actual == expected
 
 
 def test_brazil_group_winner_round_of_32_is_restricted_to_group_f_runner_up() -> None:

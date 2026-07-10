@@ -76,6 +76,8 @@ def _source_count(opinion: AgentOpinion) -> int:
 
 
 def _consensus_weight(agent: str, opinion: AgentOpinion) -> float:
+    if not bool(getattr(opinion, "numeric_vote_usable", True)):
+        return 0.0
     if _looks_removed_or_unusable(opinion):
         return 0.0
     if opinion.used_fallback and _source_count(opinion) == 0:
@@ -86,8 +88,9 @@ def _consensus_weight(agent: str, opinion: AgentOpinion) -> float:
 @dataclass(frozen=True)
 class AgentOpinion:
     agent: str
-    title_pct: float
+    title_pct: float | None
     summary: str
+    title_pct_source: str = "explicit"
     opening_argument: str = ""
     question: str = ""
     answer: str = ""
@@ -109,6 +112,9 @@ class AgentOpinion:
     used_fallback: bool = False
     removed_from_main: bool = False
     removal_reason: str = ""
+    validation_issues: list[dict] = None
+    numeric_vote_usable: bool = True
+    evidence_usable: bool = False
 
     def __post_init__(self) -> None:
         if self.source_urls is None:
@@ -121,6 +127,8 @@ class AgentOpinion:
             object.__setattr__(self, "scenario_probabilities", {})
         if self.team_context_signals is None:
             object.__setattr__(self, "team_context_signals", [])
+        if self.validation_issues is None:
+            object.__setattr__(self, "validation_issues", [])
 
 
 @dataclass(frozen=True)
@@ -146,7 +154,11 @@ def _build_debate_transcript(
     for agent in agent_slots:
         opinion = by_agent[agent]
         argument = opinion.opening_argument or opinion.summary
-        lines.append(f"Rodada 1 - {agent}: {argument} Projeção de título: {opinion.title_pct:.1f}%.")
+        if opinion.title_pct is None:
+            projection = "sem title_pct próprio"
+        else:
+            projection = f"{float(opinion.title_pct):.1f}%"
+        lines.append(f"Rodada 1 - {agent}: {argument} Projeção de título: {projection}.")
 
     for agent in agent_slots:
         opinion = by_agent[agent]
@@ -191,9 +203,12 @@ def build_consensus(
         weight = _consensus_weight(agent, by_agent[agent])
         if weight <= 0.0:
             continue
-        numerator += by_agent[agent].title_pct * weight
+        title_value = by_agent[agent].title_pct
+        if title_value is None:
+            continue
+        numerator += float(title_value) * weight
         denominator += weight
-        voting_title_values.append(by_agent[agent].title_pct)
+        voting_title_values.append(float(title_value))
 
     if denominator <= 0.0:
         raise DegenerateConsensusError(

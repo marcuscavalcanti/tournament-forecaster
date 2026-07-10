@@ -8,6 +8,7 @@ from worldcup_brazil.pipeline import (
     _market_value_momentum_signal,
     _market_value_player_weighted_delta_eur,
     _signals_for_match,
+    _team_context_warning_messages,
 )
 from worldcup_brazil.source_memory import SourceMemory
 
@@ -151,8 +152,9 @@ def test_build_report_bundle_carries_market_value_momentum_to_metadata_and_post(
     artifacts = asyncio.run(
         build_report_bundle(
             config={
+                "run_id": "test-run-market-value",
                 "baseline_title_pct": 11.0,
-                "custom_hashtag": "#copaComAchismo",
+                "custom_hashtag": "#CopaComAchismo",
                 "minimum_source_ready_agents": 1,
                 "meeting_min_participants": 1,
                 "sources": [
@@ -193,6 +195,8 @@ def test_build_report_bundle_carries_market_value_momentum_to_metadata_and_post(
     )
 
     momentum = artifacts.bundle.metadata["market_value_momentum"]
+    assert artifacts.bundle.run_id == "test-run-market-value"
+    assert artifacts.bundle.metadata["run_id"] == "test-run-market-value"
     assert momentum["available"] is True
     assert momentum["teams"]["Brasil"]["positive_players"] == 1
     assert artifacts.raw_evidence == []
@@ -203,3 +207,93 @@ def test_build_report_bundle_carries_market_value_momentum_to_metadata_and_post(
     assert artifacts.bundle.model_vs_opta == {}
     assert "Destaques de valorização (Transfermarkt):" in artifacts.post
     assert "Opta" not in artifacts.post
+
+
+def test_team_context_warnings_are_rendered_as_operator_visible_messages() -> None:
+    messages = _team_context_warning_messages(
+        {
+            "team_context": {
+                "warnings": [
+                    {
+                        "team": "Alemanha",
+                        "rating_delta": 48.4,
+                        "threshold": 40.0,
+                        "reason": "team_context_delta_above_warning_threshold",
+                    }
+                ]
+            }
+        }
+    )
+
+    assert messages == [
+        "Ajuste contextual fora da faixa de revisão: Alemanha teve +48.4 pontos de rating, "
+        "acima do limiar 40.0; validar se há dupla contagem ou reação excessiva antes de publicar."
+    ]
+
+
+def test_team_context_under_merge_warning_is_operator_visible_without_rating_delta() -> None:
+    messages = _team_context_warning_messages(
+        {
+            "team_context": {
+                "warnings": [
+                    {
+                        "team": "Brasil",
+                        "reason": "team_context_event_reactive_under_merge_guard",
+                        "source_families": ["performance", "ratings"],
+                    }
+                ]
+            }
+        }
+    )
+
+    assert messages == [
+        "Ajuste contextual pode estar subagrupado: Brasil teve famílias reativas com âncora de calendário "
+        "sem grupo multifamília (performance, ratings); validar completed_group_matches e correlation_group "
+        "antes de publicar."
+    ]
+
+
+def test_team_context_missing_calendar_warning_is_operator_visible_without_rating_delta() -> None:
+    messages = _team_context_warning_messages(
+        {
+            "team_context": {
+                "warnings": [
+                    {
+                        "team": "Brasil",
+                        "reason": "team_context_reactive_families_without_calendar_anchor",
+                        "source_families": ["performance", "ratings"],
+                    }
+                ]
+            }
+        }
+    )
+
+    assert messages == [
+        "Ajuste contextual pode estar subagrupado: Brasil teve famílias reativas com âncora de calendário "
+        "sem grupo multifamília (performance, ratings); validar completed_group_matches e correlation_group "
+        "antes de publicar."
+    ]
+
+
+def test_team_context_model_match_hint_without_calendar_anchor_is_operator_visible() -> None:
+    messages = _team_context_warning_messages(
+        {
+            "team_context": {
+                "warnings": [
+                    {
+                        "team": "Inglaterra",
+                        "reason": "team_context_model_match_shock_without_calendar_anchor",
+                        "source_family": "performance",
+                        "model_correlation_group_hint": "s4_england_md1",
+                        "derived_match_event": "match_event:inglaterra:argentina:undated-02-04",
+                    }
+                ]
+            }
+        }
+    )
+
+    assert messages == [
+        "Ajuste contextual sem âncora de calendário: Inglaterra teve sinal performance com hint "
+        "s4_england_md1 e evento derivado match_event:inglaterra:argentina:undated-02-04; "
+        "validar completed_group_matches antes de publicar."
+    ]

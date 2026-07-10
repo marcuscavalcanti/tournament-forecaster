@@ -183,7 +183,7 @@ def test_render_linkedin_post_keeps_required_sections_and_custom_hashtag() -> No
             "Consenso: título em 12.2% com dispersão moderada.",
         ],
         warnings=[],
-        custom_hashtag="#copaComAchismo",
+        custom_hashtag="#CopaComAchismo",
         metadata={
             "uncertainty": {
                 "confidence_level": 0.99,
@@ -254,9 +254,148 @@ def test_render_linkedin_post_keeps_required_sections_and_custom_hashtag() -> No
     assert any("Discordar" in line for line in comment_bullets)
     assert any("Fallback" in line for line in comment_bullets)
     assert any("Quanti e quali" in line for line in comment_bullets)
-    assert "#copaComAchismo" in post
+    assert "#CopaComAchismo" in post
     assert "#BrasilCopa2026Radar" not in post
     assert len(post.splitlines()) <= 2500
+
+
+def test_render_reports_handle_meeting_response_without_own_title_number() -> None:
+    bundle = ReportBundle(
+        generated_at_iso="2026-06-18T04:00:00+00:00",
+        group_matches=[],
+        knockout_matches=[],
+        stage_probabilities={"quartas": 30.0, "semifinal": 15.0, "final": 8.0, "titulo": 5.0},
+        final_rationale="Racional.",
+        sources=[],
+        agent_summaries={},
+        warnings=[],
+        custom_hashtag="#CopaComAchismo",
+        meeting_transcript=[
+            {
+                "round": 1,
+                "protagonist": "GPT 5.5",
+                "question": "Concordam?",
+                "responses": [
+                    {
+                        "agent": "Opus 4.8",
+                        "answer": "Concordo sem número próprio.",
+                        "title_pct": None,
+                        "title_pct_source": "missing",
+                        "support_score": 1.0,
+                        "accepted": True,
+                        "used_fallback": False,
+                        "removed_from_main": False,
+                    }
+                ],
+                "next_protagonist": "GPT 5.5",
+                "consensus_title_pct": 5.0,
+                "consensus_spread_pct": 0.0,
+            }
+        ],
+    )
+
+    post = render_linkedin_post(bundle)
+    audit = render_audit_report(bundle)
+
+    assert "título: sem número próprio" in post
+    assert "Título: sem número próprio" in audit
+
+
+def test_render_reports_mark_fallback_or_removed_title_pct_as_invalid_not_numeric() -> None:
+    bundle = ReportBundle(
+        generated_at_iso="2026-06-23T12:00:00+00:00",
+        group_matches=[],
+        knockout_matches=[],
+        stage_probabilities={"quartas": 30.0, "semifinal": 15.0, "final": 8.0, "titulo": 5.0},
+        final_rationale="Racional.",
+        sources=[],
+        agent_summaries={},
+        warnings=[],
+        custom_hashtag="#CopaComAchismo",
+        model_predictions_no_opta={
+            "Perplexity Pro": {
+                "title_pct": 11.0,
+                "title_pct_source": "fallback",
+                "summary": "Fallback operacional não trouxe número auditável.",
+                "used_fallback": True,
+                "removed_from_main": True,
+            }
+        },
+        meeting_transcript=[
+            {
+                "round": 1,
+                "protagonist": "GPT 5.5",
+                "question": "Concordam?",
+                "responses": [
+                    {
+                        "agent": "Perplexity Pro",
+                        "answer": "Fallback operacional.",
+                        "title_pct": 11.0,
+                        "title_pct_source": "fallback",
+                        "support_score": 0.0,
+                        "accepted": False,
+                        "used_fallback": True,
+                        "removed_from_main": True,
+                    }
+                ],
+                "next_protagonist": "GPT 5.5",
+                "consensus_title_pct": 5.0,
+                "consensus_spread_pct": 0.0,
+            }
+        ],
+    )
+
+    post = render_linkedin_post(bundle)
+    audit = render_audit_report(bundle)
+
+    assert "- Perplexity Pro: título sem número válido [fallback] | fallback." in post
+    assert "Status: fallback | título: sem número válido | aceitação: 0.00" in post
+    assert "Título: sem número válido; aceitação: 0.00" in audit
+    assert "título 11.0%" not in post
+    assert "título: 11.0%" not in post
+    assert "Título: 11.0%" not in audit
+
+
+def test_render_group_block_uses_completed_result_ledger() -> None:
+    bundle = ReportBundle(
+        generated_at_iso="2026-06-15T12:00:00+00:00",
+        group_matches=[
+            MatchEstimate(
+                brazil="Brasil",
+                opponent="Marrocos",
+                phase="Fase de grupos",
+                brazil_pct=59.0,
+                opponent_pct=17.0,
+                draw_pct=24.0,
+                match_date="13/jun",
+                statistical_weight=0.5,
+                qualitative_weight=0.5,
+                rationale="Pré-jogo obsoleto se o placar já existe.",
+                venue="Nova Jersey",
+            )
+        ],
+        knockout_matches=[],
+        stage_probabilities={"quartas": 40.0, "semifinal": 20.0, "final": 10.0, "titulo": 4.0},
+        final_rationale="Racional.",
+        sources=[],
+        agent_summaries={},
+        warnings=[],
+        custom_hashtag="#CopaComAchismo",
+        group_name="GRUPO C",
+        group_summary="Brasil em 1º: ~77.1%.",
+        metadata={
+            "group_state": {
+                "completed_results": [
+                    {"score": "Brasil 1-1 Marrocos"},
+                ]
+            }
+        },
+    )
+
+    post = render_linkedin_post(bundle)
+
+    assert "resultado Brasil 1-1 Marrocos" in post
+    assert "59.0% V | 24.0% E | 17.0% D" not in post
 
 
 def test_render_linkedin_post_includes_monte_carlo_path_summary() -> None:
@@ -269,7 +408,7 @@ def test_render_linkedin_post_includes_monte_carlo_path_summary() -> None:
         sources=[],
         agent_summaries={},
         warnings=[],
-        custom_hashtag="#copaComAchismo",
+        custom_hashtag="#CopaComAchismo",
         metadata={
             "monte_carlo": {
                 "enabled": True,
@@ -302,6 +441,19 @@ def test_render_linkedin_post_includes_monte_carlo_path_summary() -> None:
                         "specialist_press_recent_friendlies",
                     ],
                 },
+                "relevant_group_states": {
+                    "F": {
+                        "phases": ["16 avos"],
+                        "current_table": [
+                            {"team": "Suécia", "points": 3, "goal_difference": 4},
+                            {"team": "Holanda", "points": 1, "goal_difference": 0},
+                        ],
+                        "completed_results": [
+                            {"score": "Holanda 2-2 Japão"},
+                            {"score": "Suécia 5-1 Tunísia"},
+                        ],
+                    }
+                },
                 "stage_probabilities": {
                     "quartas": 71.2,
                     "semifinal": 42.8,
@@ -316,9 +468,28 @@ def test_render_linkedin_post_includes_monte_carlo_path_summary() -> None:
                         ]
                     }
                 },
-            }
+            },
+            "numeric_chairman": {
+                "stage_probability_blend": {
+                    "enabled": True,
+                    "monte_carlo_weight": 0.6,
+                    "model_weight": 0.4,
+                    "label": "monte_carlo_model_blend_60_40",
+                }
+            },
+            "team_context_sensitivity": {
+                "enabled": True,
+                "brazil_rating_delta": -17.4,
+                "requires_recalc": True,
+                "recommended_scenarios": [
+                    "current",
+                    "rho_1_price_once",
+                    "rho_0_full_sum",
+                    "no_brazil_context",
+                ],
+            },
         },
-    )
+        )
 
     post = render_linkedin_post(bundle)
 
@@ -330,12 +501,48 @@ def test_render_linkedin_post_includes_monte_carlo_path_summary() -> None:
     assert "variância total desconta ruído interno" in post
     assert "- Banda epistêmica MC: título 2.0%-22.0%." in post
     assert "- Gate do caminho: prior fraco de caminho; mínimo 10.000 simulações e 65.0% de cobertura." in post
+    assert "Placares do caminho já incorporados: Grupo F (16 avos; líder Suécia): Holanda 2-2 Japão; Suécia 5-1 Tunísia." in post
     assert "Contexto por seleção: 4 sinais em 3 seleções" in post
+    assert "Sensibilidade do contexto: Brasil rating_delta -17.4" in post
+    assert "rho_1_price_once" in post
     assert "bets_prediction_markets" in post
     assert "injuries_cuts_news" in post
-    assert "simula grupos, melhores terceiros e chave oficial" in post
-    assert "- Funil MC: quartas 71.2% | semi 42.8% | final 22.1% | título simulado 10.9%." in post
+    assert "funil final combina 60% Monte Carlo e 40% consenso dos modelos" in post
+    assert "mercado pode desafiar, mas não reprecifica sozinho" in post
+    assert "- Funil MC de base: quartas 71.2% | semi 42.8% | final 22.1% | título simulado 10.9%." in post
     assert "- 16 avos, adversários por simulação: Japão 38.4%, Suécia 31.7%." in post
+
+
+def test_render_linkedin_post_uses_conditioned_monte_carlo_reach_probability_for_stage_summary() -> None:
+    bundle = ReportBundle(
+        generated_at_iso="2026-07-04T12:00:00+00:00",
+        group_matches=[],
+        knockout_matches=[],
+        stage_probabilities={"quartas": 72.1, "semifinal": 42.3, "final": 23.5, "titulo": 11.7},
+        final_rationale="Racional.",
+        sources=[],
+        agent_summaries={},
+        warnings=[],
+        custom_hashtag="#CopaComAchismo",
+        metadata={
+            "monte_carlo": {
+                "stage_probabilities": {
+                    "16_avos": 100.0,
+                    "oitavas": 100.0,
+                    "quartas": 74.1,
+                    "semifinal": 41.7,
+                    "final": 23.2,
+                    "titulo": 11.7,
+                }
+            }
+        },
+    )
+
+    post = render_linkedin_post(bundle)
+
+    assert "Probabilidade de Brasil chegar às quartas: 74.1%" in post
+    assert "Probabilidade de Brasil chegar às quartas: 72.1%" not in post
+    assert "Probabilidade de título: 11.7%" in post
 
 
 def test_render_linkedin_post_stays_publishable_and_audit_keeps_full_meeting_chat_text() -> None:
@@ -367,7 +574,7 @@ def test_render_linkedin_post_stays_publishable_and_audit_keeps_full_meeting_cha
             }
         ],
         warnings=[],
-        custom_hashtag="#copaComAchismo",
+        custom_hashtag="#CopaComAchismo",
     )
 
     post = render_linkedin_post(bundle)
@@ -412,7 +619,7 @@ def test_render_audit_report_formats_chat_turns_with_human_readable_leadership_d
             }
         ],
         warnings=[],
-        custom_hashtag="#copaComAchismo",
+        custom_hashtag="#CopaComAchismo",
     )
 
     audit = render_audit_report(bundle)
@@ -482,7 +689,7 @@ def test_render_linkedin_post_includes_transfermarkt_market_value_momentum_highl
             }
         },
         warnings=[],
-        custom_hashtag="#copaComAchismo",
+        custom_hashtag="#CopaComAchismo",
     )
 
     post = render_linkedin_post(bundle)
@@ -535,7 +742,7 @@ def test_render_meeting_invalidation_without_leaking_invalid_opponent() -> None:
             }
         ],
         warnings=[],
-        custom_hashtag="#copaComAchismo",
+        custom_hashtag="#CopaComAchismo",
     )
 
     post = render_linkedin_post(bundle)
@@ -561,7 +768,7 @@ def test_render_decision_flow_svg_creates_clean_visual_asset() -> None:
         model_influence_pct={"Perplexity Pro": 44.0, "GPT 5.5": 22.0, "Opus 4.8": 18.0},
         metadata={"meeting_rounds": 6},
         warnings=[],
-        custom_hashtag="#copaComAchismo",
+        custom_hashtag="#CopaComAchismo",
     )
 
     svg = render_decision_flow_svg(bundle)
@@ -677,7 +884,7 @@ def test_render_linkedin_post_groups_knockout_scenarios_by_phase() -> None:
         sources=[],
         agent_summaries={},
         warnings=[],
-        custom_hashtag="#copaComAchismo",
+        custom_hashtag="#CopaComAchismo",
     )
 
     post = render_linkedin_post(bundle)
@@ -720,7 +927,7 @@ def test_render_linkedin_post_labels_second_knockout_path_as_less_likely() -> No
         sources=[],
         agent_summaries={},
         warnings=[],
-        custom_hashtag="#copaComAchismo",
+        custom_hashtag="#CopaComAchismo",
     )
 
     post = render_linkedin_post(bundle)
@@ -753,7 +960,7 @@ def test_render_group_line_omits_zero_loss_bucket() -> None:
         sources=[],
         agent_summaries={},
         warnings=[],
-        custom_hashtag="#copaComAchismo",
+        custom_hashtag="#CopaComAchismo",
     )
 
     post = render_linkedin_post(bundle)

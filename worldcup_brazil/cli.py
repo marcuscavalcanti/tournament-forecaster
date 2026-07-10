@@ -4,7 +4,7 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 try:
@@ -14,11 +14,19 @@ except ImportError:  # pragma: no cover - plataforma sem fcntl
 
 from worldcup_brazil.agents import (
     load_agent_specs_from_config,
+    preflight_exclusion_slots,
+    preflight_warning_slots,
     render_agent_preflight_stdout,
     run_agent_preflights_sync,
 )
 from worldcup_brazil.bracket import brazil_bracket_path, invalid_configured_knockout_opponents
 from worldcup_brazil.calibration import append_prediction_log, prediction_records_from_bundle
+from worldcup_brazil.infographic import (
+    collect_recent_infographic_bundles,
+    render_html_to_png_with_chrome,
+    render_simulation_review_infographic_html,
+    render_simulation_review_infographic_svg,
+)
 from worldcup_brazil.pipeline import (
     MeetingConsensusError,
     ReportCoherenceError,
@@ -27,7 +35,10 @@ from worldcup_brazil.pipeline import (
     load_config,
 )
 from worldcup_brazil.post_template import (
+    _parse_template_match_date,
     apply_editor_append,
+    bundle_from_json,
+    infer_series_post_index,
     render_template_post,
     validate_template_post,
 )
@@ -81,6 +92,54 @@ def _run_post_editor_append(config: dict, base_text: str, *, watchdog: RunWatchd
     return final_text
 
 
+def _comparison_matchday_stamp(current_bundle: object | None) -> str | None:
+    if current_bundle is None:
+        return None
+    raw = str(getattr(current_bundle, "generated_at_iso", "") or "").strip()
+    try:
+        run_date = datetime.fromisoformat(raw).date()
+    except ValueError:
+        return None
+    year = run_date.year
+    dated: list[date] = []
+    for match in list(getattr(current_bundle, "group_matches", []) or []) + list(
+        getattr(current_bundle, "knockout_matches", []) or []
+    ):
+        parsed = _parse_template_match_date(getattr(match, "match_date", ""), year=year)
+        if parsed is not None and parsed < run_date:
+            dated.append(parsed)
+    if not dated:
+        return None
+    return max(dated).isoformat()
+
+
+def _previous_template_bundle(
+    output_dir: Path,
+    current_json_path: Path,
+    *,
+    current_bundle: object | None = None,
+) -> object | None:
+    matchday_stamp = _comparison_matchday_stamp(current_bundle)
+    if matchday_stamp:
+        preferred = output_dir / f"linkedin_brazil_{matchday_stamp}.json"
+        if preferred.exists() and preferred.name != current_json_path.name:
+            try:
+                return bundle_from_json(preferred)
+            except Exception:  # noqa: BLE001 - comparação histórica não pode derrubar o post
+                pass
+    candidates = [
+        path
+        for path in sorted(output_dir.glob("linkedin_brazil_*.json"))
+        if path.name != current_json_path.name
+    ]
+    if not candidates:
+        return None
+    try:
+        return bundle_from_json(candidates[-1])
+    except Exception:  # noqa: BLE001 - comparação histórica não pode derrubar o post
+        return None
+
+
 def _acquire_run_lock(path: Path):
     """Adquire lock exclusivo não-bloqueante em ``path`` e devolve o fd aberto.
 
@@ -109,6 +168,17 @@ def _parse_datetime(value: str | None) -> datetime:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed
+
+
+def _bundle_output_stamp(bundle, fallback: datetime) -> str:
+    raw = str(getattr(bundle, "generated_at_iso", "") or "").strip()
+    try:
+        parsed = datetime.fromisoformat(raw)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+    except ValueError:
+        parsed = fallback
+    return parsed.astimezone(timezone.utc).strftime("%Y-%m-%d")
 
 
 def load_env_file(path: Path) -> None:
@@ -200,9 +270,23 @@ def _config_watchdog_extra(
                 "source_planning_format_repair_timeout_seconds",
                 min(90, int(config.get("agent_timeout_seconds", 90))),
             ),
+            "repair_reentry_eligible_removals_before_meeting": config.get(
+                "repair_reentry_eligible_removals_before_meeting",
+                config.get("repair_reentry_eligible_removals_at_quorum_floor", True),
+            ),
+            "source_planning_floor_repair_timeout_seconds": config.get(
+                "source_planning_floor_repair_timeout_seconds",
+                config.get("agent_timeout_seconds", 90),
+            ),
             "blind_peer_review_enabled": config.get("blind_peer_review_enabled", False),
             "blind_peer_review_shadow_only": config.get("blind_peer_review_shadow_only", True),
+            "blind_peer_review_on_consensus_exit": config.get("blind_peer_review_on_consensus_exit", True),
             "blind_peer_review_timeout_seconds": config.get("blind_peer_review_timeout_seconds", 90),
+            "blind_peer_review_acceptance_threshold": config.get("blind_peer_review_acceptance_threshold", 0.72),
+            "blind_peer_review_max_self_preference_leakage": config.get(
+                "blind_peer_review_max_self_preference_leakage",
+                0.20,
+            ),
             "numeric_chairman_enabled": config.get("numeric_chairman_enabled", True),
             "llm_council_fast_path_enabled": config.get("llm_council_fast_path_enabled", False),
             "llm_council_fast_path_shadow_only": config.get("llm_council_fast_path_shadow_only", True),
@@ -288,6 +372,7 @@ def _config_watchdog_detail(
         f"preflight_timeout_s={cfg['model_preflight_timeout_seconds']}; "
         f"quorum_min={cfg['minimum_source_ready_agents']}; "
         f"repair_attempts={cfg['source_planning_repair_attempts']}; "
+        f"pre_meeting_repair={cfg['repair_reentry_eligible_removals_before_meeting']}; "
         f"meeting_min_participants={cfg['meeting_min_participants']}; "
         f"meeting_quorum_rule={cfg['meeting_quorum_rule']}; "
         f"numeric_chairman={cfg['numeric_chairman_enabled']}; "
@@ -331,6 +416,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", type=Path, default=Path("outputs"))
     parser.add_argument("--watchdog-log", type=Path, default=Path("data/watchdog.jsonl"))
     parser.add_argument("--calibration-log", type=Path, default=Path("data/calibration_predictions.json"))
+    parser.add_argument(
+        "--lock-file",
+        type=Path,
+        default=Path("data/.run.lock"),
+        help="Exclusive run lock path used to prevent concurrent daily runs.",
+    )
     parser.add_argument("--env-file", type=Path, default=Path(".env"), help="Optional dotenv file loaded before agent setup.")
     parser.add_argument(
         "--shell-env-file",
@@ -349,9 +440,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    run_lock_fd = _acquire_run_lock(Path("data/.run.lock"))
+    run_lock_fd = _acquire_run_lock(args.lock_file)
     if run_lock_fd is None and fcntl is not None:
-        print("skip: outro run ja esta em andamento (lock data/.run.lock)", file=sys.stderr)
+        print(f"skip: outro run ja esta em andamento (lock {args.lock_file})", file=sys.stderr)
         return 0
     try:
         return _run(args)
@@ -440,7 +531,10 @@ def _run(args: argparse.Namespace) -> int:
                         ]
                     },
                 )
-            failed_preflight_slots = [result.slot for result in preflight_results if not result.ok]
+            failed_preflight_slots = preflight_exclusion_slots(preflight_results)
+            warning_preflight_slots = preflight_warning_slots(preflight_results)
+            if warning_preflight_slots:
+                config["_preflight_warning_slots"] = warning_preflight_slots
             if (
                 failed_preflight_slots
                 and not args.strict_agents
@@ -459,11 +553,15 @@ def _run(args: argparse.Namespace) -> int:
         if watchdog:
             watchdog.start("write_outputs", detail=str(args.output_dir))
         args.output_dir.mkdir(parents=True, exist_ok=True)
-        stamp = now.astimezone(timezone.utc).strftime("%Y-%m-%d")
+        stamp = _bundle_output_stamp(artifacts.bundle, now)
         post_path = args.output_dir / f"linkedin_brazil_{stamp}.md"
         json_path = args.output_dir / f"linkedin_brazil_{stamp}.json"
         audit_path = args.output_dir / f"audit_brazil_{stamp}.md"
         graph_path = args.output_dir / f"decision_flow_brazil_{stamp}.svg"
+        infographic_path = args.output_dir / f"infographic_brazil_{stamp}.png"
+        infographic_html_path = args.output_dir / f"infographic_brazil_{stamp}.html"
+        infographic_svg_path = args.output_dir / f"infographic_brazil_{stamp}.svg"
+        infographic_png_path = args.output_dir / f"infographic_brazil_{stamp}.png"
         # Resiliência: o JSON é o ÚNICO registro em disco de meeting_transcript,
         # model_influence_pct e model_token_costs (~US$6,43 de debate). É escrito
         # PRIMEIRO; se qualquer render (post/audit/svg/template) estourar depois, o
@@ -516,19 +614,27 @@ def _run(args: argparse.Namespace) -> int:
         post_path.write_text(artifacts.post, encoding="utf-8")
         audit_path.write_text(render_audit_report(artifacts.bundle), encoding="utf-8")
         graph_path.write_text(render_decision_flow_svg(artifacts.bundle), encoding="utf-8")
+        infographic_bundles = collect_recent_infographic_bundles(args.output_dir, json_path, limit=5)
+        infographic_svg_path.write_text(
+            render_simulation_review_infographic_svg(infographic_bundles),
+            encoding="utf-8",
+        )
+        infographic_html_path.write_text(
+            render_simulation_review_infographic_html(infographic_bundles),
+            encoding="utf-8",
+        )
+        infographic_png_written = render_html_to_png_with_chrome(infographic_html_path, infographic_png_path)
         template_post_path = args.output_dir / f"linkedin_post_brazil_{stamp}.md"
         try:
-            post_index = (
-                len(
-                    [
-                        p
-                        for p in args.output_dir.glob("linkedin_post_brazil_*.md")
-                        if p.name != template_post_path.name
-                    ]
-                )
-                + 1
+            template_post = render_template_post(
+                artifacts.bundle,
+                post_index=infer_series_post_index(artifacts.bundle),
+                previous_bundle=_previous_template_bundle(
+                    args.output_dir,
+                    json_path,
+                    current_bundle=artifacts.bundle,
+                ),
             )
-            template_post = render_template_post(artifacts.bundle, post_index=post_index)
             if bool(config.get("post_editor_enabled", False)):
                 template_post = _run_post_editor_append(config, template_post, watchdog=watchdog)
             validate_template_post(template_post, artifacts.bundle)
@@ -560,6 +666,8 @@ def _run(args: argparse.Namespace) -> int:
                 "write_outputs",
                 detail=(
                     f"wrote {post_path.name}, {json_path.name}, {audit_path.name}, {graph_path.name}; "
+                    f"{infographic_html_path.name}"
+                    f"{', ' + infographic_png_path.name if infographic_png_written else ''}; "
                     f"calibration_log={args.calibration_log}"
                 ),
                 extra={"calibration_records": len(calibration_records), "calibration_log": str(args.calibration_log)},
@@ -571,6 +679,11 @@ def _run(args: argparse.Namespace) -> int:
         print(f"json: {json_path}")
         print(f"audit: {audit_path}")
         print(f"graph: {graph_path}")
+        print(f"infographic: {infographic_path if infographic_png_written else infographic_html_path}")
+        print(f"infographic_html: {infographic_html_path}")
+        print(f"infographic_svg: {infographic_svg_path}")
+        if infographic_png_written:
+            print(f"infographic_png: {infographic_png_path}")
     except (SourcePlanningQuorumError, ReportCoherenceError, MeetingConsensusError) as exc:
         if watchdog:
             watchdog.fail("run", detail=str(exc))

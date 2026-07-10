@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime, timezone
+from pathlib import Path
 
 from worldcup_brazil.agents import AgentSpec
 from worldcup_brazil.consensus import AgentOpinion, build_consensus
@@ -15,6 +16,8 @@ from worldcup_brazil.pipeline import (
     _repair_invalid_meeting_responses,
     _run_model_meeting,
     _sanitize_main_meeting_opinions,
+    _should_force_exact_mc_challenger,
+    load_config,
 )
 
 
@@ -174,6 +177,82 @@ def test_meeting_turn_records_accepted_leadership_bid_as_next_question_candidate
     assert turn["responses"][0]["disagreed"] is False
     assert turn["responses"][0]["leadership_bid"] is True
     assert turn["responses"][0]["proposed_next_question"] == "Cartões dos volantes mudam o Brasil nas quartas?"
+
+
+def test_meeting_turn_inherits_consensus_title_for_accepted_missing_title_response() -> None:
+    turn = build_meeting_turn(
+        round_index=3,
+        protagonist="DeepSeek V4 Pro",
+        question="Mantemos o top-2 do Monte Carlo por fase?",
+        opinions=[
+            AgentOpinion(
+                agent="GPT 5.5",
+                title_pct=5.7,
+                summary="Concordo com DeepSeek.",
+                answer="Concordo com DeepSeek V4 Pro e mantenho o baseline.",
+                agrees_with_protagonist=True,
+            ),
+            AgentOpinion(
+                agent="Perplexity Pro",
+                title_pct=None,
+                title_pct_source="missing",
+                summary="Concordo integralmente e não proponho correção externa.",
+                answer="Concordo integralmente com o racional do protagonista e não proponho correção externa.",
+                agrees_with_protagonist=True,
+            ),
+            AgentOpinion(
+                agent="Gemini Pro",
+                title_pct=5.7,
+                summary="Concordo integralmente.",
+                answer="Concordo integralmente com o racional do protagonista.",
+                agrees_with_protagonist=True,
+            ),
+        ],
+        consensus_title_pct=5.7,
+    )
+
+    assert turn["consensus_spread_pct"] == 0.0
+    assert turn["responses"][1]["title_pct"] == 5.7
+    assert turn["responses"][1]["title_pct_source"] == "inherited_from_current_consensus"
+
+
+def test_meeting_turn_spread_ignores_removed_fallback_titles() -> None:
+    turn = build_meeting_turn(
+        round_index=3,
+        protagonist="DeepSeek V4 Pro",
+        question="Mantemos o top-2 do Monte Carlo por fase?",
+        opinions=[
+            AgentOpinion(
+                agent="Opus 4.8",
+                title_pct=11.0,
+                title_pct_source="fallback",
+                summary="fallback",
+                answer="Resposta removida do Modelo Principal por falha operacional.",
+                used_fallback=True,
+                removed_from_main=True,
+                removal_reason="fallback operacional sem fonte auditável",
+            ),
+            AgentOpinion(
+                agent="GPT 5.5",
+                title_pct=3.7,
+                title_pct_source="explicit",
+                summary="Concordo com DeepSeek.",
+                answer="Concordo com DeepSeek V4 Pro e mantenho 3.7%.",
+                agrees_with_protagonist=True,
+            ),
+            AgentOpinion(
+                agent="Perplexity Pro",
+                title_pct=3.8,
+                title_pct_source="explicit",
+                summary="Concordo integralmente.",
+                answer="Concordo integralmente com o racional do protagonista.",
+                agrees_with_protagonist=True,
+            ),
+        ],
+        consensus_title_pct=3.7,
+    )
+
+    assert turn["consensus_spread_pct"] == 0.1
 
 
 def test_meeting_turn_treats_disagreement_text_as_disagreement_even_if_boolean_is_wrong() -> None:
@@ -409,6 +488,183 @@ def test_targeted_meeting_repair_replaces_bad_response_without_reasking_all_mode
     assert repaired[0].used_fallback is False
     assert repaired[0].title_pct == 10.7
     assert repair_opinions[0].agent == "GPT 5.5"
+
+
+def test_targeted_meeting_repair_admits_unresolved_policy_suspected_without_structural_issue(monkeypatch) -> None:
+    raw_bad = AgentOpinion(
+        agent="DeepSeek V4 Pro",
+        title_pct=6.0,
+        summary="Uso Opta como comparativo.",
+        answer="Opta aparece no texto inicial.",
+        agrees_with_protagonist=True,
+        source_queries=["Brazil title odds non Opta"],
+    )
+    config = {
+        "meeting_response_repair_attempts": 1,
+        "group_matches": [{"opponent": "Marrocos"}, {"opponent": "Haiti"}, {"opponent": "Escócia"}],
+        "knockout_matches": [{"phase": "16 avos", "opponent": "Adversário mais provável a definir"}],
+        "require_auditable_source_urls_for_meeting_votes": True,
+    }
+    sanitized = _sanitize_main_meeting_opinions([raw_bad], baseline_title_pct=6.0, config=config)
+
+    async def fake_call_agent(spec, prompt, **kwargs):
+        return AgentOpinion(
+            agent=spec.slot,
+            title_pct=6.1,
+            summary="Eu menciono Opta apenas para dizer que está excluída; uso odds e imprensa.",
+            answer="Concordo com a tese usando mercado de título, lesões e bracket configurado.",
+            agrees_with_protagonist=True,
+            source_urls=["https://example.com/title-odds"],
+            source_queries=["Brazil World Cup title odds without Opta"],
+        )
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_agent", fake_call_agent)
+
+    repaired, _repair_opinions = asyncio.run(
+        _repair_invalid_meeting_responses(
+            config=config,
+            round_index=2,
+            protagonist="GPT 5.5",
+            question="Há consenso?",
+            previous_turn=None,
+            generated_at=datetime(2026, 6, 17, 12, tzinfo=timezone.utc),
+            responder_specs=[
+                AgentSpec(
+                    slot="DeepSeek V4 Pro",
+                    provider="openai-compatible",
+                    model="deepseek-v4-pro",
+                    env_api_key=None,
+                    endpoint="https://api.deepseek.com",
+                )
+            ],
+            raw_opinions=[raw_bad],
+            sanitized_opinions=sanitized,
+            baseline_title_pct=6.0,
+            allow_agent_fallback=True,
+            timeout=30,
+        )
+    )
+
+    assert repaired[0].used_fallback is False
+    assert repaired[0].removed_from_main is False
+    assert repaired[0].title_pct == 6.1
+    assert repaired[0].validation_issues[0]["recoverability"] == "policy_suspected"
+
+
+def test_targeted_meeting_repair_keeps_real_policy_reuse_removed(monkeypatch) -> None:
+    raw_bad = AgentOpinion(
+        agent="Opus 4.8",
+        title_pct=6.0,
+        summary="Uso Opta como comparativo.",
+        answer="Opta aparece no texto inicial.",
+        agrees_with_protagonist=True,
+        source_queries=["Brazil title odds"],
+    )
+    config = {
+        "meeting_response_repair_attempts": 1,
+        "group_matches": [{"opponent": "Marrocos"}, {"opponent": "Haiti"}, {"opponent": "Escócia"}],
+        "knockout_matches": [{"phase": "16 avos", "opponent": "Adversário mais provável a definir"}],
+        "require_auditable_source_urls_for_meeting_votes": True,
+    }
+    sanitized = _sanitize_main_meeting_opinions([raw_bad], baseline_title_pct=6.0, config=config)
+
+    async def fake_call_agent(spec, prompt, **kwargs):
+        return AgentOpinion(
+            agent=spec.slot,
+            title_pct=6.4,
+            summary="Uso ranking da Opta como âncora de mercado.",
+            answer="A Opta move o título para 6.4%.",
+            agrees_with_protagonist=True,
+            source_urls=["https://example.com/title-odds"],
+        )
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_agent", fake_call_agent)
+
+    repaired, _repair_opinions = asyncio.run(
+        _repair_invalid_meeting_responses(
+            config=config,
+            round_index=2,
+            protagonist="GPT 5.5",
+            question="Há consenso?",
+            previous_turn=None,
+            generated_at=datetime(2026, 6, 17, 12, tzinfo=timezone.utc),
+            responder_specs=[
+                AgentSpec(
+                    slot="Opus 4.8",
+                    provider="anthropic",
+                    model="claude-opus-4-8",
+                    env_api_key=None,
+                    endpoint=None,
+                )
+            ],
+            raw_opinions=[raw_bad],
+            sanitized_opinions=sanitized,
+            baseline_title_pct=6.0,
+            allow_agent_fallback=True,
+            timeout=30,
+        )
+    )
+
+    assert repaired[0].used_fallback is True
+    assert repaired[0].removed_from_main is True
+    assert repaired[0].validation_issues[0]["recoverability"] == "policy"
+
+
+def test_post_repair_policy_suspected_does_not_mask_impossible_bracket() -> None:
+    config = load_config(Path("config/worldcup_brazil.example.json"))
+    opinion = AgentOpinion(
+        agent="Perplexity Pro",
+        title_pct=5.9,
+        summary="Eu menciono Opta apenas para dizer que está excluída; Oitavas: Japão é o adversário mais provável.",
+        answer="Japão nas Oitavas exigiria um cruzamento que não existe em nenhum caminho do Brasil.",
+        agrees_with_protagonist=False,
+        source_urls=["https://example.com/bracket"],
+    )
+
+    sanitized = _sanitize_main_meeting_opinions(
+        [opinion],
+        baseline_title_pct=5.0,
+        config={**config, "require_auditable_source_urls_for_meeting_votes": True},
+        semantic_policy_stage="post_repair",
+        admit_policy_suspected=True,
+    )
+
+    assert sanitized[0].used_fallback is True
+    assert sanitized[0].removed_from_main is True
+    assert any(
+        issue["matched_rule"] == "impossible_bracket_opponent"
+        for issue in sanitized[0].validation_issues
+    )
+
+
+def test_removed_meeting_response_can_keep_sources_but_not_numeric_vote() -> None:
+    config = load_config(Path("config/worldcup_brazil.example.json"))
+    opinion = AgentOpinion(
+        agent="DeepSeek V4 Pro",
+        title_pct=5.1,
+        summary="Citou adversário impossível nas oitavas.",
+        answer="Oitavas: Japão seria o adversário mais provável, com mercado favorável ao Brasil.",
+        source_urls=["https://example.com/odds"],
+    )
+
+    sanitized = _sanitize_main_meeting_opinions(
+        [opinion],
+        baseline_title_pct=5.0,
+        config={**config, "require_auditable_source_urls_for_meeting_votes": True},
+    )
+
+    assert sanitized[0].removed_from_main is True
+    assert sanitized[0].numeric_vote_usable is False
+    assert sanitized[0].evidence_usable is True
+    consensus = build_consensus(
+        [
+            sanitized[0],
+            AgentOpinion(agent="Opus 4.8", title_pct=5.0, summary="válido"),
+            AgentOpinion(agent="GPT 5.5", title_pct=5.0, summary="válido"),
+        ],
+        agent_slots=["DeepSeek V4 Pro", "Opus 4.8", "GPT 5.5"],
+    )
+    assert consensus.title_pct == 5.0
 
 
 def test_meeting_coverage_requires_group_knockout_and_title_before_consensus_close() -> None:
@@ -701,6 +957,106 @@ def test_model_meeting_does_not_close_consensus_before_full_path_coverage(monkey
         "Final",
     ]
     assert transcript[1]["coverage"]["complete"] is True
+
+
+def test_model_meeting_progress_sink_records_pending_round_before_question_finishes(monkeypatch) -> None:
+    config = {
+        "group_matches": [{"opponent": "Marrocos"}],
+        "knockout_matches": [{"phase": "16 avos", "opponent": "Adversário mais provável a definir"}],
+        "meeting_max_rounds": 1,
+        "meeting_min_rounds": 1,
+        "meeting_min_participants": 2,
+        "meeting_consensus_threshold_pct": 10.0,
+        "meeting_require_peer_acceptance": False,
+        "meeting_require_full_path_coverage": False,
+        "require_auditable_source_urls_for_meeting_votes": False,
+    }
+    agent_specs = [
+        AgentSpec(
+            slot="GPT 5.5",
+            provider="openai",
+            model="gpt-5.5",
+            env_api_key="OPENAI_API_KEY",
+            endpoint="https://api.openai.com/v1/responses",
+        ),
+        AgentSpec(
+            slot="Perplexity Pro",
+            provider="openai-compatible",
+            model="sonar-pro",
+            env_api_key="PERPLEXITY_API_KEY",
+            endpoint="https://api.perplexity.ai/chat/completions",
+        ),
+    ]
+    planning_opinions = [
+        AgentOpinion(
+            agent="GPT 5.5",
+            title_pct=8.2,
+            summary="Planejamento completo com fonte.",
+            source_urls=["https://example.com/gpt"],
+        ),
+        AgentOpinion(
+            agent="Perplexity Pro",
+            title_pct=8.1,
+            summary="Planejamento completo com fonte.",
+            source_urls=["https://example.com/perplexity"],
+        ),
+    ]
+
+    async def scenario() -> dict:
+        progress_sink: dict = {}
+        call_started = asyncio.Event()
+        release_call = asyncio.Event()
+
+        async def fake_call_agent(*args, **kwargs):
+            call_started.set()
+            await release_call.wait()
+            return AgentOpinion(
+                agent="GPT 5.5",
+                title_pct=8.0,
+                summary="Pergunta pronta.",
+                question="Com odds e Elo, concordam com Marrocos e 16 avos?",
+                answer="Pergunta pronta.",
+                source_urls=["https://example.com/gpt"],
+                agrees_with_protagonist=True,
+            )
+
+        async def fake_call_all_agents(*args, **kwargs):
+            raise AssertionError("a rodada nao deveria chegar às respostas neste teste")
+
+        monkeypatch.setattr("worldcup_brazil.pipeline.call_agent", fake_call_agent)
+        monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+
+        task = asyncio.create_task(
+            _run_model_meeting(
+                config=config,
+                planning_opinions=planning_opinions,
+                generated_at=datetime(2026, 6, 14, tzinfo=timezone.utc),
+                agent_specs=agent_specs,
+                baseline_title_pct=8.0,
+                allow_agent_fallback=True,
+                watchdog=None,
+                progress_sink=progress_sink,
+            )
+        )
+        await asyncio.wait_for(call_started.wait(), timeout=1.0)
+        snapshot = dict(progress_sink)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        return snapshot
+
+    expected_protagonist = _initial_protagonist(planning_opinions)
+    progress = asyncio.run(scenario())
+
+    assert progress["participants"] == ["GPT 5.5", "Perplexity Pro"]
+    assert progress["pending_round"] == {
+        "round": 1,
+        "protagonist": expected_protagonist,
+        "question": "pergunta do protagonista ainda em geração",
+        "status": "question_in_progress",
+    }
 
 
 def test_model_meeting_reenters_removed_agent_after_async_source_probe(monkeypatch) -> None:
@@ -1168,3 +1524,112 @@ def test_consensus_reached_requires_more_than_a_short_three_round_exchange() -> 
 
     assert consensus_reached(consensus, round_index=3, minimum_rounds=6, threshold_pct=2.0, last_turn=accepted_turn) is False
     assert consensus_reached(consensus, round_index=6, minimum_rounds=6, threshold_pct=2.0, last_turn=accepted_turn) is True
+
+
+def test_should_force_exact_monte_carlo_challenger_after_repeated_echo_consensus() -> None:
+    transcript = [
+        {"round": 1, "consensus_title_pct": 5.1, "consensus_spread_pct": 0.0},
+        {"round": 2, "consensus_title_pct": 5.1, "consensus_spread_pct": 0.0},
+    ]
+    config = {
+        "_monte_carlo_result": {"stage_probabilities": {"titulo": 5.1}},
+        "meeting_require_challenger_when_exact_mc_consensus": True,
+        "meeting_exact_mc_consensus_rounds_before_challenge": 2,
+    }
+
+    assert _should_force_exact_mc_challenger(transcript, config) is True
+
+
+def test_should_not_force_exact_monte_carlo_challenger_when_models_move_title() -> None:
+    transcript = [
+        {"round": 1, "consensus_title_pct": 5.1, "consensus_spread_pct": 0.0},
+        {"round": 2, "consensus_title_pct": 6.0, "consensus_spread_pct": 0.0},
+    ]
+    config = {
+        "_monte_carlo_result": {"stage_probabilities": {"titulo": 5.1}},
+        "meeting_require_challenger_when_exact_mc_consensus": True,
+        "meeting_exact_mc_consensus_rounds_before_challenge": 2,
+    }
+
+    assert _should_force_exact_mc_challenger(transcript, config) is False
+
+
+def test_model_meeting_forces_challenger_before_exiting_on_exact_monte_carlo_echo(monkeypatch) -> None:
+    config = {
+        "group_matches": [{"opponent": "Marrocos"}],
+        "knockout_matches": [{"phase": "16 avos", "opponent": "Japão"}],
+        "meeting_max_rounds": 3,
+        "meeting_min_rounds": 1,
+        "meeting_min_participants": 2,
+        "meeting_consensus_threshold_pct": 10.0,
+        "meeting_require_peer_acceptance": False,
+        "meeting_require_full_path_coverage": False,
+        "require_auditable_source_urls_for_meeting_votes": False,
+        "meeting_require_challenger_when_exact_mc_consensus": True,
+        "meeting_exact_mc_consensus_rounds_before_challenge": 1,
+        "_monte_carlo_result": {"stage_probabilities": {"titulo": 5.1}},
+    }
+    agent_specs = [
+        AgentSpec(
+            slot="GPT 5.5",
+            provider="openai",
+            model="gpt-5.5",
+            env_api_key="OPENAI_API_KEY",
+            endpoint="https://api.openai.com/v1/responses",
+        ),
+        AgentSpec(
+            slot="Perplexity Pro",
+            provider="openai-compatible",
+            model="sonar-pro",
+            env_api_key="PERPLEXITY_API_KEY",
+            endpoint="https://api.perplexity.ai/chat/completions",
+        ),
+    ]
+    planning_opinions = [
+        AgentOpinion(agent="GPT 5.5", title_pct=5.1, summary="Planejou fontes."),
+        AgentOpinion(agent="Perplexity Pro", title_pct=5.1, summary="Planejou fontes."),
+    ]
+
+    async def fake_call_agent(*args, **kwargs):
+        return AgentOpinion(
+            agent="GPT 5.5",
+            title_pct=5.1,
+            summary="Pergunta ecoa o MC.",
+            question="Concordam em manter exatamente 5,1% do Monte Carlo?",
+            answer="O Monte Carlo já resume o caminho; manteria 5,1%.",
+            source_queries=["Brazil title odds Monte Carlo"],
+            agrees_with_protagonist=True,
+        )
+
+    async def fake_call_all_agents(*args, **kwargs):
+        return [
+            AgentOpinion(
+                agent="Perplexity Pro",
+                title_pct=5.1,
+                summary="Aceito exatamente o MC.",
+                answer="Concordo integralmente com 5,1%; sem correção.",
+                source_queries=["Brazil title odds"],
+                agrees_with_protagonist=True,
+            )
+        ]
+
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_agent", fake_call_agent)
+    monkeypatch.setattr("worldcup_brazil.pipeline.call_all_agents", fake_call_all_agents)
+
+    _consensus, _opinions, transcript, _all_opinions = asyncio.run(
+        _run_model_meeting(
+            config=config,
+            planning_opinions=planning_opinions,
+            generated_at=datetime(2026, 6, 19, tzinfo=timezone.utc),
+            agent_specs=agent_specs,
+            baseline_title_pct=5.1,
+            allow_agent_fallback=True,
+            watchdog=None,
+        )
+    )
+
+    assert len(transcript) == 2
+    assert transcript[0]["exact_mc_challenge"]["required"] is True
+    assert transcript[0]["exact_mc_challenge"]["satisfied"] is False
+    assert transcript[1]["forced_exact_mc_challenge_question"] is True
+    assert "papel de challenger" in transcript[1]["question"]

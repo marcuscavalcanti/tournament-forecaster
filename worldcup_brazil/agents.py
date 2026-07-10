@@ -368,7 +368,10 @@ def _call_text_with_hard_timeout(
     prompt: str,
     *,
     timeout: int,
+    cancel_event: threading.Event | None = None,
 ) -> str:
+    if cancel_event is not None and cancel_event.is_set():
+        raise TimeoutError(f"{spec.slot} {mode} cancelled before dispatch")
     result_queue: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
 
     def target() -> None:
@@ -389,12 +392,20 @@ def _call_text_with_hard_timeout(
     )
     thread.start()
     hard_deadline = max(1.0, float(timeout) + _hard_timeout_margin_seconds())
-    try:
-        status, payload = result_queue.get(timeout=hard_deadline)
-    except queue.Empty as exc:
-        raise TimeoutError(
-            f"{spec.slot} {mode} hard timeout after {hard_deadline:.0f}s (nominal {timeout}s + margem)"
-        ) from exc
+    deadline_at = time.monotonic() + hard_deadline
+    while True:
+        if cancel_event is not None and cancel_event.is_set():
+            raise TimeoutError(f"{spec.slot} {mode} cancelled by caller")
+        remaining = deadline_at - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(
+                f"{spec.slot} {mode} hard timeout after {hard_deadline:.0f}s (nominal {timeout}s + margem)"
+            )
+        try:
+            status, payload = result_queue.get(timeout=min(0.25, remaining))
+            break
+        except queue.Empty:
+            continue
     if status == "err":
         raise payload
     return str(payload)
@@ -406,6 +417,7 @@ async def _call_text_with_hard_timeout_async(
     prompt: str,
     *,
     timeout: int,
+    cancel_event: threading.Event | None = None,
 ) -> str:
     return await asyncio.to_thread(
         _call_text_with_hard_timeout,
@@ -413,6 +425,7 @@ async def _call_text_with_hard_timeout_async(
         spec,
         prompt,
         timeout=timeout,
+        cancel_event=cancel_event,
     )
 
 
@@ -1473,6 +1486,17 @@ def _coerce_pct(value: Any, fallback: float) -> float:
     return fallback
 
 
+def _coerce_pct_or_none(value: Any) -> float | None:
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip().rstrip("%"))
+        except ValueError:
+            return None
+    return None
+
+
 def _string_list(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(item) for item in value if isinstance(item, str) and item.strip()]
@@ -1646,6 +1670,8 @@ def _agent_preflight_prompt(slot: str, *, contract: bool = False) -> str:
         "Use JSON estrito com: ok, message, self_identification{name,version}, title_pct, summary, "
         "source_urls, source_queries. Inclua ao menos uma source_url ou source_query não-Opta que você usaria "
         "para checar Brasil, Marrocos, odds/ratings/Sofascore/lesões e chaveamento 16 avos. "
+        "Aqui, 'source'/'fonte' significa fonte de informação esportiva verificável: URL HTTP ou consulta de busca; "
+        "não significa fonte tipográfica, camisa, uniforme, design, Instagram/Reels ou identidade visual. "
         "Dados da Opta não contam e não devem aparecer em source_urls/source_queries. "
         "title_pct deve ser número simples. "
         f"Slot configurado: {slot}."
@@ -1681,6 +1707,34 @@ def _preflight_contract_error(payload: dict[str, Any]) -> str:
     if not summary:
         return "contrato mínimo incompleto: summary/message ausente"
     return ""
+
+
+def is_recoverable_preflight_contract_failure(result: AgentPreflightResult) -> bool:
+    """Preflight contract misses are warnings; provider/runtime failures still exclude.
+
+    The full source-planning round has the real repair and validation machinery. A model
+    that answered the smoke call but omitted a field should not be removed before that
+    machinery can run; API/quota/timeouts remain hard failures.
+    """
+    if result.ok:
+        return False
+    return str(result.error or "").strip().lower().startswith("contrato mínimo incompleto:")
+
+
+def preflight_exclusion_slots(results: list[AgentPreflightResult]) -> list[str]:
+    return [
+        result.slot
+        for result in results
+        if not result.ok and not is_recoverable_preflight_contract_failure(result)
+    ]
+
+
+def preflight_warning_slots(results: list[AgentPreflightResult]) -> list[str]:
+    return [
+        result.slot
+        for result in results
+        if is_recoverable_preflight_contract_failure(result)
+    ]
 
 
 def run_agent_preflight(
@@ -1761,7 +1815,7 @@ def render_agent_preflight_stdout(results: list[AgentPreflightResult]) -> str:
     if not results:
         lines.append("[WARN] nenhum agente configurado para testar")
     for result in results:
-        status = "OK" if result.ok else "FAIL"
+        status = "OK" if result.ok else ("WARN" if is_recoverable_preflight_contract_failure(result) else "FAIL")
         identity = " / ".join(
             item
             for item in [
@@ -1780,10 +1834,15 @@ def render_agent_preflight_stdout(results: list[AgentPreflightResult]) -> str:
         if result.error:
             lines.append(f"      erro={result.error[:240]}")
     ok_count = sum(1 for result in results if result.ok)
+    warning_count = sum(1 for result in results if is_recoverable_preflight_contract_failure(result))
+    hard_fail_count = len(results) - ok_count - warning_count
     lines.extend(
         [
             border,
-            f"Resumo: {ok_count}/{len(results)} modelo(s) responderam ao smoke test.",
+            (
+                f"Resumo: {ok_count}/{len(results)} OK; "
+                f"{warning_count} aviso(s) recuperável(eis); {hard_fail_count} falha(s) dura(s)."
+            ),
             border,
             "",
         ]
@@ -1832,17 +1891,27 @@ def parse_agent_opinion(slot: str, text: str, *, fallback_title_pct: float) -> A
     match_probabilities = {}
 
     title_pct = payload.get("title_pct")
+    title_pct_source = "explicit" if "title_pct" in payload else "missing"
     if isinstance(title_pct, dict):
         match_probabilities.update(_coerce_probability_map(title_pct))
-        title_pct = fallback_title_pct
+        title_pct = None
+        title_pct_source = "parser_default_rejected"
     if title_pct is None:
         percent = re.search(
             r"(?:t[ií]tulo|campe[aã]o|champion|title)[^0-9]{0,40}(\d+(?:\.\d+)?)\s*%",
             text,
             flags=re.I,
         )
-        title_pct = float(percent.group(1)) if percent else fallback_title_pct
-    title_pct = _coerce_pct(title_pct, fallback_title_pct)
+        if percent:
+            title_pct = float(percent.group(1))
+            title_pct_source = "explicit"
+    else:
+        coerced_title_pct = _coerce_pct_or_none(title_pct)
+        if coerced_title_pct is None:
+            title_pct = None
+            title_pct_source = "parser_default_rejected"
+        else:
+            title_pct = coerced_title_pct
 
     summary = payload.get("summary")
     if not summary:
@@ -1882,7 +1951,8 @@ def parse_agent_opinion(slot: str, text: str, *, fallback_title_pct: float) -> A
 
     return AgentOpinion(
         agent=slot,
-        title_pct=round(title_pct, 1),
+        title_pct=round(title_pct, 1) if title_pct is not None else None,
+        title_pct_source=title_pct_source,
         summary=str(summary),
         opening_argument=str(payload.get("opening_argument") or payload.get("argument") or summary),
         question=str(payload.get("question") or ""),
@@ -1927,6 +1997,7 @@ def _local_fallback_opinion(spec: AgentSpec, reason: str, *, baseline_title_pct:
     return AgentOpinion(
         agent=spec.slot,
         title_pct=round(baseline_title_pct, 1),
+        title_pct_source="fallback",
         summary=(
             f"Modelo sem resposta externa verificável porque {reason}. "
             "O slot não participa do consenso até trazer plano de fontes próprio."
@@ -1959,17 +2030,50 @@ async def call_agent(
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
     allow_local_fallback: bool = True,
     call_role: str | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> AgentOpinion:
     runtime_spec = _spec_for_call_role(spec, call_role or _role_from_prompt(prompt))
     try:
-        text = await _call_text_with_hard_timeout_async("remote", runtime_spec, prompt, timeout=timeout)
+        try:
+            text = await _call_text_with_hard_timeout_async(
+                "remote",
+                runtime_spec,
+                prompt,
+                timeout=timeout,
+                cancel_event=cancel_event,
+            )
+        except TypeError as exc:
+            if "cancel_event" not in str(exc):
+                raise
+            text = await _call_text_with_hard_timeout_async(
+                "remote",
+                runtime_spec,
+                prompt,
+                timeout=timeout,
+            )
         return parse_agent_opinion(runtime_spec.slot, text, fallback_title_pct=baseline_title_pct)
     except (RuntimeError, urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
         if not runtime_spec.prefer_bridge and _has_api_key(runtime_spec) and (
             runtime_spec.web_fetch_url or runtime_spec.browser_command
         ):
             try:
-                text = await _call_text_with_hard_timeout_async("bridge", runtime_spec, prompt, timeout=timeout)
+                try:
+                    text = await _call_text_with_hard_timeout_async(
+                        "bridge",
+                        runtime_spec,
+                        prompt,
+                        timeout=timeout,
+                        cancel_event=cancel_event,
+                    )
+                except TypeError as exc:
+                    if "cancel_event" not in str(exc):
+                        raise
+                    text = await _call_text_with_hard_timeout_async(
+                        "bridge",
+                        runtime_spec,
+                        prompt,
+                        timeout=timeout,
+                    )
                 return parse_agent_opinion(runtime_spec.slot, text, fallback_title_pct=baseline_title_pct)
             except (RuntimeError, urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
                 pass
@@ -2006,6 +2110,7 @@ async def call_all_agents(
     allow_local_fallback: bool = True,
     progress_callback: Any = None,
     call_role: str | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> list[AgentOpinion]:
     specs = specs or default_agent_specs()
     by_slot = {spec.slot: spec for spec in specs}
@@ -2034,9 +2139,10 @@ async def call_all_agents(
                         timeout=timeout,
                         allow_local_fallback=allow_local_fallback,
                         call_role=role,
+                        cancel_event=cancel_event,
                     )
                 except TypeError as exc:
-                    if "call_role" not in str(exc):
+                    if "call_role" not in str(exc) and "cancel_event" not in str(exc):
                         raise
                     opinion = await call_agent(
                         spec,

@@ -285,6 +285,70 @@ def _render_probability_rows(rows: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
+def _opponent_room_operational_lines(opponent_room: dict[str, Any]) -> list[str]:
+    if not opponent_room.get("enabled"):
+        return ["- Status da sala adversarios: desligada; top-2 veio do JSON/Monte Carlo configurado."]
+
+    exit_status = str(opponent_room.get("exit_status", "") or "nao informado")
+    usable = bool(opponent_room.get("usable_for_main_room", False))
+    rounds = int(opponent_room.get("rounds", 0) or 0)
+    lines: list[str] = []
+
+    if opponent_room.get("timed_out"):
+        timeout_s = opponent_room.get("timeout_seconds", "s/d")
+        pending = opponent_room.get("pending_round") if isinstance(opponent_room.get("pending_round"), dict) else {}
+        question = _compact_text(pending.get("question", "")) if pending else ""
+        round_label = f"rodada {pending.get('round', '?')}" if pending else "rodada nao registrada"
+        checkpoint = "timeout preservado" if opponent_room.get("partial_progress_available") else "timeout sem checkpoint util"
+        detail = f"- Status da sala adversarios: {checkpoint} em {round_label} ({timeout_s}s); "
+        if question:
+            detail += f"pergunta pendente: {question}; "
+        detail += "usou Monte Carlo/bracket como fallback para a sala Brasil."
+        lines.append(detail)
+        return lines
+
+    if opponent_room.get("degraded"):
+        decision = opponent_room.get("degraded_decision") if isinstance(opponent_room.get("degraded_decision"), dict) else {}
+        lines.append(
+            "- Status da sala adversarios: quase-consenso degradado entrou na sala Brasil; "
+            f"rodadas={rounds}; exit_status={exit_status}; "
+            f"valid_participants={decision.get('valid_participants', 's/d')}."
+        )
+        return lines
+
+    if opponent_room.get("degraded_would_be_usable") and opponent_room.get("degraded_shadow_only"):
+        decision = opponent_room.get("degraded_decision") if isinstance(opponent_room.get("degraded_decision"), dict) else {}
+        lines.append(
+            "- Status da sala adversarios: quase-consenso degradado medido em shadow; "
+            "não reescreveu a sala Brasil; "
+            f"rodadas={rounds}; exit_status={exit_status}; "
+            f"valid_participants={decision.get('valid_participants', 's/d')}; "
+            f"coverage_complete={decision.get('coverage_complete', 's/d')}."
+        )
+        return lines
+
+    if usable:
+        lines.append(
+            "- Status da sala adversarios: consenso utilizavel alimentou o top-2 da sala Brasil; "
+            f"rodadas={rounds}; exit_status={exit_status}."
+        )
+        return lines
+
+    if opponent_room.get("failed"):
+        lines.append(
+            "- Status da sala adversarios: falhou e nao alimentou a sala Brasil; "
+            f"rodadas={rounds}; exit_status={exit_status}; "
+            f"motivo={_compact_text(opponent_room.get('error', 'sem detalhe estruturado'))}."
+        )
+        return lines
+
+    lines.append(
+        "- Status da sala adversarios: nao utilizavel para a sala Brasil; "
+        f"rodadas={rounds}; exit_status={exit_status}; fallback=Monte Carlo/bracket."
+    )
+    return lines
+
+
 def _render_transcript(title: str, transcript: list[dict[str, Any]]) -> list[str]:
     lines = [title]
     if not transcript:
@@ -360,6 +424,7 @@ def render_debate_report(payload: dict[str, Any], *, source_path: Path | None = 
             f"- Sala adversarios do Brasil: {opponent_status}; rodadas={int(opponent_room.get('rounds', len(opponent_transcript)) or 0)}; participantes={', '.join(opponent_participants) if opponent_participants else 'nao informado'}.",
             f"- Sala Brasil: rodadas={len(brazil_transcript)}; participantes={', '.join(brazil_participants) if brazil_participants else 'nao informado'}.",
             f"- Funil final: quartas {_fmt_pct(stage_probabilities.get('quartas'))}; semifinal {_fmt_pct(stage_probabilities.get('semifinal'))}; final {_fmt_pct(stage_probabilities.get('final'))}; titulo {_fmt_pct(stage_probabilities.get('titulo'))}.",
+            *_opponent_room_operational_lines(opponent_room),
             "",
             "## Retroalimentacao",
             "- Ordem operacional: Monte Carlo/bracket oficial -> sala adversarios -> top-2 por fase -> JSON da sala Brasil -> sala Brasil decide chance do Brasil contra esses cenarios.",

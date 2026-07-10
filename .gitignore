@@ -1,12 +1,41 @@
+# Python/runtime
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Ambientes locais
 .venv/
 .venv_check/
-.backups/
+venv/
+env/
+
+# Segredos e configuração local
+.env
+.env.*
+!.env.example
+config/worldcup_brazil.json
+config/*.local.json
+secrets/
+
+# Artefatos de execução
 data/
 outputs/
-.DS_Store
-
-# lock de run concorrente (item 6) — artefato de runtime
-data/.run.lock
+.backups/
+.worktrees/
+*.log
+*.tmp
+*.temp
 *.corrupt.*
+
+# lock de run concorrente — artefato de runtime
+data/.run.lock
+
+# Sistema/editor
+.DS_Store
+.idea/
+.vscode/

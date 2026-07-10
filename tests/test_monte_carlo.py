@@ -1,8 +1,12 @@
 from pathlib import Path
 
+import pytest
+
 from worldcup_brazil.monte_carlo import (
     _stage_uncertainty_intervals,
     monte_carlo_compact_summary,
+    recommend_base_rating_against_market,
+    recommend_rho_against_market,
     run_brazil_monte_carlo,
     widen_ci_for_monte_carlo_path_uncertainty,
 )
@@ -39,7 +43,296 @@ def _mc_config(iterations: int = 6000) -> dict:
         {"opponent": "Haiti", "brazil_pct": 98.0, "draw_pct": 1.0},
         {"opponent": "Escócia", "brazil_pct": 96.0, "draw_pct": 2.0},
     ]
+    config["completed_group_matches"] = []
     return config
+
+
+def _completed_match_anchor_config(iterations: int = 2000) -> dict:
+    config = _mc_config(iterations=iterations)
+    config["monte_carlo"]["team_ratings"].update(
+        {
+            "Alemanha": 1860,
+            "Curaçau": 1360,
+        }
+    )
+    config["completed_group_matches"] = [
+        {
+            "group": "C",
+            "team_a": "Brasil",
+            "team_b": "Marrocos",
+            "score_a": 1,
+            "score_b": 1,
+            "date": "2026-06-13",
+        },
+        {
+            "group": "C",
+            "team_a": "Escócia",
+            "team_b": "Haiti",
+            "score_a": 1,
+            "score_b": 0,
+            "date": "2026-06-13",
+        },
+        {
+            "group": "E",
+            "team_a": "Alemanha",
+            "team_b": "Curaçau",
+            "score_a": 7,
+            "score_b": 1,
+            "date": "2026-06-14",
+        },
+        {
+            "group": "F",
+            "team_a": "Holanda",
+            "team_b": "Japão",
+            "score_a": 2,
+            "score_b": 2,
+            "date": "2026-06-14",
+        },
+        {
+            "group": "F",
+            "team_a": "Suécia",
+            "team_b": "Tunísia",
+            "score_a": 5,
+            "score_b": 1,
+            "date": "2026-06-15",
+        },
+    ]
+    return config
+
+
+def _team_context_adjustment(result: dict, team: str) -> dict:
+    return next(
+        item for item in result["team_context"]["team_adjustments"] if item["team"] == team
+    )
+
+
+def test_monte_carlo_conditions_group_on_completed_results() -> None:
+    baseline = run_brazil_monte_carlo(_mc_config(iterations=3000))
+    config = _mc_config(iterations=3000)
+    config["completed_group_matches"] = [
+        {
+            "group": "C",
+            "team_a": "Brasil",
+            "team_b": "Marrocos",
+            "score_a": 1,
+            "score_b": 1,
+            "date": "2026-06-13",
+        },
+        {
+            "group": "C",
+            "team_a": "Escócia",
+            "team_b": "Haiti",
+            "score_a": 1,
+            "score_b": 0,
+            "date": "2026-06-13",
+        },
+    ]
+
+    conditioned = run_brazil_monte_carlo(config)
+
+    group_state = conditioned["group_state"]
+    current = {row["team"]: row for row in group_state["current_table"]}
+    assert conditioned["completed_group_matches"]["count"] == 2
+    assert current["Escócia"]["points"] == 3
+    assert current["Brasil"]["points"] == 1
+    assert current["Marrocos"]["points"] == 1
+    assert current["Haiti"]["points"] == 0
+    assert sum(group_state["brazil_position_counts"].values()) == conditioned["iterations"]
+    assert group_state["brazil_first_pct"] == group_state["brazil_position_pct"]["1"]
+    assert group_state["completed_results"][0]["score"] == "Brasil 1-1 Marrocos"
+
+
+def test_monte_carlo_exposes_completed_results_for_brazil_crossing_groups() -> None:
+    config = _mc_config(iterations=3000)
+    config["completed_group_matches"] = [
+        {
+            "group": "C",
+            "team_a": "Brasil",
+            "team_b": "Marrocos",
+            "score_a": 1,
+            "score_b": 1,
+            "date": "2026-06-13",
+        },
+        {
+            "group": "F",
+            "team_a": "Holanda",
+            "team_b": "Japão",
+            "score_a": 2,
+            "score_b": 2,
+            "date": "2026-06-14",
+        },
+        {
+            "group": "F",
+            "team_a": "Suécia",
+            "team_b": "Tunísia",
+            "score_a": 5,
+            "score_b": 1,
+            "date": "2026-06-15",
+        },
+    ]
+
+    conditioned = run_brazil_monte_carlo(config)
+
+    assert conditioned["completed_group_matches"]["count"] == 3
+    assert any(match["score"] == "Holanda 2-2 Japão" for match in conditioned["completed_group_matches"]["matches"])
+    assert conditioned["phase_relevant_groups"]["16 avos"] == ["F"]
+    group_f = conditioned["relevant_group_states"]["F"]
+    assert "16 avos" in group_f["phases"]
+    assert group_f["completed_results"][0]["score"] == "Holanda 2-2 Japão"
+    assert group_f["current_table"][0]["team"] == "Suécia"
+    assert group_f["current_table"][0]["points"] == 3
+    assert group_f["current_table"][0]["goal_difference"] == 4
+
+    compact = monte_carlo_compact_summary(conditioned)
+    assert compact["relevant_group_states"]["F"]["current_table"][0]["team"] == "Suécia"
+    assert compact["completed_group_matches"]["count"] == 3
+
+
+def test_completed_group_table_uses_score_tiebreakers_before_rating_uncertainty() -> None:
+    config = _mc_config(iterations=1200)
+    config["monte_carlo"].update(
+        {
+            "rating_uncertainty_enabled": True,
+            "rating_uncertainty_outer_samples": 6,
+            "rating_uncertainty_inner_iterations": 200,
+            "configured_rating_sigma": 60.0,
+            "prior_rating_sigma": 160.0,
+        }
+    )
+    # Deliberately make Morocco much stronger by rating. The completed scores
+    # still put Brazil first on goal difference, so rating must not break the tie.
+    config["monte_carlo"]["team_ratings"]["Brasil"] = 1500
+    config["monte_carlo"]["team_ratings"]["Marrocos"] = 2100
+    config["completed_group_matches"] = [
+        {"group": "C", "team_a": "Brasil", "team_b": "Marrocos", "score_a": 1, "score_b": 1, "date": "2026-06-13"},
+        {"group": "C", "team_a": "Escócia", "team_b": "Haiti", "score_a": 1, "score_b": 0, "date": "2026-06-13"},
+        {"group": "C", "team_a": "Escócia", "team_b": "Marrocos", "score_a": 0, "score_b": 1, "date": "2026-06-19"},
+        {"group": "C", "team_a": "Brasil", "team_b": "Haiti", "score_a": 3, "score_b": 0, "date": "2026-06-19"},
+        {"group": "C", "team_a": "Marrocos", "team_b": "Haiti", "score_a": 4, "score_b": 2, "date": "2026-06-24"},
+        {"group": "C", "team_a": "Escócia", "team_b": "Brasil", "score_a": 0, "score_b": 3, "date": "2026-06-24"},
+        {"group": "F", "team_a": "Holanda", "team_b": "Japão", "score_a": 2, "score_b": 2, "date": "2026-06-14"},
+        {"group": "F", "team_a": "Suécia", "team_b": "Tunísia", "score_a": 5, "score_b": 1, "date": "2026-06-15"},
+        {"group": "F", "team_a": "Holanda", "team_b": "Suécia", "score_a": 5, "score_b": 1, "date": "2026-06-20"},
+        {"group": "F", "team_a": "Tunísia", "team_b": "Japão", "score_a": 0, "score_b": 4, "date": "2026-06-21"},
+        {"group": "F", "team_a": "Tunísia", "team_b": "Holanda", "score_a": 1, "score_b": 3, "date": "2026-06-25"},
+        {"group": "F", "team_a": "Japão", "team_b": "Suécia", "score_a": 1, "score_b": 1, "date": "2026-06-25"},
+    ]
+
+    result = run_brazil_monte_carlo(config)
+
+    assert result["group_state"]["brazil_position_pct"]["1"] == 100.0
+    round_of_32 = result["phases"]["16 avos"]["opponents"]
+    assert len(round_of_32) == 1
+    assert round_of_32[0]["opponent"] == "Japão"
+    assert round_of_32[0]["scenario_pct"] == 100.0
+    assert round_of_32[0]["unconditional_pct"] == 100.0
+    assert round_of_32[0]["count"] == result["iterations"]
+
+
+def test_completed_knockout_results_override_future_path_simulation() -> None:
+    config = _mc_config(iterations=800)
+    config["monte_carlo"]["team_ratings"].update(
+        {
+            "Alemanha": 1860,
+            "Curaçau": 1360,
+            "Costa do Marfim": 1640,
+            "Equador": 1580,
+            "França": 1900,
+            "Senegal": 1700,
+            "Iraque": 1450,
+            "Noruega": 1680,
+        }
+    )
+    config["completed_group_matches"] = [
+        {"group": "C", "team_a": "Brasil", "team_b": "Marrocos", "score_a": 1, "score_b": 1, "date": "2026-06-13"},
+        {"group": "C", "team_a": "Escócia", "team_b": "Haiti", "score_a": 1, "score_b": 0, "date": "2026-06-13"},
+        {"group": "C", "team_a": "Escócia", "team_b": "Marrocos", "score_a": 0, "score_b": 1, "date": "2026-06-19"},
+        {"group": "C", "team_a": "Brasil", "team_b": "Haiti", "score_a": 3, "score_b": 0, "date": "2026-06-19"},
+        {"group": "C", "team_a": "Marrocos", "team_b": "Haiti", "score_a": 4, "score_b": 2, "date": "2026-06-24"},
+        {"group": "C", "team_a": "Escócia", "team_b": "Brasil", "score_a": 0, "score_b": 3, "date": "2026-06-24"},
+        {"group": "F", "team_a": "Holanda", "team_b": "Japão", "score_a": 2, "score_b": 2, "date": "2026-06-14"},
+        {"group": "F", "team_a": "Suécia", "team_b": "Tunísia", "score_a": 5, "score_b": 1, "date": "2026-06-15"},
+        {"group": "F", "team_a": "Holanda", "team_b": "Suécia", "score_a": 5, "score_b": 1, "date": "2026-06-20"},
+        {"group": "F", "team_a": "Tunísia", "team_b": "Japão", "score_a": 0, "score_b": 4, "date": "2026-06-21"},
+        {"group": "F", "team_a": "Tunísia", "team_b": "Holanda", "score_a": 1, "score_b": 3, "date": "2026-06-25"},
+        {"group": "F", "team_a": "Japão", "team_b": "Suécia", "score_a": 1, "score_b": 1, "date": "2026-06-25"},
+        {"group": "E", "team_a": "Alemanha", "team_b": "Curaçau", "score_a": 4, "score_b": 0, "date": "2026-06-14"},
+        {"group": "E", "team_a": "Costa do Marfim", "team_b": "Equador", "score_a": 2, "score_b": 0, "date": "2026-06-14"},
+        {"group": "E", "team_a": "Alemanha", "team_b": "Equador", "score_a": 2, "score_b": 0, "date": "2026-06-20"},
+        {"group": "E", "team_a": "Curaçau", "team_b": "Costa do Marfim", "score_a": 0, "score_b": 2, "date": "2026-06-20"},
+        {"group": "E", "team_a": "Alemanha", "team_b": "Costa do Marfim", "score_a": 2, "score_b": 1, "date": "2026-06-25"},
+        {"group": "E", "team_a": "Equador", "team_b": "Curaçau", "score_a": 1, "score_b": 0, "date": "2026-06-25"},
+        {"group": "I", "team_a": "França", "team_b": "Iraque", "score_a": 3, "score_b": 0, "date": "2026-06-17"},
+        {"group": "I", "team_a": "Noruega", "team_b": "Senegal", "score_a": 2, "score_b": 0, "date": "2026-06-17"},
+        {"group": "I", "team_a": "França", "team_b": "Senegal", "score_a": 1, "score_b": 0, "date": "2026-06-22"},
+        {"group": "I", "team_a": "Iraque", "team_b": "Noruega", "score_a": 0, "score_b": 2, "date": "2026-06-22"},
+        {"group": "I", "team_a": "França", "team_b": "Noruega", "score_a": 2, "score_b": 1, "date": "2026-06-27"},
+        {"group": "I", "team_a": "Senegal", "team_b": "Iraque", "score_a": 2, "score_b": 0, "date": "2026-06-27"},
+    ]
+    config["completed_knockout_matches"] = [
+        {
+            "phase": "16 avos",
+            "team_a": "Brasil",
+            "score_a": 2,
+            "team_b": "Japão",
+            "score_b": 1,
+            "winner": "Brasil",
+            "date": "2026-06-29",
+            "source": "https://fifa.example/brasil-japao",
+        },
+        {
+            "phase": "16 avos",
+            "team_a": "Costa do Marfim",
+            "score_a": 1,
+            "team_b": "Noruega",
+            "score_b": 2,
+            "winner": "Noruega",
+            "date": "2026-06-30",
+            "source": "https://fifa.example/civ-nor",
+        },
+    ]
+
+    result = run_brazil_monte_carlo(config)
+
+    round_of_32 = result["phases"]["16 avos"]["opponents"]
+    assert round_of_32 == [
+        {
+            "opponent": "Japão",
+            "scenario_pct": 100.0,
+            "unconditional_pct": 100.0,
+            "brazil_pct": 100.0,
+            "count": result["iterations"],
+            "ci": round_of_32[0]["ci"],
+        }
+    ]
+    round_of_16 = result["phases"]["Oitavas"]["opponents"]
+    assert len(round_of_16) == 1
+    assert round_of_16[0]["opponent"] == "Noruega"
+    assert round_of_16[0]["scenario_pct"] == 100.0
+    assert round_of_16[0]["unconditional_pct"] == 100.0
+    assert result["completed_knockout_matches"]["count"] == 2
+
+
+def test_completed_group_result_overrides_extreme_pre_match_probability() -> None:
+    baseline = run_brazil_monte_carlo(_mc_config(iterations=3000))
+    config = _mc_config(iterations=3000)
+    config["group_matches"][0]["brazil_pct"] = 99.0
+    config["group_matches"][0]["draw_pct"] = 0.5
+    config["completed_group_matches"] = [
+        {
+            "group": "C",
+            "team_a": "Brasil",
+            "team_b": "Marrocos",
+            "score_a": 0,
+            "score_b": 1,
+            "date": "2026-06-13",
+        },
+    ]
+
+    conditioned = run_brazil_monte_carlo(config)
+
+    assert conditioned["group_state"]["current_table"][0]["team"] == "Marrocos"
+    assert conditioned["group_state"]["brazil_first_pct"] < baseline["group_state"]["brazil_first_pct"]
 
 
 def test_monte_carlo_confidence_level_controls_wilson_interval_width() -> None:
@@ -137,6 +430,7 @@ def test_monte_carlo_downstream_round_uses_winner_of_official_neighbor_match() -
 def test_monte_carlo_uses_same_team_context_signal_families_for_candidate_opponents() -> None:
     baseline = run_brazil_monte_carlo(_mc_config(iterations=5000))
     adjusted_config = _mc_config(iterations=5000)
+    adjusted_config["monte_carlo"]["team_context_evidence_regression_enabled"] = False
     adjusted_config["monte_carlo"]["probability_pct_to_rating_points"] = 10.0
     adjusted_config["monte_carlo"]["team_context"] = {
         "Suécia": [
@@ -188,6 +482,599 @@ def test_monte_carlo_uses_same_team_context_signal_families_for_candidate_oppone
         item["team"] == "Suécia" and item["rating_delta"] > 120.0
         for item in adjusted["team_context"]["team_adjustments"]
     )
+    assert adjusted["team_context"]["warnings"] == [
+        {
+            "team": "Suécia",
+            "reason": "team_context_reactive_families_without_calendar_anchor",
+            "source_families": ["bets_prediction_markets", "specialized_press"],
+        },
+        {
+            "team": "Suécia",
+            "rating_delta": 132.0,
+            "threshold": 40.0,
+            "reason": "team_context_delta_above_warning_threshold",
+        },
+        {
+            "team": "Japão",
+            "rating_delta": -68.0,
+            "threshold": 40.0,
+            "reason": "team_context_delta_above_warning_threshold",
+        }
+    ]
+
+
+def test_monte_carlo_collapses_correlated_team_context_signals_by_normalized_family() -> None:
+    config = _mc_config(iterations=2000)
+    config["monte_carlo"]["team_context"] = {
+        "Brasil": [
+            {
+                "category": "lesões/cortes/notícias recentes",
+                "rating_delta": -8.0,
+                "confidence": 1.0,
+                "source_url": "https://example.com/neymar-injury",
+            },
+            {
+                "category": "lesões/cortes/notícias recentes",
+                "rating_delta": -13.4,
+                "confidence": 1.0,
+                "source_url": "https://example.com/raphinha-rest",
+            },
+            {
+                "category": "injuries_cuts_news",
+                "rating_delta": -13.6,
+                "confidence": 1.0,
+                "source_url": "https://example.com/brazil-injury-roundup",
+            },
+        ]
+    }
+
+    adjusted = run_brazil_monte_carlo(config)
+
+    brazil_adjustment = next(
+        item for item in adjusted["team_context"]["team_adjustments"] if item["team"] == "Brasil"
+    )
+    assert brazil_adjustment["rating_delta"] == -13.4
+    assert brazil_adjustment["source_families"] == ["injuries_cuts_news"]
+    assert brazil_adjustment["family_adjustments"] == [
+        {"source_family": "injuries_cuts_news", "rating_delta": -13.4, "signal_count": 3}
+    ]
+
+
+def test_monte_carlo_shrinks_cross_family_signals_for_same_correlation_group() -> None:
+    config = _completed_match_anchor_config(iterations=2000)
+    config["monte_carlo"]["team_context_correlation_default_rho"] = 0.7
+    config["monte_carlo"]["team_context"] = {
+        "Brasil": [
+            {
+                "category": "bets_prediction_markets",
+                "rating_delta": -13.1,
+                "confidence": 1.0,
+                "correlation_group": "brasil_pos_marrocos",
+                "source_url": "https://example.com/brazil-odds",
+            },
+            {
+                "category": "injuries_cuts_news",
+                "rating_delta": -13.6,
+                "confidence": 1.0,
+                "correlation_group": "brasil_pos_marrocos",
+                "source_url": "https://example.com/brazil-injuries",
+            },
+            {
+                "category": "ratings",
+                "rating_delta": -13.0,
+                "confidence": 1.0,
+                "correlation_group": "brasil_pos_marrocos",
+                "source_url": "https://example.com/brazil-ratings",
+            },
+            {
+                "category": "performance",
+                "rating_delta": -9.2,
+                "confidence": 1.0,
+                "correlation_group": "brasil_pos_marrocos",
+                "source_url": "https://example.com/brazil-performance",
+            },
+            {
+                "category": "elenco_talento",
+                "rating_delta": 5.8,
+                "confidence": 1.0,
+                "correlation_group": "brasil_structural_talent",
+                "source_url": "https://example.com/brazil-talent",
+            },
+        ]
+    }
+
+    adjusted = run_brazil_monte_carlo(config)
+
+    brazil_adjustment = next(
+        item for item in adjusted["team_context"]["team_adjustments"] if item["team"] == "Brasil"
+    )
+    assert -25.0 < brazil_adjustment["rating_delta"] < -12.0
+    assert brazil_adjustment["rating_delta"] != -43.1
+    adjustments_by_group = {
+        item["correlation_group"]: item
+        for item in brazil_adjustment["correlation_adjustments"]
+    }
+    assert adjustments_by_group["match_event:brasil:marrocos:2026-06-13"] == {
+        "correlation_group": "match_event:brasil:marrocos:2026-06-13",
+        "rho": 0.7,
+        "rating_delta": -24.2,
+        "dominant_family": "injuries_cuts_news",
+        "dominant_delta": -13.6,
+        "residual_delta": -35.3,
+        "member_families": [
+            "bets_prediction_markets",
+            "injuries_cuts_news",
+            "performance",
+            "ratings",
+        ],
+        "correlation_group_source": "completed_match",
+    }
+    assert adjustments_by_group["brasil_structural_talent"] == {
+        "correlation_group": "brasil_structural_talent",
+        "rho": 0.7,
+        "rating_delta": 5.8,
+        "dominant_family": "elenco_talento",
+        "dominant_delta": 5.8,
+        "residual_delta": 0.0,
+        "member_families": ["elenco_talento"],
+    }
+
+
+def test_monte_carlo_derives_match_shock_when_models_use_different_group_labels() -> None:
+    """Regressão do run a30341: o modelo pediu o mesmo choque Brasil 1-1
+    Marrocos em famílias diferentes, mas com labels diferentes de
+    correlation_group. O motor antigo confiava cegamente nesses labels e somava
+    o choque 4x; o motor precisa derivar um grupo determinístico de evento
+    quando a evidência aponta para o mesmo jogo."""
+    config = _completed_match_anchor_config(iterations=2000)
+    config["monte_carlo"]["team_context_correlation_default_rho"] = 0.7
+    config["monte_carlo"]["team_context"] = {
+        "Brasil": [
+            {
+                "category": "bets_prediction_markets",
+                "rating_delta": -16.0,
+                "confidence": 1.0,
+                "correlation_group": "br_marrocos_draw_shock",
+                "rationale": "Odds do Brasil driftaram depois do empate Brasil 1-1 Marrocos em 13/06.",
+                "source_url": "https://example.com/brazil-morocco-odds",
+            },
+            {
+                "category": "ratings",
+                "rating_delta": -13.0,
+                "confidence": 1.0,
+                "correlation_group": "br_marrocos_rating_update",
+                "rationale": "Rating/Elo atualizados após Brasil x Marrocos 1-1.",
+                "source_url": "https://example.com/brazil-morocco-ratings",
+            },
+            {
+                "category": "performance",
+                "rating_delta": -13.0,
+                "confidence": 1.0,
+                "correlation_group": "br_mar_2026_match_reaction",
+                "rationale": "Performance ruim no empate com Marrocos em 2026.",
+                "source_url": "https://example.com/brazil-morocco-performance",
+            },
+            {
+                "category": "injuries_cuts_news",
+                "rating_delta": -13.6,
+                "confidence": 1.0,
+                "correlation_group": "shock_group_c_debut",
+                "rationale": "Notícias de escalação e lesões para Brasil x Marrocos na estreia.",
+                "source_url": "https://example.com/brazil-morocco-injuries",
+            },
+            {
+                "category": "squad_depth",
+                "rating_delta": -16.5,
+                "confidence": 1.0,
+                "correlation_group": "br_squad_attrition",
+                "rationale": "Atrito estrutural do elenco por ausências acumuladas de Neymar, Rodrygo e Militão.",
+                "source_url": "https://example.com/brazil-squad-attrition",
+            },
+            {
+                "category": "elenco_talento",
+                "rating_delta": -6.6,
+                "confidence": 1.0,
+                "correlation_group": "bra_attack_structure_2026",
+                "rationale": "Problema estrutural de criação ofensiva do Brasil no ciclo 2026.",
+                "source_url": "https://example.com/brazil-attack-structure",
+            },
+        ]
+    }
+
+    adjusted = run_brazil_monte_carlo(config)
+
+    brazil_adjustment = next(
+        item for item in adjusted["team_context"]["team_adjustments"] if item["team"] == "Brasil"
+    )
+    assert brazil_adjustment["rating_delta"] > -55.0
+    match_groups = [
+        item for item in brazil_adjustment["correlation_adjustments"]
+        if set(item["member_families"]) == {
+            "bets_prediction_markets",
+            "injuries_cuts_news",
+            "performance",
+            "ratings",
+        }
+    ]
+    assert match_groups, brazil_adjustment["correlation_adjustments"]
+    assert match_groups[0]["rating_delta"] > -35.0
+    assert {item["correlation_group"] for item in brazil_adjustment["correlation_adjustments"]} >= {
+        "match_event:brasil:marrocos:2026-06-13",
+        "br_squad_attrition",
+        "bra_attack_structure_2026",
+    }
+
+
+def test_monte_carlo_anchors_brazil_event_reactive_context_to_completed_match_not_text_opponent() -> None:
+    config = _completed_match_anchor_config(iterations=2000)
+    config["monte_carlo"]["team_context_correlation_default_rho"] = 0.7
+    config["monte_carlo"]["team_context_correlation_rho_by_group"] = {
+        "match_event:brasil:marrocos": 0.9,
+    }
+    config["monte_carlo"]["team_context"] = {
+        "Brasil": [
+            {
+                "category": "performance",
+                "rating_delta": -10.0,
+                "confidence": 1.0,
+                "date": "2026-06-13",
+                "rationale": "Performance review do Brasil; contexto geral cita Marrocos em notas amplas.",
+                "source_url": "https://example.com/contexto-amplo-marrocos",
+            },
+            {
+                "category": "injuries_cuts_news",
+                "rating_delta": -8.0,
+                "confidence": 1.0,
+                "correlation_group": "brasil_haiti_prep",
+                "rationale": "Cortes e preparação citam Haiti como próximo adversário no calendário.",
+                "source_url": "https://example.com/brasil-prep-haiti",
+            },
+        ]
+    }
+
+    adjusted = run_brazil_monte_carlo(config)
+
+    brazil_adjustment = _team_context_adjustment(adjusted, "Brasil")
+    adjustments_by_group = {
+        item["correlation_group"]: item
+        for item in brazil_adjustment["correlation_adjustments"]
+    }
+    match_group = adjustments_by_group["match_event:brasil:marrocos:2026-06-13"]
+    assert match_group["correlation_group_source"] == "completed_match"
+    assert match_group["rho"] == 0.9
+    assert match_group["member_families"] == ["injuries_cuts_news", "performance"]
+    assert match_group["residual_delta"] != 0.0
+    assert "match_event:brasil:haiti" not in adjustments_by_group
+    assert all(
+        signal["correlation_group"] == "match_event:brasil:marrocos:2026-06-13"
+        and signal["correlation_group_source"] == "completed_match"
+        for signal in brazil_adjustment["signals"]
+    )
+    overridden_signal = next(
+        signal for signal in brazil_adjustment["signals"]
+        if signal.get("model_correlation_group_hint") == "brasil_haiti_prep"
+    )
+    assert overridden_signal["correlation_group_override_reason"] == "completed_match_overrode_model_hint"
+
+
+@pytest.mark.parametrize(
+    ("team", "expected_group"),
+    [
+        ("Alemanha", "match_event:alemanha:curacau:2026-06-14"),
+        ("Holanda", "match_event:holanda:japao:2026-06-14"),
+        ("Suécia", "match_event:suecia:tunisia:2026-06-15"),
+    ],
+)
+def test_monte_carlo_anchors_non_brazil_event_context_to_completed_match_when_text_mentions_marrocos(
+    team: str,
+    expected_group: str,
+) -> None:
+    config = _completed_match_anchor_config(iterations=2000)
+    config["monte_carlo"]["team_context_correlation_default_rho"] = 0.7
+    config["monte_carlo"]["team_context"] = {
+        team: [
+            {
+                "category": "performance",
+                "rating_delta": 12.0,
+                "confidence": 1.0,
+                "date": "2026-06-16",
+                "rationale": "Relatório de performance traz Marrocos apenas como contexto paralelo do torneio.",
+                "source_url": "https://example.com/world-cup-marrocos-roundup",
+            },
+            {
+                "category": "ratings",
+                "rating_delta": 7.0,
+                "confidence": 1.0,
+                "date": "2026-06-16",
+                "rationale": "Rating pós-jogo; a página de origem também linka análise de Marrocos.",
+                "source_url": "https://example.com/ratings-marrocos-sidebar",
+            },
+        ]
+    }
+
+    adjusted = run_brazil_monte_carlo(config)
+
+    team_adjustment = _team_context_adjustment(adjusted, team)
+    adjustments_by_group = {
+        item["correlation_group"]: item
+        for item in team_adjustment["correlation_adjustments"]
+    }
+    match_group = adjustments_by_group[expected_group]
+    assert match_group["correlation_group_source"] == "completed_match"
+    assert match_group["member_families"] == ["performance", "ratings"]
+    assert "match_event:brasil:marrocos" not in adjustments_by_group
+    assert all(
+        signal["correlation_group"] == expected_group
+        and signal["correlation_group_source"] == "completed_match"
+        for signal in team_adjustment["signals"]
+    )
+
+
+def test_monte_carlo_keeps_recent_news_family_and_calendar_anchors_it() -> None:
+    config = _completed_match_anchor_config(iterations=2000)
+    config["monte_carlo"]["team_context_correlation_default_rho"] = 0.7
+    config["monte_carlo"]["team_context"] = {
+        "Brasil": [
+            {
+                "category": "recent_news",
+                "rating_delta": -9.0,
+                "confidence": 1.0,
+                "rationale": "Notícia recente do ciclo pós-jogo; texto lateral menciona Haiti.",
+                "source_url": "https://example.com/brasil-news-haiti-sidebar",
+            },
+            {
+                "category": "performance",
+                "rating_delta": -6.0,
+                "confidence": 1.0,
+                "rationale": "Performance pós-jogo.",
+                "source_url": "https://example.com/brasil-performance",
+            },
+        ]
+    }
+
+    adjusted = run_brazil_monte_carlo(config)
+
+    brazil_adjustment = _team_context_adjustment(adjusted, "Brasil")
+    match_group = next(
+        item for item in brazil_adjustment["correlation_adjustments"]
+        if item["correlation_group"] == "match_event:brasil:marrocos:2026-06-13"
+    )
+    assert match_group["member_families"] == ["performance", "recent_news"]
+    assert "recent_news" in brazil_adjustment["source_families"]
+    assert all(signal["correlation_group_source"] == "completed_match" for signal in brazil_adjustment["signals"])
+
+
+def test_monte_carlo_anchors_result_and_path_context_categories_to_completed_match() -> None:
+    config = _completed_match_anchor_config(iterations=2000)
+    config["monte_carlo"]["team_context_correlation_default_rho"] = 0.7
+    config["monte_carlo"]["team_context"] = {
+        "Brasil": [
+            {
+                "category": "performance",
+                "rating_delta": -6.0,
+                "confidence": 1.0,
+                "correlation_group": "brazil_morocco_performance",
+                "rationale": "Performance no Brasil 1-1 Marrocos.",
+                "source_url": "https://example.com/brazil-morocco-performance",
+            },
+            {
+                "category": "resultado_recente",
+                "rating_delta": -16.3,
+                "confidence": 1.0,
+                "correlation_group": "shock_c_bra_mar_2026_06_13",
+                "rationale": "Resultado recente Brasil 1-1 Marrocos em 2026-06-13.",
+                "source_url": "https://example.com/brazil-morocco-result",
+            },
+        ],
+        "Holanda": [
+            {
+                "category": "performance",
+                "rating_delta": -8.0,
+                "confidence": 1.0,
+                "correlation_group": "netherlands_japan_performance",
+                "rationale": "Performance no Holanda 2-2 Japão.",
+                "source_url": "https://example.com/netherlands-japan-performance",
+            },
+            {
+                "category": "caminho_16_avos",
+                "rating_delta": -4.8,
+                "confidence": 1.0,
+                "correlation_group": "shock_f_openers_2026_06_14_15",
+                "rationale": "Caminho de 16 avos reprecificado depois de Holanda 2-2 Japão em 2026-06-14.",
+                "source_url": "https://example.com/netherlands-japan-path",
+            },
+        ],
+    }
+
+    adjusted = run_brazil_monte_carlo(config)
+
+    brazil_adjustment = _team_context_adjustment(adjusted, "Brasil")
+    brazil_groups = {
+        item["correlation_group"]: item
+        for item in brazil_adjustment["correlation_adjustments"]
+    }
+    assert set(brazil_groups) == {"match_event:brasil:marrocos:2026-06-13"}
+    assert brazil_groups["match_event:brasil:marrocos:2026-06-13"]["member_families"] == [
+        "performance",
+        "recent_results",
+    ]
+    assert all(signal["correlation_group_source"] == "completed_match" for signal in brazil_adjustment["signals"])
+
+    netherlands_adjustment = _team_context_adjustment(adjusted, "Holanda")
+    netherlands_groups = {
+        item["correlation_group"]: item
+        for item in netherlands_adjustment["correlation_adjustments"]
+    }
+    assert set(netherlands_groups) == {"match_event:holanda:japao:2026-06-14"}
+    assert netherlands_groups["match_event:holanda:japao:2026-06-14"]["member_families"] == [
+        "path_context",
+        "performance",
+    ]
+    assert all(signal["correlation_group_source"] == "completed_match" for signal in netherlands_adjustment["signals"])
+
+
+def test_monte_carlo_warns_when_model_match_shock_lacks_calendar_anchor() -> None:
+    config = _completed_match_anchor_config(iterations=2000)
+    config["monte_carlo"]["team_ratings"]["Inglaterra"] = 1870
+    config["monte_carlo"]["team_context_correlation_default_rho"] = 0.7
+    config["monte_carlo"]["team_context"] = {
+        "Inglaterra": [
+            {
+                "category": "resultado_recente",
+                "rating_delta": 9.3,
+                "confidence": 1.0,
+                "correlation_group": "shock_eng_cro_2026_06_18",
+                "rationale": "Resultado recente Inglaterra 4-2 Croácia em 2026-06-18.",
+                "source_url": "https://example.com/england-croatia-result",
+            },
+        ]
+    }
+
+    adjusted = run_brazil_monte_carlo(config)
+
+    england_adjustment = _team_context_adjustment(adjusted, "Inglaterra")
+    assert england_adjustment["correlation_adjustments"] == [
+        {
+            "correlation_group": "recent_results",
+            "rho": 0.7,
+            "rating_delta": 9.3,
+            "dominant_family": "recent_results",
+            "dominant_delta": 9.3,
+            "residual_delta": 0.0,
+            "member_families": ["recent_results"],
+        }
+    ]
+    assert {
+        "team": "Inglaterra",
+        "reason": "team_context_model_match_shock_without_calendar_anchor",
+        "source_family": "recent_results",
+        "model_correlation_group_hint": "shock_eng_cro_2026_06_18",
+        "derived_match_event": "match_event:inglaterra:croacia:2026-06-18",
+    } in adjusted["team_context"]["warnings"]
+
+
+def test_monte_carlo_does_not_collapse_structural_context_into_completed_match_event() -> None:
+    config = _completed_match_anchor_config(iterations=2000)
+    config["monte_carlo"]["team_context_correlation_default_rho"] = 0.7
+    config["monte_carlo"]["team_context"] = {
+        "Brasil": [
+            {
+                "category": "elenco_talento",
+                "rating_delta": 15.0,
+                "confidence": 1.0,
+                "rationale": "Leitura estrutural de talento do elenco; texto amplo menciona Marrocos.",
+                "source_url": "https://example.com/brasil-marrocos-talento",
+            },
+            {
+                "category": "squad_depth",
+                "rating_delta": 6.0,
+                "confidence": 1.0,
+                "correlation_group": "match_event:brasil:marrocos:2026-06-13",
+                "rationale": "Profundidade estrutural de elenco no ciclo 2026, não reação ao jogo.",
+                "source_url": "https://example.com/brasil-squad-depth-marrocos",
+            },
+        ]
+    }
+
+    adjusted = run_brazil_monte_carlo(config)
+
+    brazil_adjustment = _team_context_adjustment(adjusted, "Brasil")
+    assert all(
+        not item["correlation_group"].startswith("match_event:")
+        for item in brazil_adjustment["correlation_adjustments"]
+    )
+    assert all(signal["correlation_group_source"] == "structural" for signal in brazil_adjustment["signals"])
+
+
+def test_monte_carlo_does_not_create_match_event_from_reactive_text_without_completed_match() -> None:
+    config = _mc_config(iterations=2000)
+    config["completed_group_matches"] = []
+    config["monte_carlo"]["team_context_correlation_default_rho"] = 0.7
+    config["monte_carlo"]["team_context"] = {
+        "Brasil": [
+            {
+                "category": "performance",
+                "rating_delta": -10.0,
+                "confidence": 1.0,
+                "correlation_group": "brasil_pos_marrocos",
+                "rationale": "Texto menciona empate com Marrocos, mas o calendário concluído não foi carregado.",
+                "source_url": "https://example.com/brasil-marrocos-performance",
+            },
+            {
+                "category": "ratings",
+                "rating_delta": -8.0,
+                "confidence": 1.0,
+                "correlation_group": "brasil_pos_marrocos",
+                "rationale": "Rating pós-Marrocos sem completed_group_matches.",
+                "source_url": "https://example.com/brasil-marrocos-rating",
+            },
+        ]
+    }
+
+    adjusted = run_brazil_monte_carlo(config)
+
+    brazil_adjustment = _team_context_adjustment(adjusted, "Brasil")
+    groups = {item["correlation_group"] for item in brazil_adjustment["correlation_adjustments"]}
+    assert not any(group.startswith("match_event:") for group in groups)
+    assert groups == {"performance", "ratings"}
+    assert all(signal["correlation_group_source"] == "fallback_family" for signal in brazil_adjustment["signals"])
+    assert {
+        "team": "Brasil",
+        "reason": "team_context_reactive_families_without_calendar_anchor",
+        "source_families": ["performance", "ratings"],
+    } in adjusted["team_context"]["warnings"]
+
+
+def test_monte_carlo_keeps_cross_family_sum_when_correlation_rho_is_zero() -> None:
+    config = _mc_config(iterations=2000)
+    config["monte_carlo"]["team_context_correlation_default_rho"] = 0.0
+    config["monte_carlo"]["team_context_evidence_regression_enabled"] = False
+    config["monte_carlo"]["team_context"] = {
+        "Brasil": [
+            {
+                "category": "bets_prediction_markets",
+                "rating_delta": -13.1,
+                "confidence": 1.0,
+                "correlation_group": "brasil_pos_marrocos",
+                "source_url": "https://example.com/brazil-odds",
+            },
+            {
+                "category": "injuries_cuts_news",
+                "rating_delta": -13.6,
+                "confidence": 1.0,
+                "correlation_group": "brasil_pos_marrocos",
+                "source_url": "https://example.com/brazil-injuries",
+            },
+            {
+                "category": "ratings",
+                "rating_delta": -13.0,
+                "confidence": 1.0,
+                "correlation_group": "brasil_pos_marrocos",
+                "source_url": "https://example.com/brazil-ratings",
+            },
+            {
+                "category": "performance",
+                "rating_delta": -9.2,
+                "confidence": 1.0,
+                "correlation_group": "brasil_pos_marrocos",
+                "source_url": "https://example.com/brazil-performance",
+            },
+            {
+                "category": "elenco_talento",
+                "rating_delta": 5.8,
+                "confidence": 1.0,
+                "correlation_group": "brasil_structural_talent",
+                "source_url": "https://example.com/brazil-talent",
+            },
+        ]
+    }
+
+    adjusted = run_brazil_monte_carlo(config)
+
+    brazil_adjustment = next(
+        item for item in adjusted["team_context"]["team_adjustments"] if item["team"] == "Brasil"
+    )
+    assert brazil_adjustment["rating_delta"] == -43.1
 
 
 def test_monte_carlo_ignores_context_signals_without_numeric_effect_or_source() -> None:
@@ -415,15 +1302,16 @@ def test_simulation_integrity_relaxed_thirds_prong_enforces_cap() -> None:
 
 
 def test_monte_carlo_output_is_bit_identical_after_hot_loop_memoization() -> None:
-    """Gate de regressão da otimização de performance (item 14 da auditoria 11/jun).
+    """Gate de regressão do contrato completo do Monte Carlo.
 
-    As memoizações de _normalize/_slot_kind/_rating_*_probability são puras: o
-    resultado COMPLETO do Monte Carlo (todas as fases, CIs, diagnostics, título)
-    deve ser byte a byte idêntico ao código pré-cache. Hashes capturados do código
-    original; qualquer mudança futura que altere um único número quebra aqui.
+    O resultado COMPLETO do Monte Carlo (todas as fases, CIs, diagnostics,
+    título e placares realizados condicionantes) deve permanecer byte a byte
+    estável para o contrato atual. Qualquer mudança futura que altere um único
+    número precisa ser deliberada e atualizar este snapshot.
 
-    Ao contrário do red-green usual, este teste PASSA no código antigo e no novo —
-    é exatamente o que prova que a otimização não mudou o comportamento."""
+    Snapshot atualizado junto da mudança deliberada de team_context: sinais
+    correlacionados passam a ser agregados por mediana dentro da família antes
+    de mover o rating efetivo."""
     import hashlib
     import json as json_module
     from pathlib import Path
@@ -456,5 +1344,299 @@ def test_monte_carlo_output_is_bit_identical_after_hot_loop_memoization() -> Non
         )
     )
 
-    assert _hash(result_off) == "3a8112323212d0884ef7b9882feae17776ac49570e9d1c185b21f00e21cf9ca7"
-    assert _hash(result_on) == "44176e8de29adae1cac6a8f9532bfbbe60e2d55b76d7cd0f8a7653bf5b1cb878"
+    assert _hash(result_off) == "369afe56a36e41b8371e0b51a0bb25c83bc0625c3b6162d65ab65216af429e7b"
+    assert _hash(result_on) == "8ed6ee3cbc6605951a625535b04498550e1b2ff77482482156b6cb66b6c81773"
+
+
+def _evidence_config(team_context: dict) -> dict:
+    config = _mc_config(iterations=1500)
+    config["monte_carlo"]["team_ratings"].update({"Argentina": 1820})
+    config["monte_carlo"]["team_context"] = team_context
+    return config
+
+
+def _expected_regression(capped: float, n: int, *, prior: float = 2.0, warning: float = 40.0) -> float:
+    if abs(capped) <= warning:
+        return capped
+    factor = n / (n + prior)
+    return (1.0 if capped >= 0 else -1.0) * (warning + (abs(capped) - warning) * factor)
+
+
+def test_extreme_single_source_delta_regressed_by_exact_factor() -> None:
+    # Argentina +123-style blow-up: one extreme rating signal from a single source.
+    config = _evidence_config(
+        {
+            "Argentina": [
+                {
+                    "category": "ratings",
+                    "rating_delta": 120.0,
+                    "confidence": 1.0,
+                    "correlation_group": "arg_single",
+                    "source_url": "https://example.com/arg",
+                }
+            ]
+        }
+    )
+    reg = _team_context_adjustment(run_brazil_monte_carlo(config), "Argentina")["evidence_regression"]
+    assert reg["distinct_sources"] == 1
+    assert reg["independent_evidence"] == 1
+    assert abs(reg["capped_delta"]) > 40.0
+    # exact n/(n+2) factor -- catches a silent no-op AND a hardcoded constant factor
+    assert abs(reg["regressed_delta"] - _expected_regression(reg["capped_delta"], 1)) < 0.2
+    assert abs(reg["regressed_delta"]) < abs(reg["capped_delta"])  # genuinely pulled in
+
+
+def test_corroborated_delta_uses_n_factor_not_noop() -> None:
+    signals = [
+        {
+            "category": cat,
+            "rating_delta": 25.0,
+            "confidence": 1.0,
+            "correlation_group": f"g{i}",
+            "source_url": f"https://example.com/s{i}",
+        }
+        for i, cat in enumerate(
+            ["ratings", "performance", "bets_prediction_markets", "recent_news", "specialized_press"]
+        )
+    ]
+    reg = _team_context_adjustment(
+        run_brazil_monte_carlo(_evidence_config({"Suécia": signals})), "Suécia"
+    )["evidence_regression"]
+    assert reg["independent_evidence"] == 5
+    # exact n=5 factor; fails if the feature silently no-ops (regressed would equal capped)
+    assert abs(reg["regressed_delta"] - _expected_regression(reg["capped_delta"], 5)) < 0.2
+    assert _expected_regression(reg["capped_delta"], 5) > _expected_regression(reg["capped_delta"], 1)
+
+
+def test_split_group_labels_cannot_dodge_regression() -> None:
+    # Structural families honour the model's free-text correlation_group verbatim, so the
+    # model could mint many group ids from one shock. The source cap must defeat that.
+    one = [
+        {
+            "category": "squad_depth",
+            "rating_delta": 90.0,
+            "confidence": 1.0,
+            "correlation_group": "struct",
+            "source_url": "https://example.com/x",
+        }
+    ]
+    split = [
+        {
+            "category": "squad_depth",
+            "rating_delta": 10.0,
+            "confidence": 1.0,
+            "correlation_group": f"struct_{i}",
+            "source_url": "https://example.com/x",
+        }
+        for i in range(9)
+    ]
+    a = _team_context_adjustment(run_brazil_monte_carlo(_evidence_config({"Argentina": one})), "Argentina")["evidence_regression"]
+    b = _team_context_adjustment(run_brazil_monte_carlo(_evidence_config({"Argentina": split})), "Argentina")["evidence_regression"]
+    assert b["distinct_sources"] == 1
+    assert b["independent_evidence"] == 1  # capped by the single real source, not 9 minted labels
+    assert abs(a["regressed_delta"] - b["regressed_delta"]) < 0.6  # relabelling buys nothing
+
+
+def test_cap_applied_before_regression() -> None:
+    # raw above the 180 cap must be capped FIRST, then regressed (not regress-then-clamp).
+    signals = [
+        {
+            "category": cat,
+            "rating_delta": 120.0,
+            "confidence": 1.0,
+            "correlation_group": f"g{i}",
+            "source_url": f"https://example.com/s{i}",
+        }
+        for i, cat in enumerate(["ratings", "performance", "bets_prediction_markets"])
+    ]
+    reg = _team_context_adjustment(
+        run_brazil_monte_carlo(_evidence_config({"Argentina": signals})), "Argentina"
+    )["evidence_regression"]
+    assert reg["capped_delta"] == 180.0  # clamped before regression
+    assert abs(reg["regressed_delta"] - _expected_regression(180.0, reg["independent_evidence"])) < 0.5
+    assert abs(reg["regressed_delta"]) < 180.0  # regression survives the cap (old code clipped to 180)
+
+
+def test_regression_engages_under_production_rho() -> None:
+    config = _evidence_config(
+        {
+            "Argentina": [
+                {"category": "ratings", "rating_delta": 60.0, "confidence": 1.0,
+                 "correlation_group": "g", "source_url": "https://example.com/a"},
+                {"category": "performance", "rating_delta": 60.0, "confidence": 1.0,
+                 "correlation_group": "g", "source_url": "https://example.com/b"},
+            ]
+        }
+    )
+    config["monte_carlo"]["team_context_correlation_default_rho"] = 0.7  # production regime
+    reg = _team_context_adjustment(run_brazil_monte_carlo(config), "Argentina")["evidence_regression"]
+    # material_delta=1.0 means rho shrinking a group does not flip it below the count threshold
+    if abs(reg["capped_delta"]) > 40.0:
+        assert reg["independent_evidence"] >= 1
+        assert abs(reg["regressed_delta"]) < abs(reg["capped_delta"])
+
+
+def test_small_single_source_delta_below_threshold_untouched() -> None:
+    config = _evidence_config(
+        {
+            "Tunísia": [
+                {
+                    "category": "ratings",
+                    "rating_delta": 15.0,
+                    "confidence": 1.0,
+                    "correlation_group": "mini",
+                    "source_url": "https://example.com/mini",
+                }
+            ]
+        }
+    )
+    reg = _team_context_adjustment(run_brazil_monte_carlo(config), "Tunísia")["evidence_regression"]
+    assert abs(reg["capped_delta"]) <= 40.0
+    assert reg["raw_delta"] == reg["regressed_delta"]  # below warning -> untouched
+
+
+def test_rho_recommender_aligns_when_a_plausible_rho_reaches_market() -> None:
+    sweep = {0.0: 3.0, 0.5: 4.5, 0.7: 5.5, 0.85: 7.5, 0.95: 9.0}
+    rec = recommend_rho_against_market(sweep, market_pct=7.4)
+    assert rec["verdict"] == "rho_aligns_with_market"
+    assert rec["recommended_rho"] == 0.85          # 7.5 is closest to 7.4
+    assert rec["current_title_pct"] == 5.5         # at the current 0.7
+
+
+def test_rho_recommender_flags_structural_residual_when_max_shrink_cannot_reach_market() -> None:
+    sweep = {0.0: 2.0, 0.5: 3.0, 0.7: 3.5, 0.85: 4.0, 0.95: 5.0}
+    rec = recommend_rho_against_market(sweep, market_pct=7.4)
+    assert rec["verdict"] == "structural_residual"  # even rho=0.95 (5.0) is far below 7.4
+    assert rec["recommended_rho"] == 0.95           # closest available, but gap remains
+    assert rec["residual_gap_pct"] == 2.4
+
+
+def test_rho_recommender_does_not_overfit_outside_the_plausible_band() -> None:
+    # rho=1.2 would hit the market, but it is implausible -> must NOT be recommended.
+    sweep = {0.7: 3.0, 0.95: 5.0, 1.2: 7.4}
+    rec = recommend_rho_against_market(sweep, market_pct=7.4)
+    assert rec["recommended_rho"] == 0.95           # restricted to the plausible band
+    assert rec["verdict"] == "structural_residual"  # the honest answer, not a forced rho=1.2
+
+
+def test_rho_recommender_partial_when_model_overshoots_market_across_band() -> None:
+    sweep = {0.5: 7.0, 0.7: 8.0, 0.85: 9.0, 0.95: 10.0}
+    rec = recommend_rho_against_market(sweep, market_pct=5.0)
+    assert rec["verdict"] == "rho_partially_closes_gap"
+    assert rec["recommended_rho"] == 0.5            # closest, but still 2.0 above market
+
+
+def test_rho_recommender_insufficient_data() -> None:
+    assert recommend_rho_against_market({}, 7.4)["verdict"] == "insufficient_data"
+    assert recommend_rho_against_market({0.7: 3.5}, None)["verdict"] == "insufficient_data"
+
+
+def test_rho_recommender_flags_inert_rho_instead_of_a_fake_alignment() -> None:
+    flat = {0.0: 3.8, 0.5: 3.8, 0.7: 3.8, 0.85: 3.8, 0.95: 3.8}
+    rec = recommend_rho_against_market(flat, market_pct=7.4)
+    assert rec["title_rho_sensitivity_pct"] == 0.0
+    assert rec["verdict"] == "rho_inert"        # not a fake "aligns at 0.5"
+    assert rec["recommended_rho"] == 0.7         # keep current, do not invent a lever
+
+
+def test_rho_recommender_never_recommends_outside_an_empty_plausible_band() -> None:
+    rec = recommend_rho_against_market({0.2: 3.0, 1.5: 7.4}, market_pct=7.4)
+    assert rec["verdict"] == "no_plausible_rho"
+    assert rec["recommended_rho"] is None        # never falls back to the implausible 1.5
+
+
+def test_rho_recommender_uses_reachable_max_for_structural_verdict() -> None:
+    # non-monotonic sweep where one rho overshoots market: NOT structural (a rho gets close).
+    rec = recommend_rho_against_market({0.5: 2.0, 0.7: 9.0, 0.85: 2.5, 0.95: 3.0}, market_pct=7.0)
+    assert rec["verdict"] == "rho_partially_closes_gap"  # min() would wrongly call this structural
+    assert rec["recommended_rho"] == 0.7
+
+
+def test_calibrate_rho_team_delta_matches_engine_exactly() -> None:
+    # The script must reproduce _apply_team_context_adjustments, including the source throttle.
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("calibrate_rho", "scripts/calibrate_rho.py")
+    calibrate_rho = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(calibrate_rho)
+    from worldcup_brazil.monte_carlo import _apply_team_context_adjustments
+
+    config = _mc_config(iterations=1)
+    config["monte_carlo"]["team_ratings"]["Argentina"] = 1820
+    config["monte_carlo"]["team_context_correlation_default_rho"] = 0.7
+    # 5 material structural groups behind ONE source (the adversarial 53-point divergence case)
+    config["monte_carlo"]["team_context"] = {
+        "Argentina": [
+            {
+                "category": "squad_depth",
+                "rating_delta": 30.0,
+                "confidence": 1.0,
+                "correlation_group": f"struct_{i}",
+                "source_url": "https://one-source/x",
+            }
+            for i in range(5)
+        ]
+    }
+    result = _apply_team_context_adjustments(config, dict(config["monte_carlo"]["team_ratings"]))
+    adjustment = next(a for a in result["team_adjustments"] if a["team"] == "Argentina")
+    settings = calibrate_rho._engine_settings(config["monte_carlo"])
+    recomputed = calibrate_rho._team_delta_at_rho(adjustment, 0.7, settings)
+    assert adjustment["evidence_regression"]["distinct_sources"] == 1
+    assert round(recomputed, 1) == round(adjustment["rating_delta"], 1)  # exact, source throttle intact
+
+
+def test_base_rating_recommender_flags_a_plausibly_low_seed() -> None:
+    sweep = {1750: 2.0, 1800: 3.0, 1850: 3.8, 1900: 5.5, 1950: 7.4}
+    rec = recommend_base_rating_against_market(
+        sweep, market_pct=7.4, current_rating=1850, peer_max_rating=1920
+    )
+    assert rec["verdict"] == "seed_plausibly_low"   # 1950 implied, within the 1960 ceiling
+    assert rec["market_implied_rating"] == 1950
+    assert rec["rating_gap"] == 100
+
+
+def test_base_rating_recommender_calls_implausible_implied_rating_a_market_disagreement() -> None:
+    sweep = {1850: 3.8, 2000: 5.0, 2100: 6.0, 2200: 7.4}
+    rec = recommend_base_rating_against_market(
+        sweep, market_pct=7.4, current_rating=1850, peer_max_rating=1920
+    )
+    assert rec["verdict"] == "market_disagreement"  # matching 7.4 needs 2200 >> peer cluster
+    assert rec["market_implied_rating"] == 2200     # reported, never recommended as a fix
+
+
+def test_base_rating_recommender_seed_already_aligned() -> None:
+    rec = recommend_base_rating_against_market(
+        {1850: 7.3, 1900: 8.0}, market_pct=7.4, current_rating=1850, peer_max_rating=1920
+    )
+    assert rec["verdict"] == "seed_aligns_with_market"
+
+
+def test_base_rating_recommender_insufficient_data() -> None:
+    assert recommend_base_rating_against_market({}, 7.4, current_rating=1850, peer_max_rating=1920)[
+        "verdict"
+    ] == "insufficient_data"
+    assert recommend_base_rating_against_market(
+        {1850: 3.8}, None, current_rating=1850, peer_max_rating=1920
+    )["verdict"] == "insufficient_data"
+
+
+def test_base_rating_recommender_missing_seed_is_not_a_fake_alignment() -> None:
+    # current_rating 1850 is absent from the sweep and the implied 2200 is implausible:
+    # a missing seed must NOT short-circuit to seed_aligns (the adversarial H4 bug).
+    rec = recommend_base_rating_against_market(
+        {1900: 5.0, 2200: 7.4}, market_pct=7.4, current_rating=1850, peer_max_rating=1920
+    )
+    assert rec["current_title_pct"] is None
+    assert rec["verdict"] == "market_disagreement"
+
+
+def test_base_rating_recommender_ceiling_is_inclusive_both_directions() -> None:
+    at_ceiling = recommend_base_rating_against_market(
+        {1850: 3.8, 1960: 7.4}, market_pct=7.4, current_rating=1850, peer_max_rating=1920
+    )
+    assert at_ceiling["market_implied_rating"] == 1960
+    assert at_ceiling["verdict"] == "seed_plausibly_low"  # implied == ceiling (1960) is inclusive
+    over_ceiling = recommend_base_rating_against_market(
+        {1850: 3.8, 1961: 7.4}, market_pct=7.4, current_rating=1850, peer_max_rating=1920
+    )
+    assert over_ceiling["verdict"] == "market_disagreement"  # one Elo over flips the verdict

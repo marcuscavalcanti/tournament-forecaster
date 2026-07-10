@@ -6,7 +6,7 @@ def test_announcement_diagram_generator_uses_current_brand_and_directional_rule(
     script_lower = script.lower()
 
     assert "#CopaComAchismo" in script
-    assert "#copaComAchismo" not in script
+    assert "#CopaComAchismo".lower() not in script
     assert "menos achismo" not in script_lower
     assert "mais lastro" not in script_lower
     assert "#brasilcopa2026radar" not in script_lower

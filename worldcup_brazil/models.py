@@ -32,3 +32,4 @@ class ReportBundle:
     opta_benchmark: dict[str, Any] = field(default_factory=dict)
     model_vs_opta: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
+    run_id: str = ""

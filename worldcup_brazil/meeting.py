@@ -8,8 +8,9 @@ from typing import Any, Iterable
 class MeetingResponse:
     agent: str
     answer: str
-    title_pct: float
+    title_pct: float | None
     support_score: float
+    title_pct_source: str = "explicit"
     source_count: int = 0
     accepted: bool = False
     disagreed: bool = False
@@ -22,10 +23,13 @@ class MeetingResponse:
     consensus_check_question: str = ""
     match_probabilities: dict[str, float] = None
     scenario_probabilities: dict[str, float] = None
+    validation_issues: list[dict[str, Any]] = None
+    numeric_vote_usable: bool = True
+    evidence_usable: bool = False
 
 
 def _support_score(
-    title_pct: float,
+    title_pct: float | None,
     consensus_title_pct: float,
     *,
     used_fallback: bool,
@@ -34,7 +38,7 @@ def _support_score(
     source_count: int,
     answer_length: int,
 ) -> float:
-    distance = abs(title_pct - consensus_title_pct)
+    distance = abs((consensus_title_pct if title_pct is None else title_pct) - consensus_title_pct)
     score = max(0.05, 1.0 - distance / 35.0)
     if has_critique:
         score += 0.16
@@ -107,6 +111,8 @@ def _opinion_text(opinion: Any) -> str:
 
 
 def _counts_as_consensus_participant(opinion: Any) -> bool:
+    if not bool(getattr(opinion, "numeric_vote_usable", True)):
+        return False
     if bool(getattr(opinion, "removed_from_main", False)):
         return False
     used_fallback = bool(getattr(opinion, "used_fallback", False))
@@ -117,11 +123,25 @@ def _counts_as_consensus_participant(opinion: Any) -> bool:
 
 
 def _turn_response_counts_for_acceptance(response: dict[str, Any]) -> bool:
+    if not bool(response.get("numeric_vote_usable", True)):
+        return False
     if bool(response.get("removed_from_main", False)):
         return False
     if _looks_unusable(str(response.get("answer", ""))):
         return False
     if bool(response.get("used_fallback", False)) and int(response.get("source_count", 0) or 0) <= 0:
+        return False
+    return True
+
+
+def _meeting_response_counts_for_spread(response: MeetingResponse) -> bool:
+    if not response.numeric_vote_usable:
+        return False
+    if response.removed_from_main:
+        return False
+    if _looks_unusable(response.answer):
+        return False
+    if response.used_fallback and response.source_count <= 0:
         return False
     return True
 
@@ -235,6 +255,11 @@ def build_meeting_turn(
         used_fallback = bool(getattr(opinion, "used_fallback", False))
         removed_from_main = bool(getattr(opinion, "removed_from_main", False))
         source_count = _source_count_from_opinion(opinion)
+        raw_title_pct = getattr(opinion, "title_pct", None)
+        try:
+            numeric_title_pct = float(raw_title_pct) if raw_title_pct is not None else None
+        except (TypeError, ValueError):
+            numeric_title_pct = None
         raw_answer = getattr(opinion, "answer", "") or opinion.summary
         consensus_check_question = ""
         if not removed_from_main and (not used_fallback or source_count > 0):
@@ -244,7 +269,7 @@ def build_meeting_turn(
             )
         answer = _answer_with_consensus_check(raw_answer, consensus_check_question)
         support_score = _support_score(
-            float(opinion.title_pct),
+            numeric_title_pct,
             consensus_title_pct,
             used_fallback=used_fallback,
             has_critique=bool(getattr(opinion, "critique", "")),
@@ -258,11 +283,23 @@ def build_meeting_turn(
             used_fallback=used_fallback,
             source_count=source_count,
         )
+        title_pct_source = str(getattr(opinion, "title_pct_source", "") or "explicit")
+        effective_title_pct = numeric_title_pct
+        if (
+            effective_title_pct is None
+            and accepted
+            and not disagreed
+            and not removed_from_main
+            and (not used_fallback or source_count > 0)
+        ):
+            effective_title_pct = float(consensus_title_pct)
+            title_pct_source = "inherited_from_current_consensus"
         responses.append(
             MeetingResponse(
                 agent=opinion.agent,
                 answer=answer,
-                title_pct=round(float(opinion.title_pct), 1),
+                title_pct=round(effective_title_pct, 1) if effective_title_pct is not None else None,
+                title_pct_source=title_pct_source,
                 support_score=support_score,
                 source_count=source_count,
                 accepted=accepted,
@@ -278,6 +315,9 @@ def build_meeting_turn(
                 consensus_check_question=consensus_check_question,
                 match_probabilities=dict(getattr(opinion, "match_probabilities", {}) or {}),
                 scenario_probabilities=dict(getattr(opinion, "scenario_probabilities", {}) or {}),
+                validation_issues=list(getattr(opinion, "validation_issues", []) or []),
+                numeric_vote_usable=bool(getattr(opinion, "numeric_vote_usable", True)),
+                evidence_usable=bool(getattr(opinion, "evidence_usable", False)),
             )
         )
 
@@ -286,7 +326,11 @@ def build_meeting_turn(
         current_protagonist=protagonist,
         protagonist_counts=protagonist_counts,
     )
-    values = [response.title_pct for response in responses]
+    values = [
+        float(response.title_pct)
+        for response in responses
+        if response.title_pct is not None and _meeting_response_counts_for_spread(response)
+    ]
     spread = round(max(values) - min(values), 1) if values else 0.0
     return {
         "round": round_index,
@@ -297,6 +341,7 @@ def build_meeting_turn(
                 "agent": response.agent,
                 "answer": response.answer,
                 "title_pct": response.title_pct,
+                "title_pct_source": response.title_pct_source,
                 "support_score": response.support_score,
                 "source_count": response.source_count,
                 "accepted": response.accepted,
@@ -304,6 +349,9 @@ def build_meeting_turn(
                 "used_fallback": response.used_fallback,
                 "removed_from_main": response.removed_from_main,
                 "removal_reason": response.removal_reason,
+                "validation_issues": response.validation_issues or [],
+                "numeric_vote_usable": response.numeric_vote_usable,
+                "evidence_usable": response.evidence_usable,
                 "leadership_bid": response.leadership_bid,
                 "proposed_next_question": response.proposed_next_question,
                 "leadership_rationale": response.leadership_rationale,

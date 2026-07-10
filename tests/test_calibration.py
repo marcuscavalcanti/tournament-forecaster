@@ -67,8 +67,122 @@ def test_validate_calibration_cli_outputs_json_report(tmp_path) -> None:
     payload = json.loads(completed.stdout)
 
     assert payload["total_predictions"] == 2
+    assert payload["status"] == "ok"
     assert "brier_score" in payload
     assert "expected_calibration_error" in payload
+
+
+def test_validate_calibration_cli_fails_loudly_when_no_predictions_are_resolved(tmp_path) -> None:
+    input_path = tmp_path / "predictions.json"
+    input_path.write_text(
+        json.dumps(
+            [
+                {"id": "pending-1", "predicted_pct": 70.0, "outcome": None, "resolved": False},
+                {"id": "pending-2", "predicted_pct": 30.0, "outcome": None, "resolved": False},
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "scripts/validate_calibration.py",
+            "--input",
+            str(input_path),
+            "--bins",
+            "5",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+
+    assert completed.returncode == 2
+    assert payload["status"] == "no_resolved_predictions"
+    assert payload["total_predictions"] == 0
+    assert payload["pending_predictions"] == 2
+    assert payload["brier_score"] is None
+    assert payload["log_loss"] is None
+    assert payload["expected_calibration_error"] is None
+
+
+def test_validate_calibration_cli_enforces_minimum_resolved_predictions(tmp_path) -> None:
+    input_path = tmp_path / "predictions.json"
+    input_path.write_text(
+        json.dumps(
+            [
+                {"id": "resolved-1", "predicted_pct": 70.0, "outcome": 1, "resolved": True},
+                {"id": "pending-1", "predicted_pct": 30.0, "outcome": None, "resolved": False},
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "scripts/validate_calibration.py",
+            "--input",
+            str(input_path),
+            "--bins",
+            "5",
+            "--min-resolved",
+            "2",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+
+    assert completed.returncode == 2
+    assert payload["status"] == "insufficient_resolved_predictions"
+    assert payload["total_predictions"] == 1
+    assert payload["pending_predictions"] == 1
+    assert payload["min_resolved_predictions"] == 2
+    assert isinstance(payload["brier_score"], float)
+
+
+def test_validate_calibration_cli_accepts_exact_minimum_resolved_predictions(tmp_path) -> None:
+    input_path = tmp_path / "predictions.json"
+    input_path.write_text(
+        json.dumps(
+            [
+                {"id": "resolved-1", "predicted_pct": 70.0, "outcome": 1, "resolved": True},
+                {"id": "resolved-2", "predicted_pct": 30.0, "outcome": 0, "resolved": True},
+                {"id": "pending-1", "predicted_pct": 50.0, "outcome": None, "resolved": False},
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "scripts/validate_calibration.py",
+            "--input",
+            str(input_path),
+            "--bins",
+            "5",
+            "--min-resolved",
+            "2",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+
+    assert payload["status"] == "ok"
+    assert payload["total_predictions"] == 2
+    assert payload["pending_predictions"] == 1
+    assert payload["min_resolved_predictions"] == 2
+    assert isinstance(payload["brier_score"], float)
 
 
 def test_prediction_logger_appends_pending_run_records_without_duplicates(tmp_path) -> None:
@@ -105,7 +219,7 @@ def test_prediction_logger_appends_pending_run_records_without_duplicates(tmp_pa
         sources=[],
         agent_summaries={},
         warnings=[],
-        custom_hashtag="#copaComAchismo",
+        custom_hashtag="#CopaComAchismo",
     )
     log_path = tmp_path / "calibration_predictions.json"
 
@@ -125,7 +239,7 @@ def test_prediction_logger_appends_pending_run_records_without_duplicates(tmp_pa
     assert all(record["artifact_path"] == "outputs/run-1.json" for record in payload)
 
 
-def test_validate_calibration_cli_handles_missing_or_unresolved_prediction_log(tmp_path) -> None:
+def test_validate_calibration_cli_reports_missing_prediction_log_as_no_resolved_predictions(tmp_path) -> None:
     missing_path = tmp_path / "missing_predictions.json"
 
     completed = subprocess.run(
@@ -137,16 +251,19 @@ def test_validate_calibration_cli_handles_missing_or_unresolved_prediction_log(t
             "--bins",
             "5",
         ],
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
     )
 
     payload = json.loads(completed.stdout)
 
+    assert completed.returncode == 2
+    assert payload["status"] == "no_resolved_predictions"
     assert payload["input_exists"] is False
     assert payload["total_predictions"] == 0
     assert payload["pending_predictions"] == 0
+    assert payload["brier_score"] is None
 
 
 def test_resolved_calibration_records_filters_pending_records() -> None:

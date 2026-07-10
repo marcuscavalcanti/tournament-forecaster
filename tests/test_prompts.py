@@ -4,7 +4,10 @@ from pathlib import Path
 from worldcup_brazil.pipeline import (
     _agent_debate_prompt,
     _agent_prompt,
+    _configured_matches_for_prompt,
     _has_fixed_quanti_quali_allocation,
+    _invalid_protagonist_question_reason,
+    _opponent_debriefing_config,
     load_config,
     _meeting_response_prompt,
     _protagonist_question_prompt,
@@ -13,6 +16,7 @@ from worldcup_brazil.pipeline import (
     _source_planning_prompt,
 )
 from worldcup_brazil.consensus import AgentOpinion
+from worldcup_brazil.monte_carlo import run_brazil_monte_carlo
 
 
 def test_agent_prompt_tells_models_to_choose_sources_and_write_for_linkedin() -> None:
@@ -376,6 +380,8 @@ def test_main_model_prompts_force_fresh_symmetric_opponent_research() -> None:
         assert "source_urls" in lowered
         assert "source_queries" in lowered
         assert "team_context_signals" in prompt
+        assert "correlation_group" in prompt
+        assert "mesmo evento" in lowered or "mesmo choque" in lowered
         assert "bets/prediction markets" in lowered
         assert "lesões/cortes" in lowered
         assert "amistosos" in lowered
@@ -422,6 +428,59 @@ def test_sanitize_protagonist_question_rejects_impossible_knockout_opponent_for_
     assert "Holanda" in question
     assert "Japão" in question
     assert "concorda ou discorda" in question
+
+
+def test_protagonist_question_rejects_future_match_claimed_as_completed_context() -> None:
+    config = load_config(Path("config/worldcup_brazil.example.json"))
+    config["completed_group_matches"] = [
+        {"group": "C", "team_a": "Brasil", "team_b": "Marrocos", "score_a": 1, "score_b": 1},
+        {"group": "C", "team_a": "Escócia", "team_b": "Haiti", "score_a": 1, "score_b": 0},
+    ]
+
+    reason = _invalid_protagonist_question_reason(
+        "Depois dos jogos França x Senegal e Inglaterra x Croácia, concordam com reduzir o Brasil?",
+        config,
+    )
+
+    assert reason is not None
+    assert "sem placar no ledger" in reason
+
+
+def test_protagonist_question_accepts_completed_match_context_from_ledger() -> None:
+    config = load_config(Path("config/worldcup_brazil.example.json"))
+    config["completed_group_matches"] = [
+        {"group": "C", "team_a": "Brasil", "team_b": "Marrocos", "score_a": 1, "score_b": 1},
+        {"group": "C", "team_a": "Escócia", "team_b": "Haiti", "score_a": 1, "score_b": 0},
+    ]
+
+    reason = _invalid_protagonist_question_reason(
+        "Depois dos jogos Brasil x Marrocos e Escócia x Haiti, concordam com atualizar o Grupo C?",
+        config,
+    )
+
+    assert reason is None
+
+
+def test_main_room_scope_includes_live_tables_for_brazil_crossing_groups() -> None:
+    config = load_config(Path("config/worldcup_brazil.example.json"))
+    config["monte_carlo"]["iterations"] = 3000
+    config["completed_group_matches"] = [
+        {
+            "group": "F",
+            "team_a": "Holanda",
+            "team_b": "Japão",
+            "score_a": 2,
+            "score_b": 2,
+            "date": "2026-06-14",
+        },
+    ]
+    config["_monte_carlo_result"] = run_brazil_monte_carlo(config)
+
+    scope = _configured_matches_for_prompt(config)
+
+    assert scope["path_phase_relevant_groups"]["16 avos"] == ["F"]
+    assert scope["path_relevant_group_states"]["F"]["completed_results"][0]["score"] == "Holanda 2-2 Japão"
+    assert scope["monte_carlo"]["relevant_group_states"]["F"]["completed_results"][0]["score"] == "Holanda 2-2 Japão"
 
 
 def test_sanitize_protagonist_question_removes_reserved_benchmark_from_main_room() -> None:
@@ -499,6 +558,38 @@ def test_fixed_quanti_quali_detector_accepts_match_probabilities() -> None:
     )
 
     assert _has_fixed_quanti_quali_allocation(text) is False
+
+
+def test_fixed_quanti_quali_detector_accepts_fractional_market_odds() -> None:
+    text = (
+        "Mercado de campeão mostra Brasil 8/1 e 10/1 em casas independentes; uso esse dado "
+        "quantitativo junto com contexto de lesões e notícias recentes, sem propor proporção fixa."
+    )
+
+    assert _has_fixed_quanti_quali_allocation(text) is False
+
+
+def test_fixed_quanti_quali_detector_accepts_real_run_compliance_and_mc_output_text() -> None:
+    deepseek_excerpt = (
+        "3,8%. Nenhum ajuste é necessário. Não há discordância qualitativa ou quantitativa; "
+        "os outputs do MC continuam como 55% Brasil e 25% empate."
+    )
+    opus_excerpt = (
+        "Não reconstruo decomposição fixa de p.p. (alocação quanti/quali) — uso só os outputs "
+        "do MC: 3,8% título, 62% grupo."
+    )
+
+    assert _has_fixed_quanti_quali_allocation(deepseek_excerpt) is False
+    assert _has_fixed_quanti_quali_allocation(opus_excerpt) is False
+
+
+def test_fixed_quanti_quali_detector_rejects_slash_allocation_even_with_nearby_odds() -> None:
+    text = (
+        "Uso quota fixa 70/30 entre quantitativo e qualitativo, ancorada nas odds 8/1 "
+        "do mercado de título e em notícias recentes."
+    )
+
+    assert _has_fixed_quanti_quali_allocation(text) is True
 
 
 def test_fixed_quanti_quali_detector_rejects_method_percentages() -> None:
@@ -921,3 +1012,46 @@ def test_main_prompts_do_not_cite_fixed_quantitative_qualitative_percentages() -
         assert "dados quantitativos e qualitativos" in lowered
         assert "use 70% estatística e 30% qualitativo" not in lowered
     assert "title_pct" in prompt
+
+
+def test_opponent_room_prompt_asks_for_decisive_top_two_and_challengeable_mc_baseline() -> None:
+    generated_at = datetime(2026, 6, 14, 12, tzinfo=timezone.utc)
+    config = load_config(Path("config/worldcup_brazil.example.json"))
+    opponent_config = _opponent_debriefing_config(config)
+
+    opponent_prompt = _protagonist_question_prompt(
+        config=opponent_config,
+        protagonist="GPT 5.5",
+        previous_turn=None,
+        generated_at=generated_at,
+    )
+    opponent_response_prompt = _meeting_response_prompt(
+        config=opponent_config,
+        round_index=1,
+        protagonist="GPT 5.5",
+        question="Quais são os top-2 por fase?",
+        previous_turn=None,
+        generated_at=generated_at,
+    )
+    main_prompt = _protagonist_question_prompt(
+        config=config,
+        protagonist="GPT 5.5",
+        previous_turn=None,
+        generated_at=generated_at,
+    )
+
+    assert "top-2 por fase" in opponent_prompt.lower()
+    assert "baseline auditável e desafiável" in opponent_prompt.lower()
+    for prompt in (opponent_prompt, opponent_response_prompt):
+        lowered = prompt.lower()
+        assert "exatamente top-2 adversários permitidos" in lowered
+        assert "16 avos" in lowered
+        assert "oitavas" in lowered
+        assert "quartas" in lowered
+        assert "semifinal" in lowered
+        assert "final" in lowered
+        assert "scenario_probabilities" in prompt
+        assert "match_probabilities" in prompt
+        assert "fonte/query por fase" in lowered
+    assert "premissa forte" not in opponent_prompt.lower()
+    assert "top-2 por fase" not in main_prompt.lower()
