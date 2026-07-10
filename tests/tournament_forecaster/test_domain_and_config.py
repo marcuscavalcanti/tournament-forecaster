@@ -31,7 +31,7 @@ def _document() -> dict[str, object]:
             {
                 "id": "group-stage",
                 "type": "round_robin_groups",
-                "groups": {"a": ["north-city", "south-city"]},
+                "groups": {"A": ["north-city", "south-city"]},
             }
         ],
         "ratings": {"north-city": 1600, "south-city": 1500},
@@ -83,6 +83,50 @@ def test_loader_rejects_non_ascii_stable_identifier() -> None:
     teams[0]["id"] = "north-city-2!"
 
     with pytest.raises(TournamentValidationError, match="stable ASCII identifier"):
+        load_tournament_document(document)
+
+
+def test_loader_keeps_team_ids_lowercase_even_when_group_labels_allow_uppercase() -> None:
+    _require_package()
+    from tournament_forecaster.config import load_tournament_document
+    from tournament_forecaster.errors import TournamentValidationError
+
+    document = _document()
+    teams = document["teams"]
+    assert isinstance(teams, list) and isinstance(teams[0], dict)
+    teams[0]["id"] = "North-City"
+
+    with pytest.raises(TournamentValidationError, match="stable ASCII identifier"):
+        load_tournament_document(document)
+
+
+@pytest.mark.parametrize("group_label", ["A", "Group_A", "A-1", "group_a", "2026"])
+def test_loader_accepts_stable_ascii_group_labels(group_label: str) -> None:
+    _require_package()
+    from tournament_forecaster.config import load_tournament_document
+
+    document = _document()
+    stages = document["stages"]
+    assert isinstance(stages, list) and isinstance(stages[0], dict)
+    stages[0]["groups"] = {group_label: ["north-city", "south-city"]}
+
+    tournament = load_tournament_document(document)
+
+    assert group_label in tournament.stages[0]["groups"]  # type: ignore[operator]
+
+
+@pytest.mark.parametrize("group_label", ["Group A", "-A", "A_", "A__B", "Á", ""])
+def test_loader_rejects_invalid_group_labels(group_label: str) -> None:
+    _require_package()
+    from tournament_forecaster.config import load_tournament_document
+    from tournament_forecaster.errors import TournamentValidationError
+
+    document = _document()
+    stages = document["stages"]
+    assert isinstance(stages, list) and isinstance(stages[0], dict)
+    stages[0]["groups"] = {group_label: ["north-city", "south-city"]}
+
+    with pytest.raises(TournamentValidationError, match="group label"):
         load_tournament_document(document)
 
 
@@ -481,6 +525,278 @@ def test_json_loader_rejects_non_finite_number_syntax(tmp_path: Path, number: st
         load_tournament(path)
 
 
+def test_json_loader_rejects_exponent_overflow_in_nested_metadata(tmp_path: Path) -> None:
+    _require_package()
+    from tournament_forecaster.config import load_tournament
+    from tournament_forecaster.errors import TournamentValidationError
+
+    document = _document()
+    document["metadata"] = {"nested": {"overflow": "OVERFLOW"}}
+    payload = json.dumps(document).replace('"OVERFLOW"', "1e999")
+    path = tmp_path / "tournament.json"
+    path.write_text(payload, encoding="utf-8")
+
+    with pytest.raises(TournamentValidationError, match="finite"):
+        load_tournament(path)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda document, value: document.update(metadata={"nested": [value]}),
+        lambda document, value: document["teams"][0].update(  # type: ignore[index,union-attr]
+            metadata={"nested": [value]}
+        ),
+        lambda document, value: document["stages"][0].update(  # type: ignore[index,union-attr]
+            metadata={"nested": [value]}
+        ),
+        lambda document, value: document["completed_matches"][0].update(  # type: ignore[index,union-attr]
+            metadata={"nested": [value]}
+        ),
+    ],
+    ids=["tournament", "team", "stage", "completed-match"],
+)
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_loader_rejects_nested_non_finite_numbers_from_mapping(
+    mutate: object,
+    value: float,
+) -> None:
+    _require_package()
+    from collections.abc import Callable
+
+    from tournament_forecaster.config import load_tournament_document
+    from tournament_forecaster.errors import TournamentValidationError
+
+    document = _document()
+    assert isinstance(mutate, Callable)
+    mutate(document, value)
+
+    with pytest.raises(TournamentValidationError, match="finite"):
+        load_tournament_document(document)
+
+
+def test_team_rejects_non_finite_number_in_nested_metadata() -> None:
+    _require_package()
+    from tournament_forecaster.domain import Team
+    from tournament_forecaster.errors import TournamentValidationError
+
+    with pytest.raises(TournamentValidationError, match="finite"):
+        Team(
+            id="north-city",
+            display_name="North City",
+            metadata={"nested": [float("nan")]},
+        )
+
+
+def test_tournament_rejects_non_finite_number_in_nested_stage_metadata() -> None:
+    _require_package()
+    from tournament_forecaster.domain import Team, Tournament
+    from tournament_forecaster.errors import TournamentValidationError
+
+    with pytest.raises(TournamentValidationError, match="finite"):
+        Tournament(
+            id="synthetic-cup",
+            display_name="Synthetic Cup",
+            focus_team_id="north-city",
+            teams=(
+                Team(id="north-city", display_name="North City"),
+                Team(id="south-city", display_name="South City"),
+            ),
+            stages=(
+                {
+                    "id": "group-stage",
+                    "type": "round_robin_groups",
+                    "groups": {"A": ["north-city", "south-city"]},
+                    "metadata": {"nested": [float("inf")]},
+                },
+            ),
+            ratings={"north-city": 1600.0, "south-city": 1500.0},
+            completed_matches=(),
+        )
+
+
+def test_forecast_rejects_non_finite_number_in_nested_provenance() -> None:
+    _require_package()
+    from tournament_forecaster.domain import Forecast
+    from tournament_forecaster.errors import TournamentValidationError
+
+    with pytest.raises(TournamentValidationError, match="finite"):
+        Forecast(
+            run_id="run-0001",
+            generated_at="2026-07-10T12:00:00+00:00",
+            tournament_id="synthetic-cup",
+            focus_team_id="north-city",
+            stage_probabilities={"group-stage": 1.0},
+            matchup_probabilities=(),
+            championship_probability=0.18,
+            confidence_intervals={"championship_probability": (0.12, 0.24)},
+            input_provenance=(
+                {"kind": "preset", "metadata": {"nested": [float("-inf")]}},
+            ),
+            warnings=(),
+        )
+
+
+@pytest.mark.parametrize("required_key", ["ratings", "completed_matches"])
+def test_loader_requires_explicit_rating_and_result_collections(required_key: str) -> None:
+    _require_package()
+    from tournament_forecaster.config import load_tournament_document
+    from tournament_forecaster.errors import TournamentValidationError
+
+    document = _document()
+    document.pop(required_key)
+
+    with pytest.raises(TournamentValidationError, match=required_key.replace("_", " ")):
+        load_tournament_document(document)
+
+
+@pytest.mark.parametrize(
+    "location",
+    [
+        "root",
+        "tournament",
+        "team",
+        "group-stage",
+        "group-points",
+        "group-qualification",
+        "league-fixture",
+        "league-band",
+        "knockout-pairing",
+        "completed-match",
+        "score",
+    ],
+)
+def test_loader_rejects_schema_forbidden_properties(location: str) -> None:
+    _require_package()
+    from tournament_forecaster.config import load_tournament_document
+    from tournament_forecaster.errors import TournamentValidationError
+
+    document = _document()
+    tournament = document["tournament"]
+    teams = document["teams"]
+    stages = document["stages"]
+    completed_matches = document["completed_matches"]
+    assert isinstance(tournament, dict)
+    assert isinstance(teams, list) and isinstance(teams[0], dict)
+    assert isinstance(stages, list) and isinstance(stages[0], dict)
+    assert isinstance(completed_matches, list) and isinstance(completed_matches[0], dict)
+
+    if location == "root":
+        document["unexpected"] = True
+    elif location == "tournament":
+        tournament["unexpected"] = True
+    elif location == "team":
+        teams[0]["unexpected"] = True
+    elif location == "group-stage":
+        stages[0]["unexpected"] = True
+    elif location == "group-points":
+        stages[0]["points"] = {"win": 3, "draw": 1, "loss": 0, "unexpected": 1}
+    elif location == "group-qualification":
+        stages[0]["qualification"] = {
+            "direct_per_group": 1,
+            "best_additional": 0,
+            "unexpected": 1,
+        }
+    elif location == "league-fixture":
+        stages[0] = {
+            "id": "group-stage",
+            "type": "league_table",
+            "fixtures": [
+                {
+                    "match_id": "group-a-1",
+                    "home_team_id": "north-city",
+                    "away_team_id": "south-city",
+                    "unexpected": True,
+                }
+            ],
+        }
+    elif location == "league-band":
+        stages[0] = {
+            "id": "group-stage",
+            "type": "league_table",
+            "fixtures": [
+                {
+                    "match_id": "group-a-1",
+                    "home_team_id": "north-city",
+                    "away_team_id": "south-city",
+                }
+            ],
+            "qualification_bands": [
+                {"ranks": [1, 2], "destination": "final", "unexpected": True}
+            ],
+        }
+    elif location == "knockout-pairing":
+        stages[0] = {
+            "id": "group-stage",
+            "type": "knockout",
+            "pairing": {"mode": "fixed", "ties": [], "unexpected": True},
+            "legs": 1,
+        }
+    elif location == "completed-match":
+        completed_matches[0]["unexpected"] = True
+    else:
+        score = completed_matches[0]["score"]
+        assert isinstance(score, dict)
+        score["unexpected"] = 1
+
+    with pytest.raises(TournamentValidationError, match="unknown propert"):
+        load_tournament_document(document)
+
+
+def test_loader_and_team_reject_duplicate_aliases() -> None:
+    _require_package()
+    from tournament_forecaster.config import load_tournament_document
+    from tournament_forecaster.domain import Team
+    from tournament_forecaster.errors import TournamentValidationError
+
+    document = _document()
+    teams = document["teams"]
+    assert isinstance(teams, list) and isinstance(teams[0], dict)
+    teams[0]["aliases"] = ["North", "North"]
+
+    with pytest.raises(TournamentValidationError, match="aliases must be unique"):
+        load_tournament_document(document)
+    with pytest.raises(TournamentValidationError, match="aliases must be unique"):
+        Team(
+            id="north-city",
+            display_name="North City",
+            aliases=("North", "North"),
+        )
+
+
+@pytest.mark.parametrize(
+    ("provenance", "message"),
+    [
+        ({}, "kind"),
+        ({"kind": "preset", "unexpected": True}, "unknown propert"),
+        ({"kind": ""}, "kind"),
+        ({"kind": "preset", "source_id": "Source A"}, "stable ASCII identifier"),
+        ({"kind": "preset", "metadata": []}, "metadata must be a mapping"),
+    ],
+)
+def test_forecast_rejects_schema_invalid_provenance(
+    provenance: dict[str, object],
+    message: str,
+) -> None:
+    _require_package()
+    from tournament_forecaster.domain import Forecast
+    from tournament_forecaster.errors import TournamentValidationError
+
+    with pytest.raises(TournamentValidationError, match=message):
+        Forecast(
+            run_id="run-0001",
+            generated_at="2026-07-10T12:00:00+00:00",
+            tournament_id="synthetic-cup",
+            focus_team_id="north-city",
+            stage_probabilities={"group-stage": 1.0},
+            matchup_probabilities=(),
+            championship_probability=0.18,
+            confidence_intervals={"championship_probability": (0.12, 0.24)},
+            input_provenance=(provenance,),
+            warnings=(),
+        )
+
+
 def test_direct_domain_construction_rejects_non_team_values() -> None:
     _require_package()
     from tournament_forecaster.domain import Tournament
@@ -527,7 +843,7 @@ def test_tournament_rejects_malformed_sequence_containers(field: str, value: obj
             {
                 "id": "group-stage",
                 "type": "round_robin_groups",
-                "groups": {"a": ["north-city", "south-city"]},
+                "groups": {"A": ["north-city", "south-city"]},
             },
         ),
         "ratings": {"north-city": 1600.0, "south-city": 1500.0},

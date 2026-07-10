@@ -11,8 +11,55 @@ from .domain import CompletedMatch, Score, Team, Tournament
 from .errors import TournamentValidationError
 
 
+_ROOT_PROPERTIES = frozenset(
+    {
+        "schema_version",
+        "tournament",
+        "focus_team_id",
+        "teams",
+        "stages",
+        "ratings",
+        "completed_matches",
+        "metadata",
+    }
+)
+_TOURNAMENT_PROPERTIES = frozenset({"id", "display_name", "season"})
+_TEAM_PROPERTIES = frozenset({"id", "display_name", "aliases", "metadata"})
+_COMPLETED_MATCH_PROPERTIES = frozenset(
+    {
+        "match_id",
+        "stage_id",
+        "home_team_id",
+        "away_team_id",
+        "score",
+        "leg",
+        "winner_team_id",
+        "metadata",
+    }
+)
+_SCORE_PROPERTIES = frozenset({"home", "away"})
+
+
 def _reject_non_finite_json_constant(value: str) -> object:
     raise TournamentValidationError(f"JSON number {value} must be finite")
+
+
+def _parse_finite_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise TournamentValidationError(f"JSON number {value} must be finite")
+    return parsed
+
+
+def _validate_finite_numbers(value: object, label: str) -> None:
+    if isinstance(value, float) and not math.isfinite(value):
+        raise TournamentValidationError(f"{label} must contain only finite numbers")
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            _validate_finite_numbers(item, f"{label}.{key}")
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            _validate_finite_numbers(item, f"{label}[{index}]")
 
 
 def _mapping(value: object, label: str) -> Mapping[str, object]:
@@ -21,6 +68,18 @@ def _mapping(value: object, label: str) -> Mapping[str, object]:
     if not all(isinstance(key, str) for key in value):
         raise TournamentValidationError(f"{label} must use string keys")
     return value
+
+
+def _reject_unknown_properties(
+    document: Mapping[str, object],
+    allowed: frozenset[str],
+    label: str,
+) -> None:
+    unknown = sorted(set(document) - allowed)
+    if unknown:
+        raise TournamentValidationError(
+            f"{label} contains unknown properties: {', '.join(unknown)}"
+        )
 
 
 def _list(value: object, label: str) -> list[object]:
@@ -47,6 +106,7 @@ def _optional_mapping(document: Mapping[str, object], key: str, label: str) -> M
 
 
 def _team(document: Mapping[str, object], index: int) -> Team:
+    _reject_unknown_properties(document, _TEAM_PROPERTIES, f"teams[{index}]")
     aliases = _list(document.get("aliases", []), f"teams[{index}].aliases")
     return Team(
         id=_string(document.get("id"), f"teams[{index}].id"),
@@ -57,7 +117,13 @@ def _team(document: Mapping[str, object], index: int) -> Team:
 
 
 def _completed_match(document: Mapping[str, object], index: int) -> CompletedMatch:
+    _reject_unknown_properties(
+        document,
+        _COMPLETED_MATCH_PROPERTIES,
+        f"completed_matches[{index}]",
+    )
     score = _mapping(document.get("score"), f"completed_matches[{index}].score")
+    _reject_unknown_properties(score, _SCORE_PROPERTIES, f"completed_matches[{index}].score")
     winner_team_id = document.get("winner_team_id")
     if winner_team_id is not None:
         winner_team_id = _string(winner_team_id, f"completed_matches[{index}].winner_team_id")
@@ -80,13 +146,16 @@ def load_tournament_document(document: Mapping[str, object]) -> Tournament:
     """Convert a JSON-compatible tournament document into immutable domain values."""
 
     root = _mapping(document, "tournament document")
+    _validate_finite_numbers(root, "tournament document")
+    _reject_unknown_properties(root, _ROOT_PROPERTIES, "tournament document")
     tournament = _mapping(root.get("tournament"), "tournament")
+    _reject_unknown_properties(tournament, _TOURNAMENT_PROPERTIES, "tournament")
     teams = tuple(_team(_mapping(value, f"teams[{index}]"), index) for index, value in enumerate(_list(root.get("teams"), "teams")))
     stages = tuple(
         dict(_mapping(value, f"stages[{index}]"))
         for index, value in enumerate(_list(root.get("stages"), "stages"))
     )
-    ratings_document = _mapping(root.get("ratings", {}), "ratings")
+    ratings_document = _mapping(root.get("ratings"), "ratings")
     ratings: dict[str, float] = {}
     for team_id, rating in ratings_document.items():
         if (
@@ -98,7 +167,9 @@ def load_tournament_document(document: Mapping[str, object]) -> Tournament:
         ratings[team_id] = float(rating)
     completed_matches = tuple(
         _completed_match(_mapping(value, f"completed_matches[{index}]"), index)
-        for index, value in enumerate(_list(root.get("completed_matches", []), "completed_matches"))
+        for index, value in enumerate(
+            _list(root.get("completed_matches"), "completed matches")
+        )
     )
     season = tournament.get("season")
     if season is not None:
@@ -125,6 +196,7 @@ def load_tournament(path: Path) -> Tournament:
         document = json.loads(
             path.read_text(encoding="utf-8"),
             parse_constant=_reject_non_finite_json_constant,
+            parse_float=_parse_finite_float,
         )
     except json.JSONDecodeError as error:
         raise TournamentValidationError(f"invalid tournament JSON: {error.msg}") from error

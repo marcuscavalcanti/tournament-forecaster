@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 from zipfile import ZipFile
 
+import pytest
+
 
 def _require_package() -> None:
     assert importlib.util.find_spec("tournament_forecaster") is not None, (
@@ -38,8 +40,8 @@ def _representative_tournament_document() -> dict[str, object]:
                 "id": "group-stage",
                 "type": "round_robin_groups",
                 "groups": {
-                    "a": ["north-city", "south-city"],
-                    "b": ["east-city", "west-city"],
+                    "A": ["north-city", "south-city"],
+                    "B": ["east-city", "west-city"],
                 },
                 "rounds_per_pair": 1,
                 "points": {"win": 3, "draw": 1, "loss": 0},
@@ -138,21 +140,25 @@ def _draft_2020_validator() -> Any:
 
 
 def test_schema_resources_validate_representative_domain_documents() -> None:
+    from tournament_forecaster.config import load_tournament_document
+
     Draft202012Validator = _draft_2020_validator()
     schemas = _schema_resources()
 
     tournament_schema = schemas["tournament.schema.json"]
     forecast_schema = schemas["forecast.schema.json"]
-    assert {"stable_id", "probability", "score"} <= set(tournament_schema["$defs"])
+    assert {"stable_id", "group_label", "probability", "score"} <= set(
+        tournament_schema["$defs"]
+    )
     assert {"stable_id", "probability", "matchup", "confidence_interval", "provenance"} <= set(
         forecast_schema["$defs"]
     )
     for schema in schemas.values():
         Draft202012Validator.check_schema(schema)
 
-    tournament_errors = list(
-        Draft202012Validator(tournament_schema).iter_errors(_representative_tournament_document())
-    )
+    tournament_document = _representative_tournament_document()
+    load_tournament_document(tournament_document)
+    tournament_errors = list(Draft202012Validator(tournament_schema).iter_errors(tournament_document))
     forecast_errors = list(
         Draft202012Validator(forecast_schema).iter_errors(_representative_forecast_document())
     )
@@ -161,6 +167,9 @@ def test_schema_resources_validate_representative_domain_documents() -> None:
 
 
 def test_schema_resources_reject_adversarial_documents() -> None:
+    from tournament_forecaster.config import load_tournament_document
+    from tournament_forecaster.errors import TournamentValidationError
+
     Draft202012Validator = _draft_2020_validator()
     schemas = _schema_resources()
     tournament_validator = Draft202012Validator(schemas["tournament.schema.json"])
@@ -193,7 +202,7 @@ def test_schema_resources_reject_adversarial_documents() -> None:
     tournament_cases.append(("leg below one", invalid_leg))
 
     duplicate_group_team = deepcopy(_representative_tournament_document())
-    duplicate_group_team["stages"][0]["groups"]["a"] = [  # type: ignore[index]
+    duplicate_group_team["stages"][0]["groups"]["A"] = [  # type: ignore[index]
         "north-city",
         "north-city",
     ]
@@ -213,6 +222,8 @@ def test_schema_resources_reject_adversarial_documents() -> None:
 
     for label, document in tournament_cases:
         assert list(tournament_validator.iter_errors(document)), label
+        with pytest.raises(TournamentValidationError):
+            load_tournament_document(document)
 
     forecast_cases: list[tuple[str, dict[str, object]]] = []
 

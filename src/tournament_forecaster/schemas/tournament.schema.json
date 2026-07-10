@@ -7,6 +7,10 @@
       "type": "string",
       "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
     },
+    "group_label": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*$"
+    },
     "probability": {
       "type": "number",
       "minimum": 0,
@@ -91,7 +95,7 @@
         "groups": {
           "type": "object",
           "minProperties": 1,
-          "propertyNames": {"$ref": "#/$defs/stable_id"},
+          "propertyNames": {"$ref": "#/$defs/group_label"},
           "additionalProperties": {"$ref": "#/$defs/team_roster"}
         },
         "rounds_per_pair": {"type": "integer", "minimum": 1},

@@ -13,9 +13,51 @@ from .errors import TournamentValidationError
 
 
 _STABLE_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+_GROUP_LABEL = re.compile(r"[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*\Z")
 _OUTPUT_KEY = re.compile(r"[a-z0-9]+(?:[-_][a-z0-9]+)*\Z")
 _STAGE_TYPES = frozenset({"round_robin_groups", "league_table", "knockout"})
 _PAIRING_MODES = frozenset({"fixed", "seeded_draw", "open_draw"})
+_TIEBREAKERS = frozenset(
+    {"points", "goal_difference", "goals_for", "wins", "rating", "team_id"}
+)
+_GROUP_STAGE_PROPERTIES = frozenset(
+    {
+        "id",
+        "type",
+        "groups",
+        "rounds_per_pair",
+        "points",
+        "tiebreakers",
+        "qualification",
+        "metadata",
+    }
+)
+_LEAGUE_STAGE_PROPERTIES = frozenset(
+    {
+        "id",
+        "type",
+        "fixtures",
+        "points",
+        "tiebreakers",
+        "qualification_bands",
+        "metadata",
+    }
+)
+_KNOCKOUT_STAGE_PROPERTIES = frozenset(
+    {
+        "id",
+        "type",
+        "pairing",
+        "legs",
+        "home_away_order",
+        "aggregate_tiebreak",
+        "away_goals_rule",
+        "metadata",
+    }
+)
+_PROVENANCE_PROPERTIES = frozenset(
+    {"kind", "name", "source", "source_id", "uri", "retrieved_at", "metadata"}
+)
 
 
 def _stable_id(value: object, label: str) -> str:
@@ -27,6 +69,14 @@ def _stable_id(value: object, label: str) -> str:
 def _output_key(value: object, label: str) -> str:
     if not isinstance(value, str) or not _OUTPUT_KEY.fullmatch(value):
         raise TournamentValidationError(f"{label} must be an ASCII output key")
+    return value
+
+
+def _group_label(value: object) -> str:
+    if not isinstance(value, str) or not _GROUP_LABEL.fullmatch(value):
+        raise TournamentValidationError(
+            "group label must use ASCII letters or numbers with internal - or _ separators"
+        )
     return value
 
 
@@ -63,7 +113,55 @@ def _mapping(value: object, label: str) -> Mapping[str, object]:
     return value
 
 
+def _reject_unknown_properties(
+    value: Mapping[str, object],
+    allowed: frozenset[str],
+    label: str,
+) -> None:
+    if not all(isinstance(key, str) for key in value):
+        raise TournamentValidationError(f"{label} must use string property names")
+    unknown = sorted(set(value) - allowed)
+    if unknown:
+        raise TournamentValidationError(
+            f"{label} contains unknown properties: {', '.join(unknown)}"
+        )
+
+
+def _boolean(value: object, label: str) -> bool:
+    if not isinstance(value, bool):
+        raise TournamentValidationError(f"{label} must be a boolean")
+    return value
+
+
+def _validate_points(value: object, label: str) -> None:
+    points = _mapping(value, label)
+    _reject_unknown_properties(points, frozenset({"win", "draw", "loss"}), label)
+    for result in ("win", "draw", "loss"):
+        _integer(points.get(result), f"{label} {result}")
+
+
+def _validate_tiebreakers(value: object, label: str) -> None:
+    tiebreakers = _sequence(value, label)
+    if not tiebreakers:
+        raise TournamentValidationError(f"{label} must not be empty")
+    normalized: list[str] = []
+    for value_item in tiebreakers:
+        item = _text(value_item, f"{label} item")
+        if item not in _TIEBREAKERS:
+            raise TournamentValidationError(f"{label} contains an unsupported rule")
+        normalized.append(item)
+    if len(normalized) != len(set(normalized)):
+        raise TournamentValidationError(f"{label} must contain unique rules")
+
+
+def _validate_stage_metadata(stage: Mapping[str, object], label: str) -> None:
+    if "metadata" in stage:
+        _mapping(stage["metadata"], f"{label} metadata")
+
+
 def _freeze(value: object) -> object:
+    if isinstance(value, float) and not math.isfinite(value):
+        raise TournamentValidationError("nested metadata must contain only finite numbers")
     if isinstance(value, Mapping):
         return MappingProxyType({str(key): _freeze(item) for key, item in value.items()})
     if isinstance(value, (list, tuple)):
@@ -98,6 +196,8 @@ class Team:
         aliases = _sequence(self.aliases, "team aliases")
         for alias in aliases:
             _text(alias, "team alias")
+        if len(aliases) != len(set(aliases)):
+            raise TournamentValidationError("team aliases must be unique")
         if not isinstance(self.metadata, Mapping):
             raise TournamentValidationError("team metadata must be a mapping")
         object.__setattr__(self, "aliases", aliases)
@@ -283,13 +383,27 @@ class Forecast:
         provenance = _sequence(self.input_provenance, "forecast input provenance")
         if not all(isinstance(record, Mapping) for record in provenance):
             raise TournamentValidationError("forecast input provenance must contain mappings")
+        normalized_provenance: list[Mapping[str, object]] = []
+        for index, record in enumerate(provenance):
+            assert isinstance(record, Mapping)
+            label = f"forecast input provenance[{index}]"
+            _reject_unknown_properties(record, _PROVENANCE_PROPERTIES, label)
+            _text(record.get("kind"), f"{label} kind")
+            for key in ("name", "source", "uri", "retrieved_at"):
+                if key in record:
+                    _text(record[key], f"{label} {key}")
+            if "source_id" in record:
+                _stable_id(record["source_id"], f"{label} source id")
+            if "metadata" in record:
+                _mapping(record["metadata"], f"{label} metadata")
+            normalized_provenance.append(_freeze_mapping(record))
         warnings = _sequence(self.warnings, "forecast warnings")
         for warning in warnings:
             _text(warning, "forecast warning")
         if self.council is not None and not isinstance(self.council, Mapping):
             raise TournamentValidationError("forecast council metadata must be a mapping")
         object.__setattr__(self, "confidence_intervals", MappingProxyType(normalized_intervals))
-        object.__setattr__(self, "input_provenance", tuple(_freeze_mapping(record) for record in provenance))
+        object.__setattr__(self, "input_provenance", tuple(normalized_provenance))
         object.__setattr__(self, "warnings", warnings)
         if self.council is not None:
             object.__setattr__(self, "council", _freeze_mapping(self.council))
@@ -318,12 +432,15 @@ def _validate_group_stage(
     team_ids: set[str],
 ) -> dict[str, str]:
     stage_id = str(stage["id"])
+    label = f"group stage {stage_id}"
+    _reject_unknown_properties(stage, _GROUP_STAGE_PROPERTIES, label)
+    _validate_stage_metadata(stage, label)
     groups = _mapping(stage.get("groups"), f"group stage {stage_id} groups")
     if not groups:
         raise TournamentValidationError("round-robin group stage must define groups")
     memberships: dict[str, str] = {}
     for group_id_value, roster_value in groups.items():
-        group_id = _stable_id(group_id_value, "group id")
+        group_id = _group_label(group_id_value)
         roster = _sequence(roster_value, f"group {group_id} roster")
         if len(roster) < 2:
             raise TournamentValidationError("group roster must contain at least two teams")
@@ -338,6 +455,27 @@ def _validate_group_stage(
                 raise TournamentValidationError("a team cannot appear in multiple groups")
             local_ids.add(team_id)
             memberships[team_id] = group_id
+    if "rounds_per_pair" in stage:
+        _integer(stage["rounds_per_pair"], f"{label} rounds per pair", minimum=1)
+    if "points" in stage:
+        _validate_points(stage["points"], f"{label} points")
+    if "tiebreakers" in stage:
+        _validate_tiebreakers(stage["tiebreakers"], f"{label} tiebreakers")
+    if "qualification" in stage:
+        qualification = _mapping(stage["qualification"], f"{label} qualification")
+        _reject_unknown_properties(
+            qualification,
+            frozenset({"direct_per_group", "best_additional"}),
+            f"{label} qualification",
+        )
+        _integer(
+            qualification.get("direct_per_group"),
+            f"{label} direct qualification count",
+        )
+        _integer(
+            qualification.get("best_additional"),
+            f"{label} additional qualification count",
+        )
     return memberships
 
 
@@ -346,10 +484,20 @@ def _validate_league_stage(
     team_ids: set[str],
 ) -> dict[str, frozenset[str]]:
     stage_id = str(stage["id"])
+    label = f"league stage {stage_id}"
+    _reject_unknown_properties(stage, _LEAGUE_STAGE_PROPERTIES, label)
+    _validate_stage_metadata(stage, label)
     fixtures = _sequence(stage.get("fixtures"), f"league stage {stage_id} fixtures")
     fixture_teams: dict[str, frozenset[str]] = {}
     for fixture_value in fixtures:
         fixture = _mapping(fixture_value, "league fixture")
+        _reject_unknown_properties(
+            fixture,
+            frozenset({"match_id", "home_team_id", "away_team_id", "metadata"}),
+            "league fixture",
+        )
+        if "metadata" in fixture:
+            _mapping(fixture["metadata"], "league fixture metadata")
         match_id = _stable_id(fixture.get("match_id"), "league fixture match id")
         home_team_id = _stable_id(fixture.get("home_team_id"), "league fixture home team id")
         away_team_id = _stable_id(fixture.get("away_team_id"), "league fixture away team id")
@@ -360,12 +508,44 @@ def _validate_league_stage(
         if match_id in fixture_teams:
             raise TournamentValidationError("league fixture match ids must be unique")
         fixture_teams[match_id] = frozenset({home_team_id, away_team_id})
+    if "points" in stage:
+        _validate_points(stage["points"], f"{label} points")
+    if "tiebreakers" in stage:
+        _validate_tiebreakers(stage["tiebreakers"], f"{label} tiebreakers")
+    if "qualification_bands" in stage:
+        bands = _sequence(stage["qualification_bands"], f"{label} qualification bands")
+        for band_value in bands:
+            band = _mapping(band_value, f"{label} qualification band")
+            _reject_unknown_properties(
+                band,
+                frozenset({"ranks", "destination"}),
+                f"{label} qualification band",
+            )
+            ranks = _sequence(band.get("ranks"), f"{label} qualification band ranks")
+            if len(ranks) != 2:
+                raise TournamentValidationError(
+                    f"{label} qualification band ranks must contain two values"
+                )
+            _integer(ranks[0], f"{label} qualification band first rank", minimum=1)
+            _integer(ranks[1], f"{label} qualification band last rank", minimum=1)
+            _stable_id(
+                band.get("destination"),
+                f"{label} qualification band destination",
+            )
     return fixture_teams
 
 
 def _validate_knockout_stage(stage: Mapping[str, object]) -> int:
     stage_id = str(stage["id"])
+    label = f"knockout stage {stage_id}"
+    _reject_unknown_properties(stage, _KNOCKOUT_STAGE_PROPERTIES, label)
+    _validate_stage_metadata(stage, label)
     pairing = _mapping(stage.get("pairing"), f"knockout stage {stage_id} pairing")
+    _reject_unknown_properties(
+        pairing,
+        frozenset({"mode", "ties"}),
+        f"{label} pairing",
+    )
     mode = pairing.get("mode")
     if mode not in _PAIRING_MODES:
         raise TournamentValidationError("knockout pairing mode must be fixed, seeded_draw, or open_draw")
@@ -383,6 +563,11 @@ def _validate_knockout_stage(stage: Mapping[str, object]) -> int:
     legs = stage.get("legs")
     if isinstance(legs, bool) or legs not in {1, 2}:
         raise TournamentValidationError("knockout stage must use one or two legs")
+    for key in ("home_away_order", "aggregate_tiebreak"):
+        if key in stage:
+            _text(stage[key], f"{label} {key}")
+    if "away_goals_rule" in stage:
+        _boolean(stage["away_goals_rule"], f"{label} away goals rule")
     return int(legs)
 
 
