@@ -68,11 +68,11 @@ resource_path(*parts: str) -> AbstractContextManager[Path]
 - Domain types include `Team`, `Score`, `CompletedMatch`, `Tournament`, `SimulationOptions`, `MatchupProbability`, and `Forecast`.
 - `Forecast.to_dict()` emits schema version 2, stable run ID, focus team, stage probabilities, matchup probabilities, championship probability, confidence intervals, provenance, warnings, and optional council metadata.
 
-- [ ] Write tests that fail because the package, typed config loader, stable-ID validation, duplicate-result rejection, and atomic writers do not exist.
-- [ ] Configure Hatchling to package both `src/tournament_forecaster` and the temporary `worldcup_brazil` compatibility package; retain both console script names.
-- [ ] Implement immutable domain types, semantic validation, schema resources, and standard-library atomic writes.
-- [ ] Verify Task 1 tests and the legacy baseline.
-- [ ] Commit `feat: add generic tournament domain and schema`.
+- [x] Write tests that fail because the package, typed config loader, stable-ID validation, duplicate-result rejection, and atomic writers do not exist.
+- [x] Configure Hatchling to package both `src/tournament_forecaster` and the temporary `worldcup_brazil` compatibility package; retain both console script names.
+- [x] Implement immutable domain types, semantic validation, schema resources, and standard-library atomic writes.
+- [x] Verify Task 1 tests and the legacy baseline.
+- [x] Commit `feat: add generic tournament domain and schema` plus the adversarial contract hardening commits.
 
 ### Task 2: Deterministic Stage Engine and Monte Carlo
 
