@@ -110,11 +110,11 @@ simulate_tournament(
 - One-leg ties resolve regulation draws with extra time and penalties. Two-leg ties aggregate both legs, apply configured tiebreaks, and support a one-leg final.
 - Completed group, league, and knockout matches are locked by explicit match IDs. Partially completed two-leg ties simulate only missing legs.
 
-- [ ] Write failing tests for each stage type, completed-result locking, typed entrant resolution, pairing determinism, two-leg aggregate ties, focus-team stage reach, matchup distributions, monotonicity, and deterministic replay.
-- [ ] Implement rating-derived score simulation using one local `random.Random(seed)` and stable traversal order.
-- [ ] Implement complete-tournament iteration and Wilson confidence intervals without importing legacy modules.
-- [ ] Verify all generic engine tests and the legacy baseline.
-- [ ] Commit `feat: add generic tournament simulation engine`.
+- [x] Write failing tests for each stage type, completed-result locking, typed entrant resolution, pairing determinism, two-leg aggregate ties, focus-team stage reach, matchup distributions, monotonicity, and deterministic replay.
+- [x] Implement rating-derived score simulation using one local `random.Random(seed)` and stable traversal order.
+- [x] Implement complete-tournament iteration and Wilson confidence intervals without importing legacy modules.
+- [x] Verify all generic engine tests and the legacy baseline.
+- [x] Commit `feat: add generic tournament simulation engine` plus the adversarial fact, terminal, and locked-bracket fixes.
 
 ### Task 3: Packaged Examples and Format Contracts
 
