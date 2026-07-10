@@ -24,6 +24,11 @@ secrets/
 
 # Artefatos de execução
 data/
+# Packaged contracts are source data, not runtime output.
+!src/tournament_forecaster/data/
+!src/tournament_forecaster/data/**
+!presets/
+!presets/**
 outputs/
 .backups/
 .worktrees/
