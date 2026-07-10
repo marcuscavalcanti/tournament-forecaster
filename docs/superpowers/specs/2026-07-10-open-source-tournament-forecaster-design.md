@@ -405,18 +405,55 @@ Supported Python versions are 3.11 through 3.13.
 Primary onboarding:
 
 ```bash
-pip install tournament-forecaster
-tournament-forecast validate --config examples/synthetic-cup/tournament.json
-tournament-forecast simulate --config examples/synthetic-cup/tournament.json --focus-team north-city
+git clone https://github.com/marcuscavalcanti/tournament-forecaster.git
+cd tournament-forecaster
+python -m pip install -e .
+tournament-forecast quickstart
 ```
 
 The existing `worldcup-brazil-report` console command remains as a deprecated alias for one release cycle.
+
+### 10.1 Clone-to-first-output contract
+
+`tournament-forecast quickstart` is the mandatory first-run path. It requires only Python 3.11 or newer and the cloned repository. It does not require API keys, network access, a copied configuration file, `make`, `uv`, browser automation, provider CLIs, or user input.
+
+The command performs this complete flow:
+
+1. Load the bundled synthetic tournament.
+2. Validate its teams, fixtures, stage graph, ratings, and focus team.
+3. Run a deterministic simulation with a documented seed and 10,000 iterations.
+4. Print a compact stage-probability summary in the terminal.
+5. Atomically create:
+
+```text
+outputs/synthetic-cup/north-city/forecast.json
+outputs/synthetic-cup/north-city/report.md
+outputs/synthetic-cup/north-city/bracket.svg
+```
+
+6. Print the exact next commands for changing the focus team, copying a competition template, enabling live results, and enabling the optional council.
+
+Repeated runs with the same seed produce byte-identical JSON probability fields. Existing unrelated files are never deleted. The command accepts `--output-dir`, `--seed`, and `--iterations` for explicit overrides.
+
+For contributors, `make quickstart` delegates to the same CLI behavior. The README does not require Make because it must work on Windows as well as macOS and Linux.
+
+After the first output, a user can scaffold a competition without writing Python:
+
+```bash
+tournament-forecast init my-tournament --template group-knockout
+tournament-forecast validate --config my-tournament/tournament.json
+tournament-forecast simulate --config my-tournament/tournament.json --focus-team my-team
+```
+
+`init` supports `group-knockout`, `league-knockout`, and `group-two-leg-knockout` templates. Generated files contain explanatory English comments in an adjacent README because strict JSON itself cannot contain comments.
 
 ## 11. Command-Line Interface
 
 The generic CLI exposes:
 
 ```text
+tournament-forecast quickstart
+tournament-forecast init
 tournament-forecast validate
 tournament-forecast simulate
 tournament-forecast report
@@ -431,6 +468,8 @@ tournament-forecast providers inspect
 `validate` is offline and checks schema, stage graph, entrants, team references, result consistency, and deterministic prerequisites before any external call.
 
 `simulate` is offline by default. Provider updates and the council require explicit flags or preset settings.
+
+`quickstart` and `init` are covered by wheel-install tests, not only editable-checkout tests, so packaging errors cannot leave the documented onboarding falsely green.
 
 ## 12. Error Handling and Resilience
 
@@ -486,13 +525,15 @@ Three offline acceptance presets prove product scope:
 
 GitHub Actions runs on Python 3.11, 3.12, and 3.13 without API keys or network-dependent tests. Required checks include tests, compile, lint, type checking, schema validation, package build, English-surface scan, secret scan, and preset contracts.
 
+A dedicated onboarding job builds a wheel, creates a clean virtual environment, installs only that wheel, clears all supported credential variables, blocks network access, runs `tournament-forecast quickstart`, and validates the three generated artifacts. Linux runs on every pull request; macOS and Windows run before release.
+
 Network integration tests are opt-in and never required for pull requests from forks.
 
 ## 14. Documentation and Governance
 
 The public repository includes:
 
-- `README.md`: value proposition, five-minute quick start, architecture summary, three competition examples, output example, limitations, and links.
+- `README.md`: value proposition, clone-to-first-output commands at the top, architecture summary, three competition examples, output example, limitations, and links.
 - `docs/CONFIGURATION.md`: complete schema reference.
 - `docs/ARCHITECTURE.md`: stage engine, simulation flow, council boundary, and compatibility model.
 - `docs/ADDING_A_COMPETITION.md`: authoring and validating a preset.
@@ -513,7 +554,7 @@ The repository may become public only when all of these conditions hold:
 3. Gitleaks scans the entire reachable history with zero unresolved findings.
 4. No runtime outputs, private transcripts, credentials, local configuration, or personal filesystem paths are tracked.
 5. Personal LinkedIn content and hashtags live only in an optional example or user config.
-6. The generic CLI installs and runs the synthetic example in less than five minutes without keys.
+6. A clean clone reaches valid JSON, Markdown, and SVG outputs through the documented four-line flow in less than five minutes without keys, network, configuration edits, Make, or uv.
 7. CI passes across Python 3.11 through 3.13.
 8. World Cup, Champions League, and Libertadores preset contracts pass offline.
 9. Seeded World Cup Monte Carlo goldens remain bit-identical through the generic extraction.
@@ -535,7 +576,7 @@ Add the focus-team accessor, remove literal `Brasil` behavior, introduce schema 
 
 ### Milestone 2: Generic package and fixed bracket
 
-Create `tournament_forecaster`, move group standings and fixed one-leg knockout simulation behind generic interfaces, extract the FIFA calendar adapter behind the generic results-provider protocol, add the synthetic example, and retain `worldcup_brazil` as a shim.
+Create `tournament_forecaster`, move group standings and fixed one-leg knockout simulation behind generic interfaces, extract the FIFA calendar adapter behind the generic results-provider protocol, add `quickstart`, `init`, and the synthetic example, and retain `worldcup_brazil` as a shim.
 
 ### Milestone 3: Stage engine completion
 
@@ -561,6 +602,6 @@ Build and install the package in a clean environment, run all release gates, rec
 
 ## 18. Success Criteria
 
-A new user can install the package, select a preset or provide a schema-valid tournament, choose any focus team, simulate the complete competition, and receive coherent stage and championship probabilities without editing Python code.
+A new user can clone the repository and generate valid JSON, Markdown, and SVG forecasts through the documented four-line quick start without credentials, network access, configuration edits, or prior knowledge of the project. The same user can then select a preset or scaffold a schema-valid tournament, choose any focus team, simulate the complete competition, and receive coherent stage and championship probabilities without editing Python code.
 
 The existing Brazil workflow continues producing valid forecasts during migration. At public release, the repository contains no Brazil-specific behavior in the generic core, no Portuguese public surface, and no claim of competition support that lacks a passing offline contract.
