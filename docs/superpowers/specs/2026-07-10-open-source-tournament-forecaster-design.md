@@ -275,6 +275,113 @@ Public defaults are safe and non-executing:
 
 The basic history scan found no known secret formats or tracked runtime artifacts. This does not replace the dedicated entropy and history scan required by the release gate.
 
+### 8.1 Provider onboarding and credential acquisition
+
+The repository includes `docs/PROVIDERS.md` and `.env.example`. Provider documentation distinguishes three different concepts that must not be conflated:
+
+1. **Authentication keys:** secrets used to authorize paid or quota-controlled APIs.
+2. **Competition identifiers:** non-secret IDs such as a competition, season, or stage identifier used to select the correct feed.
+3. **Local bridges:** explicitly enabled CLI programs that may use their own login instead of an API key.
+
+The quick-start simulation requires none of them. Missing optional credentials disable only the corresponding provider or council slot.
+
+The provider guide contains a table with the environment variable, official account page, billing requirement, validation command, and failure behavior for every bundled integration:
+
+| Provider | Purpose | Credential source | Environment variable |
+| --- | --- | --- | --- |
+| FIFA calendar feed | Completed group and knockout results | No authentication key in the currently used public endpoint | None |
+| The Odds API | Structured outright and match odds | [The Odds API access and documentation](https://the-odds-api.com/liveapi/guides/v4/) | `THE_ODDS_API_KEY` |
+| OpenAI | Optional council model | [OpenAI API keys](https://platform.openai.com/api-keys) | `OPENAI_API_KEY` |
+| Anthropic | Optional council model | [Anthropic Console API keys](https://console.anthropic.com/settings/keys) | `ANTHROPIC_API_KEY` |
+| Perplexity | Optional web-grounded council model | [Perplexity API Portal](https://console.perplexity.ai/) | `PERPLEXITY_API_KEY` |
+| DeepSeek | Optional council model | [DeepSeek API keys](https://platform.deepseek.com/api_keys) | `DEEPSEEK_API_KEY` |
+| Google Gemini | Optional council model | [Google AI Studio API keys](https://aistudio.google.com/apikey) | `GEMINI_API_KEY` |
+
+Each entry explains how to create the account or project, enable billing when required, create the least-privileged key available, store it in `.env`, verify it with `tournament-forecast doctor`, rotate it, and revoke it. The guide links to current official documentation instead of freezing provider-specific quotas or pricing in the repository.
+
+`.env.example` contains only placeholders:
+
+```dotenv
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
+PERPLEXITY_API_KEY=
+DEEPSEEK_API_KEY=
+GEMINI_API_KEY=
+THE_ODDS_API_KEY=
+```
+
+The documentation explicitly prohibits placing credentials in tournament JSON, command-line arguments, committed files, source URLs, screenshots, or issue reports.
+
+### 8.2 FIFA results discovery and synchronization
+
+The bundled FIFA adapter uses the public calendar endpoint currently exercised by the Brazil workflow:
+
+```text
+https://api.fifa.com/api/v3/calendar/matches
+```
+
+The endpoint was verified on 2026-07-10 to respond without an authentication key. It is treated as an optional, undocumented external feed whose shape or availability may change; it is not presented as a guaranteed public API.
+
+The provider guide explains how to discover the non-secret selectors for another FIFA competition:
+
+1. Open the competition in the FIFA Data Centre.
+2. In browser developer tools, filter Network requests for `api/v3/calendar/matches`.
+3. Record the `idCompetition` and `idSeason` query parameters plus the returned `StageName`, team codes, and match IDs.
+4. Save one response as a local fixture and run the provider in dry-run mode.
+5. Confirm that every external team code maps to exactly one configured team and every stage maps to exactly one tournament stage.
+6. Apply only final results after reviewing additions, replacements, unmatched fixtures, and conflicts.
+
+The generic provider configuration is explicit:
+
+```json
+{
+  "results_provider": {
+    "type": "fifa_calendar",
+    "base_url": "https://api.fifa.com/api/v3/calendar/matches",
+    "competition_id": "17",
+    "season_id": "285023",
+    "language": "en",
+    "stage_map": {
+      "First Stage": "group-stage",
+      "Round of 16": "round-of-16",
+      "Quarter-finals": "quarter-finals",
+      "Semi-finals": "semi-finals",
+      "Final": "final"
+    }
+  }
+}
+```
+
+Competition and season IDs are preset data, never hardcoded in the generic provider. The adapter ingests both group and knockout results. A normalized completed match records provider, external match ID, stage ID, teams, regular score, penalty score when present, winner, status, match date, source URL, and retrieval timestamp.
+
+The synchronization command is preview-first:
+
+```bash
+tournament-forecast update-results \
+  --config presets/world-cup-2026/tournament.json \
+  --provider fifa-calendar \
+  --dry-run
+
+tournament-forecast update-results \
+  --config presets/world-cup-2026/tournament.json \
+  --provider fifa-calendar \
+  --apply
+```
+
+An external result is accepted only when it matches a configured fixture or a uniquely resolvable knockout tie. Unmatched teams, ambiguous aliases, non-final matches, impossible stages, and conflicting scores fail before the ledger is written. Writes are atomic. Group results update standings; knockout results lock winners, penalty outcomes, and future bracket slots.
+
+JSON and CSV import remain first-class fallbacks for competitions without a supported live provider or when the FIFA endpoint is unavailable. Provider failure never fabricates a result. A tournament chooses between `required`, `cached_with_ttl`, and `best_effort` freshness policies.
+
+The public CLI also exposes:
+
+```text
+tournament-forecast providers list
+tournament-forecast providers doctor
+tournament-forecast providers inspect --provider fifa-calendar
+```
+
+`providers inspect` prints resolved non-secret settings, discovered competition and stage metadata, last successful fetch, cache age, and redacted request URLs. It never prints credential values.
+
 ## 9. Licensing, Data, and Trademarks
 
 Source code is MIT licensed. Example data is governed separately:
@@ -316,6 +423,9 @@ tournament-forecast report
 tournament-forecast doctor
 tournament-forecast update-results
 tournament-forecast update-odds
+tournament-forecast providers list
+tournament-forecast providers doctor
+tournament-forecast providers inspect
 ```
 
 `validate` is offline and checks schema, stage graph, entrants, team references, result consistency, and deterministic prerequisites before any external call.
@@ -386,6 +496,8 @@ The public repository includes:
 - `docs/CONFIGURATION.md`: complete schema reference.
 - `docs/ARCHITECTURE.md`: stage engine, simulation flow, council boundary, and compatibility model.
 - `docs/ADDING_A_COMPETITION.md`: authoring and validating a preset.
+- `docs/PROVIDERS.md`: obtaining credentials, discovering competition identifiers, configuring result and odds providers, and running safe dry-runs.
+- `docs/ADDING_A_PROVIDER.md`: provider protocol, normalization, redaction, fixtures, and contract tests.
 - `docs/MIGRATION_FROM_WORLDCUP_BRAZIL.md`: aliases and deprecation dates.
 - `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, `NOTICE.md`, issue templates, and pull-request template.
 - Repository topics and description aligned with tournament simulation, Monte Carlo, football, bracket forecasting, and multi-agent analysis.
@@ -407,13 +519,15 @@ The repository may become public only when all of these conditions hold:
 9. Seeded World Cup Monte Carlo goldens remain bit-identical through the generic extraction.
 10. English council shadow tests satisfy structural and numeric invariants before replacing the Portuguese migration oracle.
 11. Every bundled dataset has explicit provenance and redistribution status.
-12. README claims match implemented formats; no roadmap feature is presented as available.
+12. Provider documentation covers credential acquisition, secure storage, dry-run validation, rotation, and revocation.
+13. FIFA result synchronization passes offline contract fixtures for both group and knockout matches, including penalties and conflict rejection.
+14. README claims match implemented formats; no roadmap feature is presented as available.
 
 ## 16. Migration Sequence
 
 ### Milestone 0: Safety baseline
 
-Add CI, MIT and governance documents, full-history scanning, deterministic goldens, safe shell and bridge defaults, and branch normalization. Keep repository private.
+Add CI, MIT and governance documents, full-history scanning, deterministic goldens, safe shell and bridge defaults, provider onboarding documentation, and branch normalization. Keep repository private.
 
 ### Milestone 1: Focus-team extraction
 
@@ -421,7 +535,7 @@ Add the focus-team accessor, remove literal `Brasil` behavior, introduce schema 
 
 ### Milestone 2: Generic package and fixed bracket
 
-Create `tournament_forecaster`, move group standings and fixed one-leg knockout simulation behind generic interfaces, add the synthetic example, and retain `worldcup_brazil` as a shim.
+Create `tournament_forecaster`, move group standings and fixed one-leg knockout simulation behind generic interfaces, extract the FIFA calendar adapter behind the generic results-provider protocol, add the synthetic example, and retain `worldcup_brazil` as a shim.
 
 ### Milestone 3: Stage engine completion
 
