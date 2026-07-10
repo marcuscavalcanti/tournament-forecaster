@@ -128,6 +128,68 @@
       },
       "additionalProperties": false
     },
+    "group_rank_source": {
+      "type": "object",
+      "required": ["type", "stage_id", "group", "rank"],
+      "properties": {
+        "type": {"const": "group_rank"},
+        "stage_id": {"$ref": "#/$defs/stable_id"},
+        "group": {"$ref": "#/$defs/group_label"},
+        "rank": {"type": "integer", "minimum": 1}
+      },
+      "additionalProperties": false
+    },
+    "best_additional_source": {
+      "type": "object",
+      "required": ["type", "stage_id", "rank"],
+      "properties": {
+        "type": {"const": "best_additional"},
+        "stage_id": {"$ref": "#/$defs/stable_id"},
+        "rank": {"type": "integer", "minimum": 1}
+      },
+      "additionalProperties": false
+    },
+    "league_rank_source": {
+      "type": "object",
+      "required": ["type", "stage_id", "rank"],
+      "properties": {
+        "type": {"const": "league_rank"},
+        "stage_id": {"$ref": "#/$defs/stable_id"},
+        "rank": {"type": "integer", "minimum": 1}
+      },
+      "additionalProperties": false
+    },
+    "match_winner_source": {
+      "type": "object",
+      "required": ["type", "match_id"],
+      "properties": {
+        "type": {"const": "match_winner"},
+        "match_id": {"$ref": "#/$defs/stable_id"}
+      },
+      "additionalProperties": false
+    },
+    "entrant_source": {
+      "oneOf": [
+        {"$ref": "#/$defs/group_rank_source"},
+        {"$ref": "#/$defs/best_additional_source"},
+        {"$ref": "#/$defs/league_rank_source"},
+        {"$ref": "#/$defs/match_winner_source"}
+      ]
+    },
+    "knockout_tie": {
+      "type": "object",
+      "required": ["id", "entrants"],
+      "properties": {
+        "id": {"$ref": "#/$defs/stable_id"},
+        "entrants": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {"$ref": "#/$defs/entrant_source"}
+        }
+      },
+      "additionalProperties": false
+    },
     "league_stage": {
       "type": "object",
       "required": ["id", "type", "fixtures"],
@@ -155,10 +217,7 @@
         "mode": {"enum": ["fixed", "seeded_draw", "open_draw"]},
         "ties": {
           "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": true
-          }
+          "items": {"$ref": "#/$defs/knockout_tie"}
         }
       },
       "additionalProperties": false
@@ -172,7 +231,7 @@
         "pairing": {"$ref": "#/$defs/knockout_pairing"},
         "legs": {"type": "integer", "enum": [1, 2]},
         "home_away_order": {"type": "string", "minLength": 1},
-        "aggregate_tiebreak": {"type": "string", "minLength": 1},
+        "aggregate_tiebreak": {"enum": ["extra_time_then_penalties", "penalties"]},
         "away_goals_rule": {"type": "boolean"},
         "metadata": {"$ref": "#/$defs/metadata"}
       },

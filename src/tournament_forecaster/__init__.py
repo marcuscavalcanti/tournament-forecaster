@@ -11,6 +11,7 @@ from .domain import (
     Tournament,
     validate_tournament,
 )
+from .simulation import simulate_tournament
 
 __all__ = [
     "CompletedMatch",
@@ -22,5 +23,6 @@ __all__ = [
     "Tournament",
     "load_tournament",
     "load_tournament_document",
+    "simulate_tournament",
     "validate_tournament",
 ]

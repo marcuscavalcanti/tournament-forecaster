@@ -280,6 +280,16 @@ def test_league_stage_rejects_invalid_fixture_references(
             },
             "ties must be a sequence",
         ),
+        (
+            {
+                "id": "final",
+                "type": "knockout",
+                "pairing": {"mode": "fixed", "ties": []},
+                "legs": 1,
+                "aggregate_tiebreak": "coin_flip",
+            },
+            "aggregate tiebreak",
+        ),
     ],
 )
 def test_knockout_stage_rejects_invalid_pairing_contract(
@@ -293,6 +303,100 @@ def test_knockout_stage_rejects_invalid_pairing_contract(
     document = _document()
     document["stages"] = [stage]
     document["completed_matches"] = []
+
+    with pytest.raises(TournamentValidationError, match=message):
+        load_tournament_document(document)
+
+
+def test_loader_preserves_typed_knockout_entrants_as_data() -> None:
+    _require_package()
+    from tournament_forecaster.config import load_tournament_document
+
+    document = _document()
+    document["completed_matches"] = []
+    document["stages"] = [
+        {
+            "id": "groups",
+            "type": "round_robin_groups",
+            "groups": {"A": ["north-city", "south-city"]},
+        },
+        {
+            "id": "final",
+            "type": "knockout",
+            "pairing": {
+                "mode": "fixed",
+                "ties": [
+                    {
+                        "id": "final-1",
+                        "entrants": [
+                            {"type": "group_rank", "stage_id": "groups", "group": "A", "rank": 1},
+                            {"type": "group_rank", "stage_id": "groups", "group": "A", "rank": 2},
+                        ],
+                    }
+                ],
+            },
+            "legs": 1,
+        },
+    ]
+
+    tournament = load_tournament_document(document)
+
+    entrant = tournament.stages[1]["pairing"]["ties"][0]["entrants"][0]  # type: ignore[index]
+    assert entrant == {
+        "type": "group_rank",
+        "stage_id": "groups",
+        "group": "A",
+        "rank": 1,
+    }
+
+
+@pytest.mark.parametrize(
+    ("entrants", "message"),
+    [
+        (["1A", {"type": "group_rank", "stage_id": "groups", "group": "A", "rank": 2}], "mapping"),
+        (
+            [
+                {"type": "team", "team_id": "north-city"},
+                {"type": "group_rank", "stage_id": "groups", "group": "A", "rank": 2},
+            ],
+            "entrant type",
+        ),
+        (
+            [
+                {"type": "group_rank", "stage_id": "groups", "group": "A", "rank": 0},
+                {"type": "group_rank", "stage_id": "groups", "group": "A", "rank": 2},
+            ],
+            "greater than or equal to 1",
+        ),
+        ([{"type": "group_rank", "stage_id": "groups", "group": "A", "rank": 1}], "two entrants"),
+    ],
+)
+def test_loader_rejects_non_typed_knockout_entrant_contracts(
+    entrants: list[object],
+    message: str,
+) -> None:
+    _require_package()
+    from tournament_forecaster.config import load_tournament_document
+    from tournament_forecaster.errors import TournamentValidationError
+
+    document = _document()
+    document["completed_matches"] = []
+    document["stages"] = [
+        {
+            "id": "groups",
+            "type": "round_robin_groups",
+            "groups": {"A": ["north-city", "south-city"]},
+        },
+        {
+            "id": "final",
+            "type": "knockout",
+            "pairing": {
+                "mode": "fixed",
+                "ties": [{"id": "final-1", "entrants": entrants}],
+            },
+            "legs": 1,
+        },
+    ]
 
     with pytest.raises(TournamentValidationError, match=message):
         load_tournament_document(document)

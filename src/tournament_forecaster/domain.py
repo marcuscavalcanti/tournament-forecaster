@@ -17,6 +17,10 @@ _GROUP_LABEL = re.compile(r"[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*\Z")
 _OUTPUT_KEY = re.compile(r"[a-z0-9]+(?:[-_][a-z0-9]+)*\Z")
 _STAGE_TYPES = frozenset({"round_robin_groups", "league_table", "knockout"})
 _PAIRING_MODES = frozenset({"fixed", "seeded_draw", "open_draw"})
+_ENTRANT_TYPES = frozenset(
+    {"group_rank", "best_additional", "league_rank", "match_winner"}
+)
+_AGGREGATE_TIEBREAKS = frozenset({"extra_time_then_penalties", "penalties"})
 _TIEBREAKERS = frozenset(
     {"points", "goal_difference", "goals_for", "wins", "rating", "team_id"}
 )
@@ -243,10 +247,6 @@ class CompletedMatch:
             _stable_id(self.winner_team_id, "completed match winner team id")
             if self.winner_team_id not in {self.home_team_id, self.away_team_id}:
                 raise TournamentValidationError("completed match winner must be one of its teams")
-            if self.score.home != self.score.away:
-                score_winner = self.home_team_id if self.score.home > self.score.away else self.away_team_id
-                if self.winner_team_id != score_winner:
-                    raise TournamentValidationError("completed match winner contradicts score")
         if not isinstance(self.metadata, Mapping):
             raise TournamentValidationError("completed match metadata must be a mapping")
         object.__setattr__(self, "metadata", _freeze_mapping(self.metadata))
@@ -535,7 +535,37 @@ def _validate_league_stage(
     return fixture_teams
 
 
-def _validate_knockout_stage(stage: Mapping[str, object]) -> int:
+def _validate_entrant(source_value: object) -> Mapping[str, object]:
+    source = _mapping(source_value, "knockout entrant")
+    source_type = source.get("type")
+    if source_type not in _ENTRANT_TYPES:
+        raise TournamentValidationError("knockout entrant type is unsupported")
+    if source_type == "group_rank":
+        allowed = frozenset({"type", "stage_id", "group", "rank"})
+        _reject_unknown_properties(source, allowed, "group_rank entrant")
+        _stable_id(source.get("stage_id"), "group_rank entrant stage id")
+        _group_label(source.get("group"))
+        _integer(source.get("rank"), "group_rank entrant rank", minimum=1)
+    elif source_type == "best_additional":
+        allowed = frozenset({"type", "stage_id", "rank"})
+        _reject_unknown_properties(source, allowed, "best_additional entrant")
+        _stable_id(source.get("stage_id"), "best_additional entrant stage id")
+        _integer(source.get("rank"), "best_additional entrant rank", minimum=1)
+    elif source_type == "league_rank":
+        allowed = frozenset({"type", "stage_id", "rank"})
+        _reject_unknown_properties(source, allowed, "league_rank entrant")
+        _stable_id(source.get("stage_id"), "league_rank entrant stage id")
+        _integer(source.get("rank"), "league_rank entrant rank", minimum=1)
+    else:
+        allowed = frozenset({"type", "match_id"})
+        _reject_unknown_properties(source, allowed, "match_winner entrant")
+        _stable_id(source.get("match_id"), "match_winner entrant match id")
+    return source
+
+
+def _validate_knockout_stage(
+    stage: Mapping[str, object],
+) -> tuple[int, set[str], tuple[Mapping[str, object], ...]]:
     stage_id = str(stage["id"])
     label = f"knockout stage {stage_id}"
     _reject_unknown_properties(stage, _KNOCKOUT_STAGE_PROPERTIES, label)
@@ -551,24 +581,39 @@ def _validate_knockout_stage(stage: Mapping[str, object]) -> int:
         raise TournamentValidationError("knockout pairing mode must be fixed, seeded_draw, or open_draw")
     ties = _sequence(pairing.get("ties"), "knockout pairing ties")
     tie_ids: set[str] = set()
+    entrant_sources: list[Mapping[str, object]] = []
     for tie_value in ties:
         tie = _mapping(tie_value, "knockout tie")
-        tie_id_value = tie.get("id", tie.get("match_id"))
-        if tie_id_value is None:
-            continue
-        tie_id = _stable_id(tie_id_value, "knockout tie id")
+        _reject_unknown_properties(
+            tie,
+            frozenset({"id", "entrants"}),
+            "knockout tie",
+        )
+        tie_id = _stable_id(tie.get("id"), "knockout tie id")
         if tie_id in tie_ids:
             raise TournamentValidationError("knockout tie ids must be unique")
         tie_ids.add(tie_id)
+        entrants = _sequence(tie.get("entrants"), "knockout tie entrants")
+        if len(entrants) != 2:
+            raise TournamentValidationError("knockout tie must contain exactly two entrants")
+        entrant_sources.extend(_validate_entrant(entrant) for entrant in entrants)
     legs = stage.get("legs")
     if isinstance(legs, bool) or legs not in {1, 2}:
         raise TournamentValidationError("knockout stage must use one or two legs")
-    for key in ("home_away_order", "aggregate_tiebreak"):
-        if key in stage:
-            _text(stage[key], f"{label} {key}")
+    if "home_away_order" in stage:
+        _text(stage["home_away_order"], f"{label} home away order")
+    if "aggregate_tiebreak" in stage:
+        aggregate_tiebreak = _text(
+            stage["aggregate_tiebreak"],
+            f"{label} aggregate tiebreak",
+        )
+        if aggregate_tiebreak not in _AGGREGATE_TIEBREAKS:
+            raise TournamentValidationError(
+                "knockout aggregate tiebreak must be extra_time_then_penalties or penalties"
+            )
     if "away_goals_rule" in stage:
         _boolean(stage["away_goals_rule"], f"{label} away goals rule")
-    return int(legs)
+    return int(legs), tie_ids, tuple(entrant_sources)
 
 
 def validate_tournament(tournament: Tournament) -> None:
@@ -600,6 +645,8 @@ def validate_tournament(tournament: Tournament) -> None:
     group_memberships: dict[str, dict[str, str]] = {}
     league_fixtures: dict[str, dict[str, frozenset[str]]] = {}
     stage_leg_limits: dict[str, int] = {}
+    knockout_sources: dict[str, tuple[Mapping[str, object], ...]] = {}
+    tie_owners: dict[str, str] = {}
     for stage in tournament.stages:
         stage_id = stage.get("id")
         stable_stage_id = _stable_id(stage_id, "stage id")
@@ -615,9 +662,74 @@ def validate_tournament(tournament: Tournament) -> None:
             league_fixtures[stable_stage_id] = _validate_league_stage(stage, team_ids)
             stage_leg_limits[stable_stage_id] = 1
         else:
-            stage_leg_limits[stable_stage_id] = _validate_knockout_stage(stage)
+            legs, tie_ids, sources = _validate_knockout_stage(stage)
+            stage_leg_limits[stable_stage_id] = legs
+            knockout_sources[stable_stage_id] = sources
+            for tie_id in tie_ids:
+                if tie_id in tie_owners:
+                    raise TournamentValidationError("knockout tie ids must be globally unique")
+                tie_owners[tie_id] = stable_stage_id
     if len(stage_ids) != len(set(stage_ids)):
         raise TournamentValidationError("tournament stage ids must be unique")
+    dependencies: dict[str, set[str]] = {stage_id: set() for stage_id in stage_ids}
+    for target_stage_id, sources in knockout_sources.items():
+        for source in sources:
+            source_type = source["type"]
+            if source_type in {"group_rank", "best_additional", "league_rank"}:
+                source_stage_id = str(source["stage_id"])
+                source_stage = stages_by_id.get(source_stage_id)
+                if source_stage is None:
+                    raise TournamentValidationError("knockout entrant references an unknown stage")
+                dependencies[target_stage_id].add(source_stage_id)
+                if source_type in {"group_rank", "best_additional"}:
+                    if source_stage.get("type") != "round_robin_groups":
+                        raise TournamentValidationError("group entrant must reference a group stage")
+                    if source_type == "group_rank":
+                        groups = source_stage["groups"]
+                        assert isinstance(groups, Mapping)
+                        group_id = str(source["group"])
+                        source_rank = _integer(source["rank"], "group_rank entrant rank", minimum=1)
+                        if group_id not in groups or source_rank > len(groups[group_id]):  # type: ignore[arg-type]
+                            raise TournamentValidationError("group_rank entrant does not resolve")
+                    else:
+                        qualification = source_stage.get("qualification")
+                        source_rank = _integer(
+                            source["rank"],
+                            "best_additional entrant rank",
+                            minimum=1,
+                        )
+                        if not isinstance(qualification, Mapping) or source_rank > _integer(
+                            qualification.get("best_additional", 0),
+                            "group stage additional qualification count",
+                        ):
+                            raise TournamentValidationError("best_additional entrant does not resolve")
+                else:
+                    if source_stage.get("type") != "league_table":
+                        raise TournamentValidationError("league_rank entrant must reference a league stage")
+                    fixture_teams = {
+                        team_id
+                        for teams in league_fixtures[source_stage_id].values()
+                        for team_id in teams
+                    }
+                    source_rank = _integer(source["rank"], "league_rank entrant rank", minimum=1)
+                    if source_rank > len(fixture_teams):
+                        raise TournamentValidationError("league_rank entrant does not resolve")
+            else:
+                match_id = str(source["match_id"])
+                owner_stage_id = tie_owners.get(match_id)
+                if owner_stage_id is None:
+                    raise TournamentValidationError("match_winner entrant references an unknown tie")
+                dependencies[target_stage_id].add(owner_stage_id)
+    completed_stage_ids: set[str] = set()
+    while len(completed_stage_ids) < len(stage_ids):
+        ready = {
+            stage_id
+            for stage_id, required in dependencies.items()
+            if stage_id not in completed_stage_ids and required <= completed_stage_ids
+        }
+        if not ready:
+            raise TournamentValidationError("tournament stage dependencies must form a directed acyclic graph")
+        completed_stage_ids.update(ready)
     for team_id, rating in tournament.ratings.items():
         _stable_id(team_id, "rating team id")
         if team_id not in team_ids:
@@ -652,6 +764,20 @@ def validate_tournament(tournament: Tournament) -> None:
             completed_identities[match.match_id] = identity
         if match.leg > stage_leg_limits[match.stage_id]:
             raise TournamentValidationError("completed match leg exceeds stage contract")
+        if match.winner_team_id is not None and match.score.home != match.score.away:
+            score_winner = (
+                match.home_team_id
+                if match.score.home > match.score.away
+                else match.away_team_id
+            )
+            stage = stages_by_id[match.stage_id]
+            is_two_leg_tie_decider = (
+                stage.get("type") == "knockout"
+                and stage_leg_limits[match.stage_id] == 2
+                and match.leg == 2
+            )
+            if match.winner_team_id != score_winner and not is_two_leg_tie_decider:
+                raise TournamentValidationError("completed match winner contradicts score")
         if match.stage_id in group_memberships:
             membership = group_memberships[match.stage_id]
             if (

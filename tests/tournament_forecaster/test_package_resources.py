@@ -147,7 +147,7 @@ def test_schema_resources_validate_representative_domain_documents() -> None:
 
     tournament_schema = schemas["tournament.schema.json"]
     forecast_schema = schemas["forecast.schema.json"]
-    assert {"stable_id", "group_label", "probability", "score"} <= set(
+    assert {"stable_id", "group_label", "probability", "score", "entrant_source"} <= set(
         tournament_schema["$defs"]
     )
     assert {"stable_id", "probability", "matchup", "confidence_interval", "provenance"} <= set(
@@ -164,6 +164,32 @@ def test_schema_resources_validate_representative_domain_documents() -> None:
     )
     assert tournament_errors == []
     assert forecast_errors == []
+
+
+def test_knockout_tie_schema_matches_typed_loader_contract() -> None:
+    from tournament_forecaster.config import load_tournament_document
+    from tournament_forecaster.errors import TournamentValidationError
+
+    document = _representative_tournament_document()
+    final = document["stages"][2]  # type: ignore[index]
+    final["pairing"]["ties"] = [  # type: ignore[index]
+        {
+            "id": "final-1",
+            "entrants": [
+                {"type": "group_rank", "stage_id": "group-stage", "group": "A", "rank": 1},
+                {"type": "group_rank", "stage_id": "group-stage", "group": "B", "rank": 1},
+            ],
+        }
+    ]
+    validator = _draft_2020_validator()(_schema_resources()["tournament.schema.json"])
+
+    load_tournament_document(document)
+    assert list(validator.iter_errors(document)) == []
+
+    final["pairing"]["ties"][0]["entrants"][0] = "1A"  # type: ignore[index]
+    with pytest.raises(TournamentValidationError, match="mapping"):
+        load_tournament_document(document)
+    assert list(validator.iter_errors(document))
 
 
 @pytest.mark.parametrize("result", ["win", "draw", "loss"])
