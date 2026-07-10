@@ -126,7 +126,7 @@ Two canonical diagrams accompany this design:
 - [`docs/PRODUCT_FLOW.md`](../../PRODUCT_FLOW.md) explains the user journey from zero-key quickstart through recurring forecast updates.
 - [`docs/ARCHITECTURE.md`](../../ARCHITECTURE.md) explains technical components, trust boundaries, ownership, failure behavior, and one complete run.
 
-The README includes condensed versions and links to these detailed diagrams. The diagrams describe the target architecture until migration is complete; they must not be presented as current implementation status before the corresponding release gates pass.
+The README includes condensed versions and links to these detailed diagrams. The canonical sources are standalone SVG files with PNG exports for presentations; they require no Mermaid runtime, remote asset, or JavaScript. The diagrams describe the target architecture until migration is complete and must not be presented as current implementation status before the corresponding release gates pass.
 
 ## 4. Tournament Schema
 
@@ -571,7 +571,7 @@ The repository may become public only when all of these conditions hold:
 12. Provider documentation covers credential acquisition, secure storage, dry-run validation, rotation, and revocation.
 13. FIFA result synchronization passes offline contract fixtures for both group and knockout matches, including penalties and conflict rejection.
 14. README claims match implemented formats; no roadmap feature is presented as available.
-15. Product and technical Mermaid diagrams render on GitHub, match the implemented CLI and schemas, and clearly label any remaining target-state behavior.
+15. Product and technical SVG diagrams render on GitHub, match their PNG exports, remain legible without external assets, match the implemented CLI and schemas, and clearly label any remaining target-state behavior.
 
 ## 16. Migration Sequence
 

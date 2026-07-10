@@ -5,54 +5,9 @@
 
 Tournament Forecaster gives a user two entry paths: an offline quickstart that proves the product works in under five minutes, and an advanced path for forecasting a real competition with optional live data and multi-agent analysis.
 
-```mermaid
-flowchart TB
-    U["User"] --> G{"What do you want to do?"}
+![Tournament Forecaster product flow](assets/architecture/product-flow.svg)
 
-    subgraph Entry["Choose an entry path"]
-        direction LR
-        Q["Quickstart: no keys or network"] --> S["Bundled synthetic tournament"]
-        P["Choose a competition preset"] --> F["Choose the focus team"]
-        I["Initialize a custom tournament"] --> F
-        F --> D["Teams, ratings, fixtures, stages, and completed results"]
-    end
-
-    G -->|"See it work in under five minutes"| Q
-    G -->|"Forecast a supported competition"| P
-    G -->|"Model another tournament"| I
-
-    S --> SQ["Use the documented seed and 10,000 iterations"]
-    D --> L{"Use live data?"}
-    L -->|"No"| LD["Use local validated data"]
-    L -->|"Yes"| LP["Preview and synchronize results or odds"]
-
-    SQ --> V["Validate schema, stage graph, freshness, and locked results"]
-    LD --> V
-    LP --> V
-
-    V --> E["Simulate the complete tournament"]
-    E --> C{"Enable the optional council?"}
-    C -->|"No"| X["Keep the deterministic forecast"]
-    C -->|"Yes"| R["Research sources and challenge bounded context"]
-    R --> B["Apply only validated, bounded adjustments"]
-    B --> X
-
-    X --> O["Generate forecast outputs"]
-    subgraph Outcomes["Inspect and use the result"]
-        direction LR
-        O1["Stage reach and title probability"]
-        O2["Likely opponents and matchup probabilities"]
-        O3["JSON, Markdown, SVG bracket, and audit trail"]
-    end
-    O --> O1
-    O --> O2
-    O --> O3
-
-    O3 --> N{"A match was completed or an input changed?"}
-    N -->|"Yes"| UP["Refresh facts, preserve locked results, and rerun"]
-    UP --> V
-    N -->|"No"| SHARE["Review, compare, or publish the forecast"]
-```
+The diagram is also available as a [PNG export](assets/architecture/product-flow.png) for presentations and issue discussions.
 
 ## Product Principles
 

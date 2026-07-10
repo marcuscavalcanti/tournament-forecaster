@@ -7,135 +7,21 @@ The architecture keeps tournament rules and probability computation deterministi
 
 ## Component Architecture
 
-```mermaid
-flowchart TB
-    USER["User or automation"] --> CLI["CLI: quickstart, init, validate, simulate, report, update"]
-    CLI --> RUN["Run context: run_id, seed, cache policy, and provenance"]
+![Tournament Forecaster technical architecture](assets/architecture/technical-architecture.svg)
 
-    subgraph INPUTS["1. Two input classes"]
-        direction LR
-        subgraph TRUTH["Tournament truth inputs"]
-            direction TB
-            CFG["Tournament config or preset"]
-            COMPATIN["Legacy worldcup_brazil adapter"]
-            LOCAL["Ratings and completed-result ledger"]
-            RESULTSP["Optional results: FIFA, JSON, or CSV"]
-            FACTS["Normalized tournament facts"]
-            CFG --> FACTS
-            COMPATIN --> FACTS
-            LOCAL --> FACTS
-            RESULTSP -->|"Preview final results"| FACTS
-        end
-
-        subgraph EVIDENCE_INPUTS["Optional evidence inputs"]
-            direction TB
-            ODDSP["Odds provider"]
-            LLMP["Model providers"]
-            BRIDGE["Opt-in executable bridges"]
-            EVIDENCE["Sourced external evidence"]
-            ODDSP --> EVIDENCE
-            LLMP --> EVIDENCE
-            BRIDGE --> EVIDENCE
-        end
-    end
-
-    subgraph EXECUTION["2. Execution paths"]
-        direction LR
-        subgraph CORE["Authoritative offline path"]
-            direction TB
-            LOAD["Load and normalize schema versions"]
-            SCHEMA["Schema and semantic validation"]
-            GRAPH["Stage graph and entrant validation"]
-            FRESH["Freshness, fixture, alias, and conflict gates"]
-            DOMAIN["Normalized domain model"]
-            STAGES["Groups, league table, and knockout stages"]
-            TABLES["Standings, tiebreakers, and qualification"]
-            PAIR["Pairing, seeding, bracket, and two-leg rules"]
-            MATCH["Match probability and score model"]
-            MC["Seeded full-tournament Monte Carlo"]
-            COHERENCE["Probability and locked-result invariants"]
-            LOAD --> SCHEMA --> GRAPH --> FRESH --> DOMAIN
-            DOMAIN --> STAGES --> TABLES --> PAIR --> MC --> COHERENCE
-            DOMAIN --> MATCH --> MC
-        end
-
-        subgraph INTEL["Optional bounded intelligence path"]
-            direction TB
-            SECURITY["Credential redaction and bridge policy"]
-            PLAN["Source plan and evidence collection"]
-            SIDE["Opponent and path analysis"]
-            COUNCIL["Main multi-agent council"]
-            CONSENSUS["Validation, repair, and structured consensus"]
-            SECURITY --> PLAN --> SIDE --> COUNCIL --> CONSENSUS
-        end
-    end
-
-    FACTS --> LOAD
-    EVIDENCE --> SECURITY
-    RUN --> LOAD
-    RUN --> SECURITY
-    COHERENCE -. "Legal opponents, locked results, and bounds" .-> CONSENSUS
-
-    COHERENCE -->|"Deterministic baseline"| CHAIR["Configured forecast finalizer"]
-    CONSENSUS -->|"Optional bounded context"| CHAIR
-
-    subgraph OUTPUT["3. Versioned artifacts"]
-        direction LR
-        FORECAST["Neutral forecast schema"]
-        JSON["forecast.json"]
-        MD["report.md"]
-        SVG["bracket.svg"]
-        AUDIT["audit.md and watchdog"]
-        COMPATOUT["Legacy artifact emitter"]
-        PUBLISH["Optional publishing templates"]
-        FORECAST --> JSON
-        FORECAST --> MD
-        FORECAST --> SVG
-        FORECAST --> AUDIT
-        FORECAST --> COMPATOUT
-        FORECAST --> PUBLISH
-    end
-    CHAIR --> FORECAST
-```
+The diagram is also available as a [PNG export](assets/architecture/technical-architecture.png). Solid paths carry authoritative tournament state. Dashed blue paths carry optional evidence; dashed orange paths carry structural constraints from the deterministic engine into the council.
 
 ## One Forecast Run
 
-```mermaid
-sequenceDiagram
-    actor User
-    participant CLI as tournament-forecast
-    participant Validator as Offline validator
-    participant Provider as Optional data provider
-    participant Ledger as Completed-result ledger
-    participant Engine as Tournament engine
-    participant Council as Optional council
-    participant Reporter as Reporters
-
-    User->>CLI: quickstart or simulate(config, focus team)
-    CLI->>Validator: Load and validate schema and stage graph
-    Validator-->>CLI: Normalized tournament or actionable failure
-
-    opt Live refresh explicitly enabled
-        CLI->>Provider: Fetch results or odds with redacted settings
-        Provider-->>CLI: External records or expected unavailability
-        CLI->>Validator: Normalize teams, stages, dates, and status
-        Validator->>Ledger: Atomically apply reviewed final results
-    end
-
-    CLI->>Ledger: Read immutable completed results
-    CLI->>Engine: Simulate all remaining matches with a fixed seed
-    Engine->>Engine: Standings, qualification, pairing, and knockout progression
-    Engine-->>CLI: Deterministic forecast plus invariants
-
-    opt Council enabled and provider-ready
-        CLI->>Council: Baseline, legal opponents, sources, and adjustment bounds
-        Council->>Council: Research, debate, repair, and structured consensus
-        Council-->>CLI: Auditable bounded context or degraded no-op
-    end
-
-    CLI->>Reporter: Versioned forecast, provenance, warnings, and council audit
-    Reporter-->>User: JSON, Markdown, SVG bracket, and audit artifacts
-```
+| Step | Owner | Action | Failure behavior |
+| --- | --- | --- | --- |
+| 1 | CLI | Create the `run_id`, seed, cache policy, timestamps, and input provenance | Invalid CLI or config arguments fail locally |
+| 2 | Provider adapters, when enabled | Preview results or odds, redact settings, normalize external identifiers, and respect freshness policy | Expected unavailability follows `required`, `cached_with_ttl`, or `best_effort`; internal errors propagate |
+| 3 | Offline validator | Validate schema, stage graph, entrants, aliases, freshness, fixtures, and result conflicts | Structural failures stop before simulation or paid calls |
+| 4 | Result ledger | Load immutable completed facts and atomically accept reviewed final results | Conflicts never overwrite silently |
+| 5 | Deterministic engine | Simulate all remaining matches and derive standings, qualification, pairings, stage reach, and title probability | Coherence violations invalidate the run |
+| 6 | Optional council | Receive the baseline, legal opponents, evidence, and bounds; return bounded context or a degraded no-op | It cannot change completed results or tournament topology |
+| 7 | Finalizer and reporters | Recheck invariants and atomically write versioned JSON, Markdown, SVG, audit, compatibility, and publishing artifacts | Partial output sets are not published as complete runs |
 
 ## Ownership Rules
 

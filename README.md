@@ -386,43 +386,19 @@ Para escolher um run específico:
 make debate DEBATE_INPUT=outputs/linkedin_brazil_2026-06-09.json
 ```
 
-## Diagramas da engine
+## Target architecture diagrams
 
-### Diagrama técnico
+> These diagrams describe the target open-source Tournament Forecaster architecture. They are not a claim that every migration milestone is already implemented.
 
-```mermaid
-flowchart LR
-    H["#CopaComAchismo"] --> CFG["Config local\nexample fallback"]
-    CFG --> MC["Monte Carlo\nbracket oficial"]
-    CFG --> PF["Preflight\ncontrato mínimo"]
-    PF --> PLAN["Planejamento\nbusca fresca própria"]
-    PLAN --> OPP["Sala adversários\nscenario_pct e top-2"]
-    MC --> REC["Reconciliação\nMC + sala adversários"]
-    OPP --> REC
-    REC --> BR["Sala Brasil\nchance por confronto"]
-    PLAN --> BR
-    BR --> G["Hard gates\nbracket, fonte, coerência"]
-    G --> N["Numeric chairman\nfunil vem do MC reconciliado"]
-    N --> OUT["Markdown, audit, JSON, SVG"]
-    BR -. "blind review shadow\ndesligado por padrão" .-> T["Telemetria"]
-    BR -. "fast path shadow\ndesligado por padrão" .-> T
-    CFG -. "lock data/.run.lock" .-> OUT
-```
+### Product flow
 
-### Diagrama funcional
+![Tournament Forecaster product flow](docs/assets/architecture/product-flow.svg)
 
-```mermaid
-flowchart TD
-    O["Objetivo\naté onde o Brasil vai"] --> K["Contrato único\nquanti e quali sem quota fixa"]
-    K --> B["Cada modelo escolhe fontes\nBrasil e adversários"]
-    B --> A["Sala adversários\nquem pode cruzar com o Brasil"]
-    A --> D["Sala Brasil\nhipótese, fatos, URLs, queries"]
-    D --> Q{"Maioria simples\naceita com cobertura?"}
-    Q -- "não" --> L["Discordante ou melhor resposta\nassume protagonismo por mérito"]
-    L --> D
-    Q -- "sim" --> F["Numeric chairman\nfunil coerente e IC"]
-    F --> P["Post LinkedIn\n#CopaComAchismo"]
-```
+### Technical architecture
+
+![Tournament Forecaster technical architecture](docs/assets/architecture/technical-architecture.svg)
+
+Detailed ownership, failure, and execution contracts are documented in [Product Flow](docs/PRODUCT_FLOW.md) and [Technical Architecture](docs/ARCHITECTURE.md).
 
 ## Regra de decisão
 

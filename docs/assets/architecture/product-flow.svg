@@ -1,0 +1,209 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1100" viewBox="0 0 1600 1100" role="img" aria-labelledby="title desc">
+  <title id="title">Tournament Forecaster product flow</title>
+  <desc id="desc">AWS-style product diagram showing quickstart and configured tournament paths, deterministic simulation, optional multi-agent analysis, forecast outputs, and the recurring update loop.</desc>
+  <defs>
+    <style>
+      .canvas { fill: #ffffff; }
+      .zone { fill: #f7f8fa; stroke: #aab7b8; stroke-width: 2; }
+      .zone-head { fill: #232f3e; }
+      .card { fill: #ffffff; stroke: #879196; stroke-width: 2; }
+      .card-orange { fill: #fff3e0; stroke: #ff9900; stroke-width: 2.5; }
+      .card-blue { fill: #eaf4fb; stroke: #1b73b8; stroke-width: 2.5; }
+      .card-green { fill: #eaf7e7; stroke: #1d8102; stroke-width: 2.5; }
+      .icon-bg { fill: #232f3e; }
+      .icon-orange { fill: #ff9900; }
+      .icon-blue { fill: #1b73b8; }
+      .icon-green { fill: #1d8102; }
+      .title { font: 700 34px Arial, Helvetica, sans-serif; fill: #232f3e; }
+      .subtitle { font: 400 17px Arial, Helvetica, sans-serif; fill: #5f6b7a; }
+      .zone-title { font: 700 18px Arial, Helvetica, sans-serif; fill: #ffffff; }
+      .card-title { font: 700 18px Arial, Helvetica, sans-serif; fill: #232f3e; }
+      .body { font: 400 14px Arial, Helvetica, sans-serif; fill: #45515d; }
+      .small { font: 600 12px Arial, Helvetica, sans-serif; fill: #5f6b7a; letter-spacing: .4px; }
+      .badge { font: 700 12px Arial, Helvetica, sans-serif; fill: #232f3e; letter-spacing: 1px; }
+      .step-text { font: 700 16px Arial, Helvetica, sans-serif; fill: #ffffff; text-anchor: middle; dominant-baseline: central; }
+      .flow { fill: none; stroke: #5f6b7a; stroke-width: 3; marker-end: url(#arrow); }
+      .flow-optional { fill: none; stroke: #1b73b8; stroke-width: 3; stroke-dasharray: 10 7; marker-end: url(#arrow-blue); }
+      .flow-loop { fill: none; stroke: #ff9900; stroke-width: 3.5; marker-end: url(#arrow-orange); }
+      .icon-line { fill: none; stroke: #ffffff; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#5f6b7a"/>
+    </marker>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1b73b8"/>
+    </marker>
+    <marker id="arrow-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff9900"/>
+    </marker>
+  </defs>
+
+  <rect class="canvas" x="0" y="0" width="1600" height="1100"/>
+  <rect x="0" y="0" width="1600" height="12" fill="#ff9900"/>
+  <text class="title" x="54" y="58">Tournament Forecaster</text>
+  <text class="subtitle" x="54" y="86">From a five-minute offline quickstart to a continuously updated tournament forecast</text>
+  <rect x="1324" y="34" width="222" height="38" rx="19" fill="#fff3e0" stroke="#ff9900" stroke-width="2"/>
+  <text class="badge" x="1435" y="58" text-anchor="middle">PRODUCT FLOW</text>
+
+  <!-- Zone 1: entry paths -->
+  <rect class="zone" x="50" y="118" width="1500" height="282" rx="8"/>
+  <path class="zone-head" d="M58 118 H1542 A8 8 0 0 1 1550 126 V164 H50 V126 A8 8 0 0 1 58 118 Z"/>
+  <circle cx="78" cy="141" r="16" fill="#ff9900"/>
+  <text class="step-text" x="78" y="141">1</text>
+  <text class="zone-title" x="106" y="148">Start with the right level of setup</text>
+
+  <rect class="card" x="82" y="190" width="218" height="154" rx="8"/>
+  <circle class="icon-bg" cx="127" cy="235" r="27"/>
+  <circle class="icon-line" cx="127" cy="228" r="10"/>
+  <path class="icon-line" d="M109 250 C112 238 142 238 145 250"/>
+  <text class="card-title" x="171" y="226">Choose a goal</text>
+  <text class="body" x="171" y="250">Prove the install,</text>
+  <text class="body" x="171" y="270">use a preset, or model</text>
+  <text class="body" x="171" y="290">another competition.</text>
+
+  <rect class="card-orange" x="350" y="184" width="330" height="112" rx="8"/>
+  <rect class="icon-orange" x="372" y="207" width="54" height="54" rx="8"/>
+  <path d="M402 215 L385 239 H400 L394 255 L416 231 H402 Z" fill="#ffffff"/>
+  <text class="card-title" x="448" y="218">Quickstart</text>
+  <text class="body" x="448" y="242">No keys, network, prompts,</text>
+  <text class="body" x="448" y="263">or configuration edits.</text>
+  <rect x="350" y="316" width="330" height="52" rx="6" fill="#ffffff" stroke="#ff9900" stroke-width="1.5"/>
+  <text class="small" x="515" y="338" text-anchor="middle">BUNDLED SYNTHETIC CUP</text>
+  <text class="body" x="515" y="357" text-anchor="middle">Documented seed and 10,000 iterations</text>
+
+  <rect class="card-blue" x="730" y="184" width="330" height="112" rx="8"/>
+  <rect class="icon-blue" x="752" y="207" width="54" height="54" rx="8"/>
+  <path class="icon-line" d="M765 220 H793 V249 H765 Z M765 230 H793 M775 220 V249"/>
+  <text class="card-title" x="828" y="218">Competition preset</text>
+  <text class="body" x="828" y="242">Start from a tested format</text>
+  <text class="body" x="828" y="263">and select the focus team.</text>
+
+  <rect class="card-blue" x="1110" y="184" width="330" height="112" rx="8"/>
+  <rect class="icon-blue" x="1132" y="207" width="54" height="54" rx="8"/>
+  <path class="icon-line" d="M1145 234 H1173 M1159 220 V248"/>
+  <text class="card-title" x="1208" y="218">Custom tournament</text>
+  <text class="body" x="1208" y="242">Define stages and rules</text>
+  <text class="body" x="1208" y="263">without editing Python.</text>
+  <rect x="840" y="316" width="490" height="52" rx="6" fill="#ffffff" stroke="#1b73b8" stroke-width="1.5"/>
+  <text class="small" x="1085" y="338" text-anchor="middle">FOCUS TEAM + VALIDATED TOURNAMENT DATA</text>
+  <text class="body" x="1085" y="357" text-anchor="middle">Teams, ratings, fixtures, stages, and completed results</text>
+
+  <path class="flow" d="M300 250 H325 V174 H515 V184"/>
+  <path class="flow" d="M325 174 H895 V184"/>
+  <path class="flow" d="M325 174 H1275 V184"/>
+  <path class="flow" d="M515 296 V316"/>
+  <path class="flow" d="M895 296 V316"/>
+  <path class="flow" d="M1275 296 V316"/>
+  <path class="flow" d="M515 368 V424 H402 V478"/>
+  <path class="flow" d="M1085 368 V424 H402 V478"/>
+
+  <!-- Zone 2: forecast -->
+  <rect class="zone" x="50" y="448" width="1500" height="330" rx="8"/>
+  <path class="zone-head" d="M58 448 H1542 A8 8 0 0 1 1550 456 V494 H50 V456 A8 8 0 0 1 58 448 Z"/>
+  <circle cx="78" cy="471" r="16" fill="#ff9900"/>
+  <text class="step-text" x="78" y="471">2</text>
+  <text class="zone-title" x="106" y="478">Validate facts, simulate the whole tournament, then optionally challenge context</text>
+
+  <rect class="card-green" x="104" y="520" width="296" height="184" rx="8"/>
+  <rect class="icon-green" x="128" y="544" width="58" height="58" rx="8"/>
+  <path class="icon-line" d="M143 573 L154 584 L174 558"/>
+  <text class="small" x="211" y="552">HARD GATE</text>
+  <text class="card-title" x="211" y="579">Validate tournament facts</text>
+  <text class="body" x="128" y="626">Schema, stage graph, fixtures, aliases,</text>
+  <text class="body" x="128" y="648">freshness, and locked-result coherence.</text>
+  <text class="body" x="128" y="678">Invalid inputs fail before paid calls.</text>
+
+  <rect class="card-orange" x="470" y="520" width="330" height="184" rx="8"/>
+  <rect class="icon-orange" x="494" y="544" width="58" height="58" rx="8"/>
+  <circle cx="513" cy="573" r="6" fill="#ffffff"/>
+  <circle cx="534" cy="558" r="6" fill="#ffffff"/>
+  <circle cx="536" cy="587" r="6" fill="#ffffff"/>
+  <path class="icon-line" d="M518 569 L529 561 M519 576 L530 584"/>
+  <text class="small" x="577" y="552">AUTHORITATIVE CORE</text>
+  <text class="card-title" x="577" y="579">Simulate every remaining match</text>
+  <text class="body" x="494" y="626">Standings, qualification, pairings,</text>
+  <text class="body" x="494" y="648">knockout progression, and title odds.</text>
+  <text class="body" x="494" y="678">Completed results are never resimulated.</text>
+
+  <rect class="card-blue" x="870" y="520" width="300" height="184" rx="8"/>
+  <rect class="icon-blue" x="894" y="544" width="58" height="58" rx="8"/>
+  <circle class="icon-line" cx="913" cy="565" r="7"/>
+  <circle class="icon-line" cx="935" cy="565" r="7"/>
+  <path class="icon-line" d="M900 588 C903 577 923 577 926 588 M922 588 C925 577 945 577 948 588"/>
+  <text class="small" x="977" y="552">OPTIONAL</text>
+  <text class="card-title" x="977" y="579">Optional council</text>
+  <text class="body" x="894" y="626">Research evidence, debate uncertainty,</text>
+  <text class="body" x="894" y="648">and propose bounded context changes.</text>
+  <text class="body" x="894" y="678">It cannot change tournament topology.</text>
+
+  <rect class="card-green" x="1240" y="520" width="260" height="184" rx="8"/>
+  <rect class="icon-green" x="1264" y="544" width="58" height="58" rx="8"/>
+  <path class="icon-line" d="M1278 586 V568 M1290 586 V558 M1302 586 V548"/>
+  <text class="small" x="1347" y="552">FINALIZER</text>
+  <text class="card-title" x="1347" y="579">Coherent forecast</text>
+  <text class="body" x="1264" y="626">Apply the configured policy and</text>
+  <text class="body" x="1264" y="648">recheck numeric invariants.</text>
+  <text class="body" x="1264" y="678">Record warnings and provenance.</text>
+
+  <path class="flow" d="M400 612 H470"/>
+  <path class="flow" d="M800 612 V752 H1370 V704"/>
+  <path class="flow-optional" d="M800 660 H835 V612 H870"/>
+  <path class="flow-optional" d="M1170 612 H1240"/>
+  <text class="small" x="1007" y="730" text-anchor="middle" fill="#1b73b8">DASHED PATH = OPTIONAL ENRICHMENT</text>
+
+  <!-- Zone 3: outcomes and loop -->
+  <rect class="zone" x="50" y="808" width="1500" height="242" rx="8"/>
+  <path class="zone-head" d="M58 808 H1542 A8 8 0 0 1 1550 816 V854 H50 V816 A8 8 0 0 1 58 808 Z"/>
+  <circle cx="78" cy="831" r="16" fill="#ff9900"/>
+  <text class="step-text" x="78" y="831">3</text>
+  <text class="zone-title" x="106" y="838">Understand the result, publish it, and rerun when reality changes</text>
+
+  <rect class="card" x="82" y="882" width="270" height="112" rx="8"/>
+  <circle class="icon-bg" cx="119" cy="919" r="22"/>
+  <path class="icon-line" d="M107 928 L116 918 L124 923 L134 908"/>
+  <text class="card-title" x="153" y="912">Stage and title odds</text>
+  <text class="body" x="153" y="936">Reach probability and</text>
+  <text class="body" x="153" y="956">confidence intervals.</text>
+
+  <rect class="card" x="382" y="882" width="270" height="112" rx="8"/>
+  <circle class="icon-bg" cx="419" cy="919" r="22"/>
+  <path class="icon-line" d="M407 907 H431 M407 919 H431 M407 931 H431"/>
+  <text class="card-title" x="453" y="912">Opponent paths</text>
+  <text class="body" x="453" y="936">Likely matchups and</text>
+  <text class="body" x="453" y="956">conditional win odds.</text>
+
+  <rect class="card" x="682" y="882" width="270" height="112" rx="8"/>
+  <circle class="icon-bg" cx="719" cy="919" r="22"/>
+  <path class="icon-line" d="M708 905 H726 L733 912 V933 H708 Z M726 905 V913 H733"/>
+  <text class="card-title" x="753" y="912">Reusable artifacts</text>
+  <text class="body" x="753" y="936">JSON, Markdown, SVG,</text>
+  <text class="body" x="753" y="956">and compatibility output.</text>
+
+  <rect class="card" x="982" y="882" width="270" height="112" rx="8"/>
+  <circle class="icon-bg" cx="1019" cy="919" r="22"/>
+  <path class="icon-line" d="M1008 907 H1030 V931 H1008 Z M1013 913 H1025 M1013 919 H1025 M1013 925 H1021"/>
+  <text class="card-title" x="1053" y="912">Audit and publish</text>
+  <text class="body" x="1053" y="936">Warnings, provenance,</text>
+  <text class="body" x="1053" y="956">watchdog, and reports.</text>
+
+  <rect class="card-orange" x="1300" y="870" width="210" height="136" rx="8"/>
+  <circle class="icon-orange" cx="1337" cy="914" r="24"/>
+  <path class="icon-line" d="M1326 914 A12 12 0 1 1 1337 926 M1326 914 L1326 904 M1326 914 L1336 914"/>
+  <text class="card-title" x="1373" y="903">New fact?</text>
+  <text class="body" x="1373" y="927">Refresh results,</text>
+  <text class="body" x="1373" y="947">preserve locks,</text>
+  <text class="body" x="1373" y="967">and rerun.</text>
+
+  <path class="flow" d="M1370 704 V788 H817 V866"/>
+  <circle cx="817" cy="866" r="5" fill="#232f3e"/>
+  <path class="flow" d="M817 866 H217 V882"/>
+  <path class="flow" d="M817 866 H517 V882"/>
+  <path class="flow" d="M817 866 V882"/>
+  <path class="flow" d="M817 866 H1117 V882"/>
+  <path class="flow" d="M1252 938 H1300"/>
+  <path class="flow-loop" d="M1405 1006 V1068 H28 V612 H104"/>
+  <text class="small" x="715" y="1084" text-anchor="middle" fill="#b15f00">RESULT-TO-RERUN FEEDBACK LOOP</text>
+
+  <text class="small" x="1528" y="1036" text-anchor="end">OFFLINE CORE | OPTIONAL NETWORK | AUDITABLE OUTPUT</text>
+</svg>
