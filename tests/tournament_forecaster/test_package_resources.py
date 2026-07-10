@@ -166,6 +166,34 @@ def test_schema_resources_validate_representative_domain_documents() -> None:
     assert forecast_errors == []
 
 
+@pytest.mark.parametrize("result", ["win", "draw", "loss"])
+def test_points_must_be_non_negative_in_schema_and_loader(result: str) -> None:
+    from tournament_forecaster.config import load_tournament_document
+    from tournament_forecaster.errors import TournamentValidationError
+
+    tournament_schema = _schema_resources()["tournament.schema.json"]
+    document = _representative_tournament_document()
+    points = document["stages"][0]["points"]  # type: ignore[index]
+    assert isinstance(points, dict)
+    points[result] = -1
+
+    with pytest.raises(TournamentValidationError, match="greater than or equal to 0"):
+        load_tournament_document(document)
+    assert list(_draft_2020_validator()(tournament_schema).iter_errors(document))
+
+
+def test_explicit_null_winner_is_accepted_by_schema_and_loader() -> None:
+    from tournament_forecaster.config import load_tournament_document
+
+    tournament_schema = _schema_resources()["tournament.schema.json"]
+    document = _representative_tournament_document()
+    document["completed_matches"][0]["winner_team_id"] = None  # type: ignore[index]
+
+    tournament = load_tournament_document(document)
+    assert tournament.completed_matches[0].winner_team_id is None
+    assert list(_draft_2020_validator()(tournament_schema).iter_errors(document)) == []
+
+
 def test_schema_resources_reject_adversarial_documents() -> None:
     from tournament_forecaster.config import load_tournament_document
     from tournament_forecaster.errors import TournamentValidationError

@@ -48,9 +48,9 @@
       "type": "object",
       "required": ["win", "draw", "loss"],
       "properties": {
-        "win": {"type": "integer"},
-        "draw": {"type": "integer"},
-        "loss": {"type": "integer"}
+        "win": {"type": "integer", "minimum": 0},
+        "draw": {"type": "integer", "minimum": 0},
+        "loss": {"type": "integer", "minimum": 0}
       },
       "additionalProperties": false
     },
@@ -194,7 +194,12 @@
         "away_team_id": {"$ref": "#/$defs/stable_id"},
         "score": {"$ref": "#/$defs/score"},
         "leg": {"type": "integer", "minimum": 1, "maximum": 2},
-        "winner_team_id": {"$ref": "#/$defs/stable_id"},
+        "winner_team_id": {
+          "oneOf": [
+            {"$ref": "#/$defs/stable_id"},
+            {"type": "null"}
+          ]
+        },
         "metadata": {"$ref": "#/$defs/metadata"}
       },
       "additionalProperties": false
