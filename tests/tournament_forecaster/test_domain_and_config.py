@@ -32,18 +32,91 @@ def _document() -> dict[str, object]:
                 "id": "group-stage",
                 "type": "round_robin_groups",
                 "groups": {"A": ["north-city", "south-city"]},
-            }
+            },
+            _terminal_stage(),
         ],
         "ratings": {"north-city": 1600, "south-city": 1500},
         "completed_matches": [
             {
-                "match_id": "group-a-1",
+                "match_id": "group-stage-group-41-round-1-match-6e6f7274682d63697479-736f7574682d63697479",
                 "stage_id": "group-stage",
                 "home_team_id": "north-city",
                 "away_team_id": "south-city",
                 "score": {"home": 2, "away": 1},
             }
         ],
+    }
+
+
+def _terminal_stage(
+    stage_id: str = "final",
+    *,
+    terminal: str = "championship",
+) -> dict[str, object]:
+    return {
+        "id": stage_id,
+        "type": "knockout",
+        "pairing": {"mode": "fixed", "ties": []},
+        "legs": 1,
+        "home_away_order": "listed_team_first_leg_home",
+        "aggregate_tiebreak": "extra_time_then_penalties",
+        "away_goals_rule": False,
+        "terminal": terminal,
+    }
+
+
+def _append_terminal(document: dict[str, object]) -> dict[str, object]:
+    stages = document["stages"]
+    assert isinstance(stages, list)
+    if not any(
+        isinstance(stage, dict) and stage.get("terminal") == "championship"
+        for stage in stages
+    ):
+        stages.append(_terminal_stage())
+    return document
+
+
+def _source_group_stage() -> dict[str, object]:
+    return {
+        "id": "source-groups",
+        "type": "round_robin_groups",
+        "groups": {"A": ["north-city", "south-city", "east-city"]},
+    }
+
+
+def _two_leg_tie_stage(
+    stage_id: str,
+    *,
+    terminal: str,
+) -> dict[str, object]:
+    return {
+        "id": stage_id,
+        "type": "knockout",
+        "pairing": {
+            "mode": "fixed",
+            "ties": [
+                {
+                    "id": "semi-final-1" if stage_id == "semi-final" else "other-1",
+                    "entrants": [
+                        {
+                            "type": "group_rank",
+                            "stage_id": "source-groups",
+                            "group": "A",
+                            "rank": 1,
+                        },
+                        {
+                            "type": "group_rank",
+                            "stage_id": "source-groups",
+                            "group": "A",
+                            "rank": 2,
+                        },
+                    ],
+                }
+            ],
+        },
+        "legs": 2,
+        "home_away_order": "listed_team_first_leg_home",
+        "terminal": terminal,
     }
 
 
@@ -69,6 +142,129 @@ def test_load_tournament_returns_immutable_typed_domain(tmp_path: Path) -> None:
         tournament.teams[0].id = "rewritten"  # type: ignore[misc]
     with pytest.raises(TypeError):
         tournament.ratings["north-city"] = 0  # type: ignore[index]
+
+
+@pytest.mark.parametrize("championship_count", [0, 2])
+def test_loader_requires_exactly_one_championship_terminal(
+    championship_count: int,
+) -> None:
+    _require_package()
+    from tournament_forecaster.config import load_tournament_document
+    from tournament_forecaster.errors import TournamentValidationError
+
+    document = _document()
+    stages = document["stages"]
+    assert isinstance(stages, list)
+    stages[:] = [
+        stage
+        for stage in stages
+        if not isinstance(stage, dict) or stage.get("terminal") != "championship"
+    ]
+    for index in range(championship_count):
+        stages.append(_terminal_stage(f"final-{index + 1}"))
+
+    with pytest.raises(
+        TournamentValidationError,
+        match="exactly one knockout championship terminal",
+    ):
+        load_tournament_document(document)
+
+
+def test_loader_accepts_one_championship_and_any_number_of_placement_terminals() -> None:
+    _require_package()
+    from tournament_forecaster.config import load_tournament_document
+
+    document = _document()
+    stages = document["stages"]
+    assert isinstance(stages, list)
+    stages.append(_terminal_stage("third-place", terminal="placement"))
+
+    tournament = load_tournament_document(document)
+
+    assert [stage.get("terminal") for stage in tournament.stages] == [
+        None,
+        "championship",
+        "placement",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ({"terminal": "winner"}, "terminal"),
+        ({"home_away_order": "random_home"}, "home away order"),
+        ({"legs": 1, "away_goals_rule": True}, "away goals"),
+    ],
+)
+def test_loader_rejects_invalid_knockout_format_knobs(
+    mutation: dict[str, object],
+    message: str,
+) -> None:
+    _require_package()
+    from tournament_forecaster.config import load_tournament_document
+    from tournament_forecaster.errors import TournamentValidationError
+
+    document = _document()
+    stages = document["stages"]
+    assert isinstance(stages, list)
+    stage = next(
+        stage
+        for stage in stages
+        if isinstance(stage, dict) and stage.get("terminal") == "championship"
+    )
+    stage.update(mutation)
+
+    with pytest.raises(TournamentValidationError, match=message):
+        load_tournament_document(document)
+
+
+@pytest.mark.parametrize(
+    ("direct_per_group", "best_additional"),
+    [(3, 0), (2, 1)],
+)
+def test_loader_rejects_unattainable_group_qualification_counts(
+    direct_per_group: int,
+    best_additional: int,
+) -> None:
+    _require_package()
+    from tournament_forecaster.config import load_tournament_document
+    from tournament_forecaster.errors import TournamentValidationError
+
+    document = _append_terminal(_document())
+    group_stage = document["stages"][0]  # type: ignore[index]
+    group_stage["qualification"] = {  # type: ignore[index]
+        "direct_per_group": direct_per_group,
+        "best_additional": best_additional,
+    }
+
+    with pytest.raises(TournamentValidationError, match="attainable"):
+        load_tournament_document(document)
+
+
+def test_best_additional_source_rank_must_be_attainable() -> None:
+    _require_package()
+    from tournament_forecaster.config import load_tournament_document
+    from tournament_forecaster.errors import TournamentValidationError
+
+    document = _document()
+    group_stage = document["stages"][0]  # type: ignore[index]
+    group_stage["qualification"] = {  # type: ignore[index]
+        "direct_per_group": 1,
+        "best_additional": 1,
+    }
+    final = document["stages"][1]  # type: ignore[index]
+    final["pairing"]["ties"] = [  # type: ignore[index]
+        {
+            "id": "final-1",
+            "entrants": [
+                {"type": "best_additional", "stage_id": "group-stage", "rank": 2},
+                {"type": "group_rank", "stage_id": "group-stage", "group": "A", "rank": 1},
+            ],
+        }
+    ]
+
+    with pytest.raises(TournamentValidationError, match="does not resolve"):
+        load_tournament_document(document)
 
 
 def test_loader_rejects_non_ascii_stable_identifier() -> None:
@@ -259,6 +455,8 @@ def test_league_stage_rejects_invalid_fixture_references(
                 "type": "knockout",
                 "pairing": {"mode": "random", "ties": []},
                 "legs": 1,
+                "home_away_order": "listed_team_first_leg_home",
+                "terminal": "championship",
             },
             "pairing mode",
         ),
@@ -268,6 +466,8 @@ def test_league_stage_rejects_invalid_fixture_references(
                 "type": "knockout",
                 "pairing": {"mode": "fixed", "ties": []},
                 "legs": 3,
+                "home_away_order": "listed_team_first_leg_home",
+                "terminal": "championship",
             },
             "one or two legs",
         ),
@@ -277,6 +477,8 @@ def test_league_stage_rejects_invalid_fixture_references(
                 "type": "knockout",
                 "pairing": {"mode": "fixed", "ties": "final-1"},
                 "legs": 1,
+                "home_away_order": "listed_team_first_leg_home",
+                "terminal": "championship",
             },
             "ties must be a sequence",
         ),
@@ -286,7 +488,9 @@ def test_league_stage_rejects_invalid_fixture_references(
                 "type": "knockout",
                 "pairing": {"mode": "fixed", "ties": []},
                 "legs": 1,
+                "home_away_order": "listed_team_first_leg_home",
                 "aggregate_tiebreak": "coin_flip",
+                "terminal": "championship",
             },
             "aggregate tiebreak",
         ),
@@ -336,6 +540,8 @@ def test_loader_preserves_typed_knockout_entrants_as_data() -> None:
                 ],
             },
             "legs": 1,
+            "home_away_order": "listed_team_first_leg_home",
+            "terminal": "championship",
         },
     ]
 
@@ -425,18 +631,9 @@ def test_completed_match_legs_keep_stable_identity(
     teams.append({"id": "east-city", "display_name": "East City"})
     ratings["east-city"] = 1450
     document["stages"] = [
-        {
-            "id": "semi-final",
-            "type": "knockout",
-            "pairing": {"mode": "fixed", "ties": []},
-            "legs": 2,
-        },
-        {
-            "id": "other-stage",
-            "type": "knockout",
-            "pairing": {"mode": "fixed", "ties": []},
-            "legs": 2,
-        },
+        _source_group_stage(),
+        _two_leg_tie_stage("semi-final", terminal="championship"),
+        _two_leg_tie_stage("other-stage", terminal="placement"),
     ]
     first = {
         "match_id": "semi-final-1",
@@ -458,13 +655,14 @@ def test_completed_match_allows_reversed_home_away_order_across_legs() -> None:
     from tournament_forecaster.config import load_tournament_document
 
     document = _document()
+    teams = document["teams"]
+    ratings = document["ratings"]
+    assert isinstance(teams, list) and isinstance(ratings, dict)
+    teams.append({"id": "east-city", "display_name": "East City"})
+    ratings["east-city"] = 1450
     document["stages"] = [
-        {
-            "id": "semi-final",
-            "type": "knockout",
-            "pairing": {"mode": "fixed", "ties": []},
-            "legs": 2,
-        }
+        _source_group_stage(),
+        _two_leg_tie_stage("semi-final", terminal="championship"),
     ]
     document["completed_matches"] = [
         {
@@ -515,6 +713,8 @@ def test_completed_match_rejects_winner_contradicted_by_score() -> None:
             "type": "knockout",
             "pairing": {"mode": "fixed", "ties": []},
             "legs": 1,
+            "home_away_order": "listed_team_first_leg_home",
+            "terminal": "championship",
         },
     ],
 )
@@ -524,7 +724,12 @@ def test_completed_match_leg_must_fit_stage_contract(stage: dict[str, object]) -
     from tournament_forecaster.errors import TournamentValidationError
 
     document = _document()
-    document["stages"] = [stage]
+    if stage["type"] == "knockout":
+        stage["home_away_order"] = "listed_team_first_leg_home"
+        stage["terminal"] = "championship"
+        document["stages"] = [stage]
+    else:
+        document["stages"] = [stage, _terminal_stage()]
     completed_matches = document["completed_matches"]
     assert isinstance(completed_matches, list)
     assert isinstance(completed_matches[0], dict)
@@ -560,7 +765,8 @@ def test_completed_group_match_rejects_cross_group_teams() -> None:
                 "a": ["north-city", "south-city"],
                 "b": ["east-city", "west-city"],
             },
-        }
+        },
+        _terminal_stage(),
     ]
     completed_matches = document["completed_matches"]
     assert isinstance(completed_matches, list)
@@ -588,7 +794,8 @@ def test_completed_league_match_must_reference_configured_fixture() -> None:
                     "away_team_id": "south-city",
                 }
             ],
-        }
+        },
+        _terminal_stage(),
     ]
     completed_matches = document["completed_matches"]
     assert isinstance(completed_matches, list)

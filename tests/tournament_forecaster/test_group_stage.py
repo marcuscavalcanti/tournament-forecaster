@@ -20,15 +20,36 @@ def test_group_fixture_generation_is_stable_and_alternates_home_teams() -> None:
     fixtures = generate_group_fixtures(stage)
 
     assert [fixture.match_id for fixture in fixtures] == [
-        "groups-alpha-vs-bravo-1",
-        "groups-alpha-vs-bravo-2",
-        "groups-alpha-vs-charlie-1",
-        "groups-alpha-vs-charlie-2",
-        "groups-bravo-vs-charlie-1",
-        "groups-bravo-vs-charlie-2",
+        "groups-group-42-round-1-match-616c706861-627261766f",
+        "groups-group-42-round-2-match-616c706861-627261766f",
+        "groups-group-42-round-1-match-616c706861-636861726c6965",
+        "groups-group-42-round-2-match-616c706861-636861726c6965",
+        "groups-group-42-round-1-match-627261766f-636861726c6965",
+        "groups-group-42-round-2-match-627261766f-636861726c6965",
     ]
     assert (fixtures[0].home_team_id, fixtures[0].away_team_id) == ("alpha", "bravo")
     assert (fixtures[1].home_team_id, fixtures[1].away_team_id) == ("bravo", "alpha")
+
+
+def test_group_fixture_ids_are_collision_free_for_delimiter_like_team_ids() -> None:
+    stage = {
+        "id": "groups",
+        "type": "round_robin_groups",
+        "groups": {"A": ["a", "a-vs-b", "b-vs-c", "c"]},
+        "rounds_per_pair": 1,
+    }
+
+    fixtures = generate_group_fixtures(stage)
+    ids_by_pair = {
+        frozenset((fixture.home_team_id, fixture.away_team_id)): fixture.match_id
+        for fixture in fixtures
+    }
+
+    assert len(fixtures) == len({fixture.match_id for fixture in fixtures}) == 6
+    assert ids_by_pair[frozenset(("a", "b-vs-c"))] != ids_by_pair[
+        frozenset(("a-vs-b", "c"))
+    ]
+    assert all("-group-41-round-1-match-" in fixture.match_id for fixture in fixtures)
 
 
 def test_completed_group_result_is_locked_and_bypasses_score_simulation() -> None:
@@ -39,7 +60,7 @@ def test_completed_group_result_is_locked_and_bypasses_score_simulation() -> Non
         "qualification": {"direct_per_group": 1, "best_additional": 0},
     }
     completed = CompletedMatch(
-        match_id="groups-alpha-vs-bravo-1",
+        match_id=generate_group_fixtures(stage)[0].match_id,
         stage_id="groups",
         home_team_id="alpha",
         away_team_id="bravo",

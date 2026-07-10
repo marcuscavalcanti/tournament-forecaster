@@ -21,6 +21,10 @@ _ENTRANT_TYPES = frozenset(
     {"group_rank", "best_additional", "league_rank", "match_winner"}
 )
 _AGGREGATE_TIEBREAKS = frozenset({"extra_time_then_penalties", "penalties"})
+_HOME_AWAY_ORDERS = frozenset(
+    {"listed_team_first_leg_home", "seeded_team_second_leg_home"}
+)
+_KNOCKOUT_TERMINALS = frozenset({"championship", "placement"})
 _TIEBREAKERS = frozenset(
     {"points", "goal_difference", "goals_for", "wins", "rating", "team_id"}
 )
@@ -56,6 +60,7 @@ _KNOCKOUT_STAGE_PROPERTIES = frozenset(
         "home_away_order",
         "aggregate_tiebreak",
         "away_goals_rule",
+        "terminal",
         "metadata",
     }
 )
@@ -439,11 +444,13 @@ def _validate_group_stage(
     if not groups:
         raise TournamentValidationError("round-robin group stage must define groups")
     memberships: dict[str, str] = {}
+    roster_sizes: list[int] = []
     for group_id_value, roster_value in groups.items():
         group_id = _group_label(group_id_value)
         roster = _sequence(roster_value, f"group {group_id} roster")
         if len(roster) < 2:
             raise TournamentValidationError("group roster must contain at least two teams")
+        roster_sizes.append(len(roster))
         local_ids: set[str] = set()
         for team_id_value in roster:
             team_id = _stable_id(team_id_value, "group team id")
@@ -468,14 +475,25 @@ def _validate_group_stage(
             frozenset({"direct_per_group", "best_additional"}),
             f"{label} qualification",
         )
-        _integer(
+        direct_per_group = _integer(
             qualification.get("direct_per_group"),
             f"{label} direct qualification count",
         )
-        _integer(
+        best_additional = _integer(
             qualification.get("best_additional"),
             f"{label} additional qualification count",
         )
+        if any(direct_per_group > roster_size for roster_size in roster_sizes):
+            raise TournamentValidationError(
+                f"{label} qualification counts must be attainable from every group roster"
+            )
+        additional_candidates = sum(
+            roster_size - direct_per_group for roster_size in roster_sizes
+        )
+        if best_additional > additional_candidates:
+            raise TournamentValidationError(
+                f"{label} qualification counts must be attainable from group rosters"
+            )
     return memberships
 
 
@@ -600,8 +618,14 @@ def _validate_knockout_stage(
     legs = stage.get("legs")
     if isinstance(legs, bool) or legs not in {1, 2}:
         raise TournamentValidationError("knockout stage must use one or two legs")
-    if "home_away_order" in stage:
-        _text(stage["home_away_order"], f"{label} home away order")
+    home_away_order = _text(
+        stage.get("home_away_order"),
+        f"{label} home away order",
+    )
+    if home_away_order not in _HOME_AWAY_ORDERS:
+        raise TournamentValidationError(
+            "knockout home away order must be listed_team_first_leg_home or seeded_team_second_leg_home"
+        )
     if "aggregate_tiebreak" in stage:
         aggregate_tiebreak = _text(
             stage["aggregate_tiebreak"],
@@ -612,8 +636,89 @@ def _validate_knockout_stage(
                 "knockout aggregate tiebreak must be extra_time_then_penalties or penalties"
             )
     if "away_goals_rule" in stage:
-        _boolean(stage["away_goals_rule"], f"{label} away goals rule")
+        away_goals_rule = _boolean(stage["away_goals_rule"], f"{label} away goals rule")
+        if away_goals_rule and legs == 1:
+            raise TournamentValidationError("knockout away goals rule requires two legs")
+    if "terminal" in stage:
+        terminal = _text(stage["terminal"], f"{label} terminal")
+        if terminal not in _KNOCKOUT_TERMINALS:
+            raise TournamentValidationError(
+                "knockout terminal must be championship or placement"
+            )
     return int(legs), tie_ids, tuple(entrant_sources)
+
+
+def _completed_knockout_winner(
+    stage: Mapping[str, object],
+    matches: Sequence[CompletedMatch],
+) -> str | None:
+    """Validate and resolve a fully completed knockout tie without randomness."""
+
+    legs = stage.get("legs")
+    assert isinstance(legs, int) and not isinstance(legs, bool)
+    facts_by_leg = {match.leg: match for match in matches}
+    if any(match.winner_team_id is not None and match.leg != legs for match in matches):
+        raise TournamentValidationError(
+            "completed two-leg winner must be declared on the final leg"
+        )
+    if any(leg not in facts_by_leg for leg in range(1, legs + 1)):
+        return None
+
+    first = facts_by_leg[1]
+    team_ids = {first.home_team_id, first.away_team_id}
+    totals = {team_id: 0 for team_id in team_ids}
+    away_goals = {team_id: 0 for team_id in team_ids}
+    for leg in range(1, legs + 1):
+        match = facts_by_leg[leg]
+        totals[match.home_team_id] += match.score.home
+        totals[match.away_team_id] += match.score.away
+        away_goals[match.away_team_id] += match.score.away
+
+    final_fact = facts_by_leg[legs]
+    declared_winner = final_fact.winner_team_id
+    if legs == 1:
+        if final_fact.score.home != final_fact.score.away:
+            inferred = (
+                final_fact.home_team_id
+                if final_fact.score.home > final_fact.score.away
+                else final_fact.away_team_id
+            )
+            if declared_winner is not None and declared_winner != inferred:
+                raise TournamentValidationError(
+                    "completed winner contradicts decisive score"
+                )
+            return inferred
+        if declared_winner is None:
+            raise TournamentValidationError(
+                "completed draw requires explicit winner"
+            )
+        return declared_winner
+
+    ordered_teams = sorted(team_ids)
+    first_team, second_team = ordered_teams
+    if totals[first_team] != totals[second_team]:
+        inferred = first_team if totals[first_team] > totals[second_team] else second_team
+        if declared_winner is not None and declared_winner != inferred:
+            raise TournamentValidationError(
+                "completed winner contradicts decisive aggregate"
+            )
+        return inferred
+    if bool(stage.get("away_goals_rule", False)) and away_goals[first_team] != away_goals[second_team]:
+        inferred = (
+            first_team
+            if away_goals[first_team] > away_goals[second_team]
+            else second_team
+        )
+        if declared_winner is not None and declared_winner != inferred:
+            raise TournamentValidationError(
+                "completed winner contradicts decisive away-goals result"
+            )
+        return inferred
+    if declared_winner is None:
+        raise TournamentValidationError(
+            "completed aggregate draw requires explicit winner"
+        )
+    return declared_winner
 
 
 def validate_tournament(tournament: Tournament) -> None:
@@ -671,6 +776,15 @@ def validate_tournament(tournament: Tournament) -> None:
                 tie_owners[tie_id] = stable_stage_id
     if len(stage_ids) != len(set(stage_ids)):
         raise TournamentValidationError("tournament stage ids must be unique")
+    championship_terminals = [
+        stage_id
+        for stage_id, stage in stages_by_id.items()
+        if stage.get("type") == "knockout" and stage.get("terminal") == "championship"
+    ]
+    if len(championship_terminals) != 1:
+        raise TournamentValidationError(
+            "tournament must define exactly one knockout championship terminal"
+        )
     dependencies: dict[str, set[str]] = {stage_id: set() for stage_id in stage_ids}
     for target_stage_id, sources in knockout_sources.items():
         for source in sources:
@@ -742,6 +856,7 @@ def validate_tournament(tournament: Tournament) -> None:
             raise TournamentValidationError("ratings must be finite numeric values")
     completed_keys: set[tuple[str, int]] = set()
     completed_identities: dict[str, tuple[str, frozenset[str]]] = {}
+    completed_knockout_ties: dict[tuple[str, str], list[CompletedMatch]] = {}
     for match in tournament.completed_matches:
         if not isinstance(match, CompletedMatch):
             raise TournamentValidationError("completed matches must be CompletedMatch values")
@@ -764,19 +879,23 @@ def validate_tournament(tournament: Tournament) -> None:
             completed_identities[match.match_id] = identity
         if match.leg > stage_leg_limits[match.stage_id]:
             raise TournamentValidationError("completed match leg exceeds stage contract")
-        if match.winner_team_id is not None and match.score.home != match.score.away:
+        stage = stages_by_id[match.stage_id]
+        if stage.get("type") == "knockout":
+            if tie_owners.get(match.match_id) != match.stage_id:
+                raise TournamentValidationError(
+                    "completed knockout match is not a configured tie"
+                )
+            completed_knockout_ties.setdefault(
+                (match.stage_id, match.match_id),
+                [],
+            ).append(match)
+        elif match.winner_team_id is not None and match.score.home != match.score.away:
             score_winner = (
                 match.home_team_id
                 if match.score.home > match.score.away
                 else match.away_team_id
             )
-            stage = stages_by_id[match.stage_id]
-            is_two_leg_tie_decider = (
-                stage.get("type") == "knockout"
-                and stage_leg_limits[match.stage_id] == 2
-                and match.leg == 2
-            )
-            if match.winner_team_id != score_winner and not is_two_leg_tie_decider:
+            if match.winner_team_id != score_winner:
                 raise TournamentValidationError("completed match winner contradicts score")
         if match.stage_id in group_memberships:
             membership = group_memberships[match.stage_id]
@@ -790,3 +909,57 @@ def validate_tournament(tournament: Tournament) -> None:
             configured_pair = league_fixtures[match.stage_id].get(match.match_id)
             if configured_pair != identity[1]:
                 raise TournamentValidationError("completed league match must reference a configured league fixture")
+    completed_winners: dict[str, str] = {}
+    locked_entrants_by_stage: dict[str, set[str]] = {}
+    for (stage_id, match_id), matches in sorted(completed_knockout_ties.items()):
+        locked_entrants = locked_entrants_by_stage.setdefault(stage_id, set())
+        team_pair = {matches[0].home_team_id, matches[0].away_team_id}
+        if locked_entrants & team_pair:
+            raise TournamentValidationError(
+                "a locked entrant cannot be reserved in more than one tie"
+            )
+        locked_entrants.update(team_pair)
+        winner = _completed_knockout_winner(stages_by_id[stage_id], matches)
+        if winner is not None:
+            completed_winners[match_id] = winner
+
+    tie_sources: dict[str, tuple[Mapping[str, object], ...]] = {}
+    for stage in tournament.stages:
+        if stage.get("type") != "knockout":
+            continue
+        pairing = stage["pairing"]
+        assert isinstance(pairing, Mapping)
+        ties = pairing["ties"]
+        assert isinstance(ties, Sequence)
+        for tie in ties:
+            assert isinstance(tie, Mapping)
+            entrants = tie["entrants"]
+            assert isinstance(entrants, Sequence)
+            tie_sources[str(tie["id"])] = tuple(
+                entrant for entrant in entrants if isinstance(entrant, Mapping)
+            )
+
+    for (_, match_id), matches in sorted(completed_knockout_ties.items()):
+        required_winners: list[str] = []
+        for source in tie_sources[match_id]:
+            if source.get("type") != "match_winner":
+                continue
+            ancestor_match_id = str(source["match_id"])
+            ancestor_winner = completed_winners.get(ancestor_match_id)
+            if ancestor_winner is None:
+                raise TournamentValidationError(
+                    "completed match_winner ancestor must also be fully completed"
+                )
+            required_winners.append(ancestor_winner)
+        if required_winners:
+            locked_pair = {matches[0].home_team_id, matches[0].away_team_id}
+            required_set = set(required_winners)
+            is_consistent = (
+                required_set == locked_pair
+                if len(required_winners) == 2
+                else required_set <= locked_pair
+            )
+            if not is_consistent:
+                raise TournamentValidationError(
+                    "completed downstream tie contradicts completed ancestor winners"
+                )

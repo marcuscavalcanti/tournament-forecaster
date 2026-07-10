@@ -34,6 +34,25 @@ class GroupStageResult:
     qualified_team_ids: tuple[str, ...]
 
 
+def group_fixture_match_id(
+    stage_id: str,
+    group_id: str,
+    first_team_id: str,
+    second_team_id: str,
+    round_number: int,
+) -> str:
+    """Build a collision-free stable ID from separately encoded components."""
+
+    first, second = sorted((first_team_id, second_team_id))
+    encoded_group = group_id.encode("ascii").hex()
+    encoded_first = first.encode("ascii").hex()
+    encoded_second = second.encode("ascii").hex()
+    return (
+        f"{stage_id}-group-{encoded_group}-round-{round_number}"
+        f"-match-{encoded_first}-{encoded_second}"
+    )
+
+
 def generate_group_fixtures(stage: Mapping[str, object]) -> tuple[Fixture, ...]:
     """Generate a stable round-robin schedule from normalized group data."""
 
@@ -46,6 +65,7 @@ def generate_group_fixtures(stage: Mapping[str, object]) -> tuple[Fixture, ...]:
         raise TournamentValidationError("group rounds per pair must be an integer")
     rounds = rounds_value
     fixtures: list[Fixture] = []
+    match_ids: set[str] = set()
     for group_id in sorted(groups):
         roster = groups[group_id]
         if not isinstance(roster, Sequence) or isinstance(roster, (str, bytes)):
@@ -53,9 +73,21 @@ def generate_group_fixtures(stage: Mapping[str, object]) -> tuple[Fixture, ...]:
         for first, second in combinations(sorted(str(team_id) for team_id in roster), 2):
             for round_number in range(1, rounds + 1):
                 home, away = (first, second) if round_number % 2 else (second, first)
+                match_id = group_fixture_match_id(
+                    stage_id,
+                    str(group_id),
+                    first,
+                    second,
+                    round_number,
+                )
+                if match_id in match_ids:
+                    raise TournamentValidationError(
+                        "generated group fixture ids must be unique"
+                    )
+                match_ids.add(match_id)
                 fixtures.append(
                     Fixture(
-                        match_id=f"{stage_id}-{first}-vs-{second}-{round_number}",
+                        match_id=match_id,
                         home_team_id=home,
                         away_team_id=away,
                     )

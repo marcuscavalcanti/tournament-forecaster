@@ -224,18 +224,32 @@
     },
     "knockout_stage": {
       "type": "object",
-      "required": ["id", "type", "pairing", "legs"],
+      "required": ["id", "type", "pairing", "legs", "home_away_order"],
       "properties": {
         "id": {"$ref": "#/$defs/stable_id"},
         "type": {"const": "knockout"},
         "pairing": {"$ref": "#/$defs/knockout_pairing"},
         "legs": {"type": "integer", "enum": [1, 2]},
-        "home_away_order": {"type": "string", "minLength": 1},
+        "home_away_order": {
+          "enum": ["listed_team_first_leg_home", "seeded_team_second_leg_home"]
+        },
         "aggregate_tiebreak": {"enum": ["extra_time_then_penalties", "penalties"]},
         "away_goals_rule": {"type": "boolean"},
+        "terminal": {"enum": ["championship", "placement"]},
         "metadata": {"$ref": "#/$defs/metadata"}
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {"legs": {"const": 1}},
+            "required": ["legs"]
+          },
+          "then": {
+            "properties": {"away_goals_rule": {"const": false}}
+          }
+        }
+      ]
     },
     "completed_match": {
       "type": "object",
@@ -295,6 +309,16 @@
     "stages": {
       "type": "array",
       "minItems": 1,
+      "contains": {
+        "type": "object",
+        "required": ["type", "terminal"],
+        "properties": {
+          "type": {"const": "knockout"},
+          "terminal": {"const": "championship"}
+        }
+      },
+      "minContains": 1,
+      "maxContains": 1,
       "items": {
         "oneOf": [
           {"$ref": "#/$defs/round_robin_stage"},

@@ -9,6 +9,8 @@ import pytest
 from tournament_forecaster import simulate_tournament
 from tournament_forecaster.config import load_tournament_document
 from tournament_forecaster.domain import SimulationOptions
+from tournament_forecaster.errors import TournamentValidationError
+from tournament_forecaster.stages.group_stage import generate_group_fixtures
 
 
 def _document() -> dict[str, object]:
@@ -44,6 +46,7 @@ def _document() -> dict[str, object]:
             ],
         },
         "legs": 1,
+        "home_away_order": "listed_team_first_leg_home",
         "aggregate_tiebreak": "extra_time_then_penalties",
         "away_goals_rule": False,
     }
@@ -63,8 +66,14 @@ def _document() -> dict[str, object]:
             ],
         },
         "legs": 1,
+        "home_away_order": "listed_team_first_leg_home",
         "aggregate_tiebreak": "extra_time_then_penalties",
         "away_goals_rule": False,
+        "terminal": "championship",
+    }
+    group_match_ids = {
+        frozenset((fixture.home_team_id, fixture.away_team_id)): fixture.match_id
+        for fixture in generate_group_fixtures(group_stage)
     }
     return {
         "schema_version": 2,
@@ -81,14 +90,14 @@ def _document() -> dict[str, object]:
         "ratings": {"alpha": 1600, "beta": 1500, "gamma": 1550, "delta": 1450},
         "completed_matches": [
             {
-                "match_id": "groups-alpha-vs-beta-1",
+                "match_id": group_match_ids[frozenset(("alpha", "beta"))],
                 "stage_id": "groups",
                 "home_team_id": "alpha",
                 "away_team_id": "beta",
                 "score": {"home": 2, "away": 0},
             },
             {
-                "match_id": "groups-delta-vs-gamma-1",
+                "match_id": group_match_ids[frozenset(("delta", "gamma"))],
                 "stage_id": "groups",
                 "home_team_id": "delta",
                 "away_team_id": "gamma",
@@ -112,6 +121,51 @@ def test_complete_tournament_probability_fields_replay_deterministically() -> No
     assert first.confidence_intervals == replay.confidence_intervals
     assert datetime.fromisoformat(first.generated_at).tzinfo is not None
     assert first.generated_at != "1970-01-01T00:00:00+00:00"
+
+
+def test_run_id_uses_the_same_canonical_order_as_simulation() -> None:
+    document = _document()
+    stages = document["stages"]
+    assert isinstance(stages, list)
+    stages.append(
+        {
+            "id": "league",
+            "type": "league_table",
+            "fixtures": [
+                {"match_id": "league-2", "home_team_id": "gamma", "away_team_id": "delta"},
+                {"match_id": "league-1", "home_team_id": "alpha", "away_team_id": "beta"},
+            ],
+        }
+    )
+    reordered = deepcopy(document)
+    reordered["teams"] = list(reversed(reordered["teams"]))  # type: ignore[arg-type]
+    reordered["stages"] = list(reversed(reordered["stages"]))  # type: ignore[arg-type]
+    reordered["ratings"] = dict(reversed(list(reordered["ratings"].items())))  # type: ignore[union-attr]
+    reordered["completed_matches"] = list(reversed(reordered["completed_matches"]))  # type: ignore[arg-type]
+    for stage in reordered["stages"]:  # type: ignore[union-attr]
+        assert isinstance(stage, dict)
+        if stage["type"] == "round_robin_groups":
+            groups = stage["groups"]
+            assert isinstance(groups, dict)
+            stage["groups"] = {
+                group_id: list(reversed(roster))
+                for group_id, roster in reversed(list(groups.items()))
+            }
+        elif stage["type"] == "league_table":
+            stage["fixtures"] = list(reversed(stage["fixtures"]))  # type: ignore[arg-type]
+        else:
+            pairing = stage["pairing"]
+            assert isinstance(pairing, dict)
+            pairing["ties"] = list(reversed(pairing["ties"]))  # type: ignore[arg-type]
+
+    options = SimulationOptions(seed=53, iterations=300)
+    first = simulate_tournament(load_tournament_document(document), options=options)
+    second = simulate_tournament(load_tournament_document(reordered), options=options)
+
+    assert first.run_id == second.run_id
+    assert first.stage_probabilities == second.stage_probabilities
+    assert first.matchup_probabilities == second.matchup_probabilities
+    assert first.championship_probability == second.championship_probability
 
 
 def test_focus_reach_matchups_and_title_probability_share_complete_iteration_counts() -> None:
@@ -140,6 +194,53 @@ def test_focus_reach_matchups_and_title_probability_share_complete_iteration_cou
         "final",
         "championship_probability",
     }
+
+
+def test_partial_open_draw_lock_keeps_reach_and_matchup_sums_coherent() -> None:
+    document = _document()
+    stages = document["stages"]
+    completed = document["completed_matches"]
+    assert isinstance(stages, list) and isinstance(completed, list)
+    semi_finals = next(
+        stage
+        for stage in stages
+        if isinstance(stage, dict) and stage["id"] == "semi-finals"
+    )
+    semi_finals["pairing"]["mode"] = "open_draw"  # type: ignore[index]
+    completed.append(
+        {
+            "match_id": "semi-1",
+            "stage_id": "semi-finals",
+            "home_team_id": "alpha",
+            "away_team_id": "delta",
+            "score": {"home": 1, "away": 0},
+        }
+    )
+
+    forecast = simulate_tournament(
+        load_tournament_document(document),
+        options=SimulationOptions(seed=59, iterations=600),
+    )
+
+    assert forecast.stage_probabilities["groups"] == 1.0
+    assert forecast.stage_probabilities["semi-finals"] == 1.0
+    assert forecast.stage_probabilities["final"] == 1.0
+    assert forecast.championship_probability <= forecast.stage_probabilities["final"]
+    semi_matchups = [
+        matchup
+        for matchup in forecast.matchup_probabilities
+        if matchup.stage_id == "semi-finals"
+    ]
+    final_matchups = [
+        matchup
+        for matchup in forecast.matchup_probabilities
+        if matchup.stage_id == "final"
+    ]
+    assert [(matchup.opponent_team_id, matchup.probability) for matchup in semi_matchups] == [
+        ("delta", 1.0)
+    ]
+    assert {matchup.opponent_team_id for matchup in final_matchups} == {"beta", "gamma"}
+    assert sum(matchup.probability for matchup in final_matchups) == pytest.approx(1.0)
 
 
 def test_locked_knockout_path_sets_already_reached_stages_and_title_exactly() -> None:
@@ -192,6 +293,157 @@ def test_locked_knockout_path_sets_already_reached_stages_and_title_exactly() ->
         {"stage_id": "final", "opponent_team_id": "gamma", "probability": 1.0},
         {"stage_id": "semi-finals", "opponent_team_id": "delta", "probability": 1.0},
     ]
+
+
+def test_completed_downstream_tie_requires_completed_match_winner_ancestors() -> None:
+    document = _document()
+    completed = document["completed_matches"]
+    assert isinstance(completed, list)
+    completed.append(
+        {
+            "match_id": "final-1",
+            "stage_id": "final",
+            "home_team_id": "alpha",
+            "away_team_id": "gamma",
+            "score": {"home": 2, "away": 0},
+        }
+    )
+
+    with pytest.raises(
+        TournamentValidationError,
+        match="completed match_winner ancestor",
+    ):
+        load_tournament_document(document)
+
+
+def test_completed_downstream_tie_must_match_completed_ancestor_winners() -> None:
+    document = _document()
+    completed = document["completed_matches"]
+    assert isinstance(completed, list)
+    completed.extend(
+        [
+            {
+                "match_id": "semi-1",
+                "stage_id": "semi-finals",
+                "home_team_id": "alpha",
+                "away_team_id": "delta",
+                "score": {"home": 1, "away": 0},
+            },
+            {
+                "match_id": "semi-2",
+                "stage_id": "semi-finals",
+                "home_team_id": "gamma",
+                "away_team_id": "beta",
+                "score": {"home": 0, "away": 1},
+            },
+            {
+                "match_id": "final-1",
+                "stage_id": "final",
+                "home_team_id": "alpha",
+                "away_team_id": "gamma",
+                "score": {"home": 2, "away": 0},
+            },
+        ]
+    )
+
+    with pytest.raises(
+        TournamentValidationError,
+        match="contradicts completed ancestor winners",
+    ):
+        load_tournament_document(document)
+
+
+def test_completed_non_focus_draw_is_validated_during_full_traversal() -> None:
+    document = _document()
+    completed = document["completed_matches"]
+    assert isinstance(completed, list)
+    completed.append(
+        {
+            "match_id": "semi-2",
+            "stage_id": "semi-finals",
+            "home_team_id": "gamma",
+            "away_team_id": "beta",
+            "score": {"home": 0, "away": 0},
+        }
+    )
+
+    with pytest.raises(
+        TournamentValidationError,
+        match="completed draw requires explicit winner",
+    ):
+        load_tournament_document(document)
+
+
+def test_placement_terminal_never_determines_the_champion() -> None:
+    document = _document()
+    stages = document["stages"]
+    completed = document["completed_matches"]
+    assert isinstance(stages, list) and isinstance(completed, list)
+    final = next(stage for stage in stages if isinstance(stage, dict) and stage["id"] == "final")
+    final["id"] = "a-championship"
+    final["terminal"] = "championship"
+    final["pairing"]["ties"][0]["id"] = "championship-1"  # type: ignore[index]
+    placement = {
+        "id": "z-placement",
+        "type": "knockout",
+        "pairing": {
+            "mode": "fixed",
+            "ties": [
+                {
+                    "id": "placement-1",
+                    "entrants": [
+                        {"type": "group_rank", "stage_id": "groups", "group": "A", "rank": 2},
+                        {"type": "group_rank", "stage_id": "groups", "group": "B", "rank": 2},
+                    ],
+                }
+            ],
+        },
+        "legs": 1,
+        "home_away_order": "listed_team_first_leg_home",
+        "aggregate_tiebreak": "extra_time_then_penalties",
+        "away_goals_rule": False,
+        "terminal": "placement",
+    }
+    stages.append(placement)
+    completed.extend(
+        [
+            {
+                "match_id": "semi-1",
+                "stage_id": "semi-finals",
+                "home_team_id": "alpha",
+                "away_team_id": "delta",
+                "score": {"home": 1, "away": 0},
+            },
+            {
+                "match_id": "semi-2",
+                "stage_id": "semi-finals",
+                "home_team_id": "gamma",
+                "away_team_id": "beta",
+                "score": {"home": 1, "away": 0},
+            },
+            {
+                "match_id": "championship-1",
+                "stage_id": "a-championship",
+                "home_team_id": "alpha",
+                "away_team_id": "gamma",
+                "score": {"home": 2, "away": 0},
+            },
+            {
+                "match_id": "placement-1",
+                "stage_id": "z-placement",
+                "home_team_id": "beta",
+                "away_team_id": "delta",
+                "score": {"home": 0, "away": 1},
+            },
+        ]
+    )
+
+    forecast = simulate_tournament(
+        load_tournament_document(document),
+        options=SimulationOptions(seed=47, iterations=50),
+    )
+
+    assert forecast.championship_probability == 1.0
 
 
 def test_higher_focus_rating_increases_title_probability() -> None:

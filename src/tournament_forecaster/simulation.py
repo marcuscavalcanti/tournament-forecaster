@@ -85,27 +85,64 @@ def _stable_stage_order(stages: Sequence[Mapping[str, object]]) -> tuple[Mapping
 
 
 def _terminal_knockout_stage_id(stages: Sequence[Mapping[str, object]]) -> str | None:
-    tie_owners = _tie_owners(stages)
-    consumed_matches = {
-        str(source["match_id"])
+    championship_stages = [
+        str(stage["id"])
         for stage in stages
-        for source in _tie_sources(stage)
-        if source.get("type") == "match_winner" and isinstance(source.get("match_id"), str)
-    }
-    candidates = sorted(
-        stage_id
-        for stage_id in {str(stage["id"]) for stage in stages if stage.get("type") == "knockout"}
-        if any(owner == stage_id and match_id not in consumed_matches for match_id, owner in tie_owners.items())
-    )
-    return candidates[-1] if candidates else None
+        if stage.get("type") == "knockout" and stage.get("terminal") == "championship"
+    ]
+    if len(championship_stages) != 1:
+        raise TournamentValidationError(
+            "tournament must define exactly one knockout championship terminal"
+        )
+    return championship_stages[0]
 
 
-def _plain(value: object) -> object:
+def _canonical_value(value: object) -> object:
     if isinstance(value, Mapping):
-        return {str(key): _plain(item) for key, item in value.items()}
+        return {
+            str(key): _canonical_value(value[key])
+            for key in sorted(value, key=str)
+        }
     if isinstance(value, (tuple, list)):
-        return [_plain(item) for item in value]
+        return [_canonical_value(item) for item in value]
     return value
+
+
+def _canonical_stage(stage: Mapping[str, object]) -> dict[str, object]:
+    canonical = _canonical_value(stage)
+    assert isinstance(canonical, dict)
+    if stage["type"] == "round_robin_groups":
+        groups = stage["groups"]
+        assert isinstance(groups, Mapping)
+        canonical["groups"] = {
+            str(group_id): sorted(str(team_id) for team_id in groups[group_id])  # type: ignore[index]
+            for group_id in sorted(groups)
+        }
+    elif stage["type"] == "league_table":
+        fixtures = stage["fixtures"]
+        assert isinstance(fixtures, Sequence)
+        canonical["fixtures"] = [
+            _canonical_value(fixture)
+            for fixture in sorted(
+                fixtures,
+                key=lambda fixture: str(fixture["match_id"]),  # type: ignore[index]
+            )
+        ]
+    else:
+        pairing = stage["pairing"]
+        assert isinstance(pairing, Mapping)
+        ties = pairing["ties"]
+        assert isinstance(ties, Sequence)
+        canonical_pairing = canonical["pairing"]
+        assert isinstance(canonical_pairing, dict)
+        canonical_pairing["ties"] = [
+            _canonical_value(tie)
+            for tie in sorted(
+                ties,
+                key=lambda tie: str(tie["id"]),  # type: ignore[index]
+            )
+        ]
+    return canonical
 
 
 def _run_id(tournament: Tournament, focus_team_id: str, options: SimulationOptions) -> str:
@@ -115,18 +152,19 @@ def _run_id(tournament: Tournament, focus_team_id: str, options: SimulationOptio
             "id": tournament.id,
             "display_name": tournament.display_name,
             "season": tournament.season,
-            "metadata": _plain(tournament.metadata),
+            "metadata": _canonical_value(tournament.metadata),
             "teams": [
                 {
                     "id": team.id,
                     "display_name": team.display_name,
-                    "aliases": list(team.aliases),
-                    "metadata": _plain(team.metadata),
+                    "aliases": sorted(team.aliases),
+                    "metadata": _canonical_value(team.metadata),
                 }
                 for team in sorted(tournament.teams, key=lambda item: item.id)
             ],
             "stages": [
-                _plain(stage) for stage in sorted(tournament.stages, key=lambda item: str(item["id"]))
+                _canonical_stage(stage)
+                for stage in sorted(tournament.stages, key=lambda item: str(item["id"]))
             ],
             "ratings": dict(sorted(tournament.ratings.items())),
             "completed_matches": [
@@ -138,6 +176,7 @@ def _run_id(tournament: Tournament, focus_team_id: str, options: SimulationOptio
                     "score": {"home": match.score.home, "away": match.score.away},
                     "leg": match.leg,
                     "winner_team_id": match.winner_team_id,
+                    "metadata": _canonical_value(match.metadata),
                 }
                 for match in sorted(
                     tournament.completed_matches,

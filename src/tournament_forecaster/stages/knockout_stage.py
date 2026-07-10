@@ -6,7 +6,7 @@ import random
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
-from ..domain import CompletedMatch, Score
+from ..domain import CompletedMatch, Score, _completed_knockout_winner
 from ..errors import TournamentValidationError
 from ..pairing import Pairing, build_pairings
 from ..probabilities import (
@@ -63,6 +63,50 @@ def _expected_legs(pairing: Pairing, legs: int, home_away_order: str) -> tuple[t
     )
 
 
+def _locked_pairs(
+    stage_id: str,
+    legs: int,
+    home_away_order: str,
+    completed_matches: Sequence[CompletedMatch],
+) -> tuple[tuple[CompletedMatch, ...], dict[str, tuple[str, str]]]:
+    relevant = tuple(
+        sorted(
+            (match for match in completed_matches if match.stage_id == stage_id),
+            key=lambda match: (match.match_id, match.leg),
+        )
+    )
+    grouped: dict[str, list[CompletedMatch]] = {}
+    for match in relevant:
+        grouped.setdefault(match.match_id, []).append(match)
+    locked: dict[str, tuple[str, str]] = {}
+    reserved: set[str] = set()
+    for match_id, facts in sorted(grouped.items()):
+        team_pair = {facts[0].home_team_id, facts[0].away_team_id}
+        if any({fact.home_team_id, fact.away_team_id} != team_pair for fact in facts):
+            raise TournamentValidationError("completed match legs must use the same team pair")
+        first_fact = facts[0]
+        if legs == 1:
+            oriented = (first_fact.home_team_id, first_fact.away_team_id)
+        else:
+            first_is_home = (
+                home_away_order == "listed_team_first_leg_home" and first_fact.leg == 1
+            ) or (
+                home_away_order == "seeded_team_second_leg_home" and first_fact.leg == 2
+            )
+            oriented = (
+                (first_fact.home_team_id, first_fact.away_team_id)
+                if first_is_home
+                else (first_fact.away_team_id, first_fact.home_team_id)
+            )
+        if any(team_id in reserved for team_id in oriented):
+            raise TournamentValidationError(
+                "a locked entrant cannot be reserved in more than one tie"
+            )
+        reserved.update(oriented)
+        locked[match_id] = oriented
+    return relevant, locked
+
+
 def simulate_knockout_stage(
     stage: Mapping[str, object],
     *,
@@ -79,62 +123,47 @@ def simulate_knockout_stage(
     assert isinstance(pairing_config, Mapping)
     ties = pairing_config["ties"]
     assert isinstance(ties, Sequence)
-    pairings = build_pairings(
-        str(pairing_config["mode"]),
-        ties,  # type: ignore[arg-type]
-        state,
-        rng,
-    )
-    relevant = tuple(
-        sorted(
-            (match for match in completed_matches if match.stage_id == stage_id),
-            key=lambda match: (match.match_id, match.leg),
-        )
-    )
-    configured_ids = {pairing.match_id for pairing in pairings}
-    if any(match.match_id not in configured_ids for match in relevant):
-        raise TournamentValidationError("completed knockout match is not a configured tie")
-
-    actual_pairings: list[Pairing] = []
-    for pairing in pairings:
-        locked_matches = [match for match in relevant if match.match_id == pairing.match_id]
-        if locked_matches:
-            locked_teams = frozenset(
-                (locked_matches[0].home_team_id, locked_matches[0].away_team_id)
-            )
-            configured_teams = frozenset((pairing.first_team_id, pairing.second_team_id))
-            if locked_teams != configured_teams:
-                pairing = Pairing(
-                    pairing.match_id,
-                    locked_matches[0].home_team_id,
-                    locked_matches[0].away_team_id,
-                )
-        actual_pairings.append(pairing)
-
     legs_value = stage["legs"]
     if isinstance(legs_value, bool) or not isinstance(legs_value, int):
         raise TournamentValidationError("knockout legs must be an integer")
     legs = legs_value
     home_away_order = str(stage.get("home_away_order", "listed_team_first_leg_home"))
+    relevant, locked = _locked_pairs(
+        stage_id,
+        legs,
+        home_away_order,
+        completed_matches,
+    )
+    pairings = build_pairings(
+        str(pairing_config["mode"]),
+        ties,  # type: ignore[arg-type]
+        state,
+        rng,
+        locked_pairs=locked,
+    )
     away_goals_rule = bool(stage.get("away_goals_rule", False))
     aggregate_tiebreak = str(stage.get("aggregate_tiebreak", "extra_time_then_penalties"))
     matches: list[TableMatch] = []
     winners: dict[str, str] = {}
-    for pairing in actual_pairings:
+    for pairing in pairings:
         facts_by_leg = {
             match.leg: match
             for match in relevant
             if match.match_id == pairing.match_id
         }
+        completed_winner = _completed_knockout_winner(
+            stage,
+            tuple(facts_by_leg.values()),
+        )
         expected_legs = _expected_legs(pairing, legs, home_away_order)
         tie_matches: list[TableMatch] = []
         for leg, (home_team_id, away_team_id) in enumerate(expected_legs, start=1):
             fact = facts_by_leg.get(leg)
             if fact is not None:
-                if frozenset((fact.home_team_id, fact.away_team_id)) != frozenset(
-                    (pairing.first_team_id, pairing.second_team_id)
-                ):
-                    raise TournamentValidationError("completed knockout leg teams contradict its tie")
+                if (fact.home_team_id, fact.away_team_id) != (home_team_id, away_team_id):
+                    raise TournamentValidationError(
+                        "completed knockout leg home-away order contradicts its tie"
+                    )
                 tie_matches.append(
                     TableMatch(
                         fact.match_id,
@@ -168,13 +197,8 @@ def simulate_knockout_stage(
             away_goals[match.away_team_id] += match.score.away
         first_total = totals[pairing.first_team_id]
         second_total = totals[pairing.second_team_id]
-        locked_tie_winner = (
-            facts_by_leg[2].winner_team_id
-            if legs == 2 and len(facts_by_leg) == 2 and 2 in facts_by_leg
-            else None
-        )
-        if locked_tie_winner is not None:
-            winner = locked_tie_winner
+        if completed_winner is not None:
+            winner = completed_winner
         elif first_total != second_total:
             winner = pairing.first_team_id if first_total > second_total else pairing.second_team_id
         elif legs == 1 and 1 in facts_by_leg and facts_by_leg[1].winner_team_id is not None:
@@ -199,14 +223,14 @@ def simulate_knockout_stage(
         sorted(
             {
                 team_id
-                for pairing in actual_pairings
+                for pairing in pairings
                 for team_id in (pairing.first_team_id, pairing.second_team_id)
             }
         )
     )
     return KnockoutStageResult(
         stage_id=stage_id,
-        pairings=tuple(actual_pairings),
+        pairings=pairings,
         matches=tuple(matches),
         winners=winners,
         entrant_team_ids=entrants,

@@ -70,8 +70,10 @@ def _representative_tournament_document() -> dict[str, object]:
                 "type": "knockout",
                 "pairing": {"mode": "fixed", "ties": []},
                 "legs": 1,
+                "home_away_order": "listed_team_first_leg_home",
                 "aggregate_tiebreak": "extra_time_then_penalties",
                 "away_goals_rule": False,
+                "terminal": "championship",
             },
         ],
         "ratings": {
@@ -82,7 +84,7 @@ def _representative_tournament_document() -> dict[str, object]:
         },
         "completed_matches": [
             {
-                "match_id": "group-a-1",
+                "match_id": "group-stage-group-41-round-1-match-6e6f7274682d63697479-736f7574682d63697479",
                 "stage_id": "group-stage",
                 "home_team_id": "north-city",
                 "away_team_id": "south-city",
@@ -164,6 +166,43 @@ def test_schema_resources_validate_representative_domain_documents() -> None:
     )
     assert tournament_errors == []
     assert forecast_errors == []
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"terminal": "winner"},
+        {"home_away_order": "random_home"},
+        {"legs": 1, "away_goals_rule": True},
+    ],
+)
+def test_knockout_format_schema_rejects_invalid_terminal_and_leg_rules(
+    mutation: dict[str, object],
+) -> None:
+    document = _representative_tournament_document()
+    final = document["stages"][2]  # type: ignore[index]
+    final.update(mutation)
+    validator = _draft_2020_validator()(_schema_resources()["tournament.schema.json"])
+
+    assert list(validator.iter_errors(document))
+
+
+@pytest.mark.parametrize("championship_count", [0, 2])
+def test_schema_requires_exactly_one_championship_terminal(
+    championship_count: int,
+) -> None:
+    document = _representative_tournament_document()
+    stages = document["stages"]
+    assert isinstance(stages, list) and isinstance(stages[2], dict)
+    stages[2].pop("terminal")
+    for index in range(championship_count):
+        stage = deepcopy(stages[2])
+        stage["id"] = f"championship-{index + 1}"
+        stage["terminal"] = "championship"
+        stages.append(stage)
+    validator = _draft_2020_validator()(_schema_resources()["tournament.schema.json"])
+
+    assert list(validator.iter_errors(document))
 
 
 def test_knockout_tie_schema_matches_typed_loader_contract() -> None:
