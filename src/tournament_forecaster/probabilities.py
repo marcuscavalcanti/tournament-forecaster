@@ -7,9 +7,7 @@ import random
 from statistics import NormalDist
 
 from .domain import Score
-
-
-DEFAULT_RATING = 1500.0
+from .standings import DEFAULT_RATING as DEFAULT_RATING
 
 
 def rating_win_probability(first_rating: float, second_rating: float) -> float:

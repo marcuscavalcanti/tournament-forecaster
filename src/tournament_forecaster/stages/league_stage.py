@@ -10,12 +10,10 @@ from ..domain import CompletedMatch, Score
 from ..errors import TournamentValidationError
 from ..probabilities import DEFAULT_RATING, simulate_score
 from ..standings import (
-    DEFAULT_POINTS,
-    DEFAULT_TIEBREAKERS,
     Fixture,
     StandingRow,
     TableMatch,
-    calculate_standings,
+    calculate_league_table,
 )
 
 
@@ -94,23 +92,10 @@ def simulate_league_stage(
                 )
             )
 
-    team_ids = sorted(
-        {
-            team_id
-            for fixture in fixtures
-            for team_id in (fixture.home_team_id, fixture.away_team_id)
-        }
-    )
-    points = stage.get("points", DEFAULT_POINTS)
-    tiebreakers = stage.get("tiebreakers", DEFAULT_TIEBREAKERS)
-    assert isinstance(points, Mapping)
-    assert isinstance(tiebreakers, Sequence)
-    rankings = calculate_standings(
-        team_ids,
+    rankings = calculate_league_table(
+        stage,
         matches,
         ratings=ratings,
-        points=points,  # type: ignore[arg-type]
-        tiebreakers=tiebreakers,  # type: ignore[arg-type]
     )
     bands: dict[str, tuple[str, ...]] = {}
     band_values = stage.get("qualification_bands", ())

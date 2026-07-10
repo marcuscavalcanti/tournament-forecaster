@@ -249,6 +249,114 @@ def _rank_fed_completed_tie_document(
     }
 
 
+def _resolved_rank_lock_document(
+    pairing_mode: str,
+    source_kind: str,
+    locked_pair: tuple[str, str],
+) -> dict[str, object]:
+    teams = ("a", "b", "c")
+    if source_kind == "league_rank":
+        source_stage: dict[str, object] = {
+            "id": "source-league",
+            "type": "league_table",
+            "fixtures": [
+                {"match_id": "league-a-b", "home_team_id": "a", "away_team_id": "b"},
+                {"match_id": "league-a-c", "home_team_id": "a", "away_team_id": "c"},
+                {"match_id": "league-b-c", "home_team_id": "b", "away_team_id": "c"},
+            ],
+            "tiebreakers": ["points", "goal_difference", "goals_for", "team_id"],
+        }
+        entrants = [
+            {"type": "league_rank", "stage_id": "source-league", "rank": 1},
+            {"type": "league_rank", "stage_id": "source-league", "rank": 2},
+        ]
+        source_matches = [
+            {
+                "match_id": fixture["match_id"],
+                "stage_id": "source-league",
+                "home_team_id": fixture["home_team_id"],
+                "away_team_id": fixture["away_team_id"],
+                "score": {"home": 1, "away": 0},
+            }
+            for fixture in source_stage["fixtures"]  # type: ignore[union-attr]
+        ]
+    else:
+        source_stage = {
+            "id": "source-groups",
+            "type": "round_robin_groups",
+            "groups": {"A": list(teams)},
+            "rounds_per_pair": 1,
+            "tiebreakers": ["points", "goal_difference", "goals_for", "team_id"],
+        }
+        if source_kind == "best_additional":
+            source_stage["qualification"] = {
+                "direct_per_group": 0,
+                "best_additional": 3,
+            }
+            entrants = [
+                {"type": "best_additional", "stage_id": "source-groups", "rank": 1},
+                {"type": "best_additional", "stage_id": "source-groups", "rank": 2},
+            ]
+        else:
+            entrants = [
+                {
+                    "type": "group_rank",
+                    "stage_id": "source-groups",
+                    "group": "A",
+                    "rank": 1,
+                },
+                {
+                    "type": "group_rank",
+                    "stage_id": "source-groups",
+                    "group": "A",
+                    "rank": 2,
+                },
+            ]
+        from tournament_forecaster.stages.group_stage import generate_group_fixtures
+
+        source_matches = [
+            {
+                "match_id": fixture.match_id,
+                "stage_id": "source-groups",
+                "home_team_id": fixture.home_team_id,
+                "away_team_id": fixture.away_team_id,
+                "score": {"home": 1, "away": 0},
+            }
+            for fixture in generate_group_fixtures(source_stage)
+        ]
+    return {
+        "schema_version": 2,
+        "tournament": {"id": "resolved-rank-cup", "display_name": "Resolved Rank Cup"},
+        "focus_team_id": "a",
+        "teams": [{"id": team_id, "display_name": team_id.upper()} for team_id in teams],
+        "stages": [
+            source_stage,
+            {
+                "id": "final",
+                "type": "knockout",
+                "pairing": {
+                    "mode": pairing_mode,
+                    "ties": [{"id": "final-1", "entrants": entrants}],
+                },
+                "legs": 1,
+                "home_away_order": "listed_team_first_leg_home",
+                "terminal": "championship",
+            },
+        ],
+        "ratings": {"a": 1700, "b": 1600, "c": 1500},
+        "completed_matches": [
+            *source_matches,
+            {
+                "match_id": "final-1",
+                "stage_id": "final",
+                "home_team_id": locked_pair[0],
+                "away_team_id": locked_pair[1],
+                "score": {"home": 1, "away": 0},
+            },
+        ],
+    }
+
+
 def test_load_tournament_returns_immutable_typed_domain(tmp_path: Path) -> None:
     _require_package()
     from tournament_forecaster.config import load_tournament
@@ -431,6 +539,75 @@ def test_completed_rank_fed_tie_accepts_fully_completed_source_rankings(
     }
 
 
+def test_completed_group_facts_require_exact_generated_match_ids() -> None:
+    _require_package()
+    from tournament_forecaster.config import load_tournament_document
+    from tournament_forecaster.errors import TournamentValidationError
+
+    document = _rank_fed_completed_tie_document(
+        "fixed",
+        "group_rank",
+        source_completed=True,
+    )
+    group_fact = next(
+        match
+        for match in document["completed_matches"]  # type: ignore[union-attr]
+        if match["stage_id"] == "source-groups"
+    )
+    group_fact["match_id"] = "fabricated-source-match"
+
+    with pytest.raises(
+        TournamentValidationError,
+        match="generated group fixture contract",
+    ):
+        load_tournament_document(document)
+
+
+@pytest.mark.parametrize(
+    ("pairing_mode", "message"),
+    [
+        ("fixed", "contradicts fixed pairing sources"),
+        ("seeded_draw", "contradicts configured seed pots"),
+        ("open_draw", "undeclared entrant"),
+    ],
+)
+@pytest.mark.parametrize("source_kind", ["group_rank", "best_additional", "league_rank"])
+def test_completed_rank_fed_tie_rejects_lock_contradicting_resolved_ranks(
+    pairing_mode: str,
+    message: str,
+    source_kind: str,
+) -> None:
+    _require_package()
+    from tournament_forecaster.config import load_tournament_document
+    from tournament_forecaster.errors import TournamentValidationError
+
+    document = _resolved_rank_lock_document(
+        pairing_mode,
+        source_kind,
+        ("a", "c"),
+    )
+
+    with pytest.raises(TournamentValidationError, match=message):
+        load_tournament_document(document)
+
+
+@pytest.mark.parametrize("pairing_mode", ["fixed", "seeded_draw", "open_draw"])
+@pytest.mark.parametrize("source_kind", ["group_rank", "best_additional", "league_rank"])
+def test_completed_rank_fed_tie_accepts_lock_matching_resolved_ranks(
+    pairing_mode: str,
+    source_kind: str,
+) -> None:
+    _require_package()
+    from tournament_forecaster.config import load_tournament_document
+
+    tournament = load_tournament_document(
+        _resolved_rank_lock_document(pairing_mode, source_kind, ("a", "b"))
+    )
+
+    final = next(match for match in tournament.completed_matches if match.match_id == "final-1")
+    assert {final.home_team_id, final.away_team_id} == {"a", "b"}
+
+
 def test_loader_accepts_one_championship_and_any_number_of_placement_terminals() -> None:
     _require_package()
     from tournament_forecaster.config import load_tournament_document
@@ -561,6 +738,7 @@ def test_loader_keeps_team_ids_lowercase_even_when_group_labels_allow_uppercase(
 def test_loader_accepts_stable_ascii_group_labels(group_label: str) -> None:
     _require_package()
     from tournament_forecaster.config import load_tournament_document
+    from tournament_forecaster.stages.group_stage import generate_group_fixtures
 
     document = _document()
     stages = document["stages"]
@@ -570,6 +748,9 @@ def test_loader_accepts_stable_ascii_group_labels(group_label: str) -> None:
     assert isinstance(championship, dict)
     for source in championship["pairing"]["ties"][0]["entrants"]:  # type: ignore[index]
         source["group"] = group_label
+    completed_matches = document["completed_matches"]
+    assert isinstance(completed_matches, list) and isinstance(completed_matches[0], dict)
+    completed_matches[0]["match_id"] = generate_group_fixtures(stages[0])[0].match_id
 
     tournament = load_tournament_document(document)
 

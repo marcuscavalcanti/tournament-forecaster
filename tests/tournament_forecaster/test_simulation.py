@@ -538,6 +538,7 @@ def test_focus_team_override_uses_the_requested_configured_team() -> None:
 def test_generic_engine_sources_never_import_legacy_worldcup_package() -> None:
     package_root = Path(__file__).parents[2] / "src" / "tournament_forecaster"
     task_files = (
+        "group_fixtures.py",
         "probabilities.py",
         "standings.py",
         "qualification.py",

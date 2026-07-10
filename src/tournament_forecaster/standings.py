@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from .domain import Score
 from .errors import TournamentValidationError
-from .probabilities import DEFAULT_RATING
+
+if TYPE_CHECKING:
+    from .domain import Score
 
 
+DEFAULT_RATING = 1500.0
 DEFAULT_POINTS: Mapping[str, int] = {"win": 3, "draw": 1, "loss": 0}
 DEFAULT_TIEBREAKERS = (
     "points",
@@ -143,3 +146,90 @@ def calculate_standings(
         for team_id in ordered_team_ids
     )
     return rank_standing_rows(rows, tiebreakers)
+
+
+def calculate_group_tables(
+    stage: Mapping[str, object],
+    matches: Sequence[TableMatch],
+    *,
+    ratings: Mapping[str, float],
+) -> tuple[
+    dict[str, tuple[StandingRow, ...]],
+    tuple[str, ...],
+    tuple[str, ...],
+]:
+    """Resolve group tables and configured direct/additional qualification."""
+
+    groups = stage["groups"]
+    assert isinstance(groups, Mapping)
+    points = stage.get("points", DEFAULT_POINTS)
+    tiebreakers = stage.get("tiebreakers", DEFAULT_TIEBREAKERS)
+    assert isinstance(points, Mapping)
+    assert isinstance(tiebreakers, Sequence)
+    rankings: dict[str, tuple[StandingRow, ...]] = {}
+    for group_id in sorted(groups):
+        roster = tuple(str(team_id) for team_id in groups[group_id])  # type: ignore[arg-type]
+        roster_set = set(roster)
+        group_matches = tuple(
+            match
+            for match in matches
+            if match.home_team_id in roster_set and match.away_team_id in roster_set
+        )
+        rankings[str(group_id)] = calculate_standings(
+            roster,
+            group_matches,
+            ratings=ratings,
+            points=points,  # type: ignore[arg-type]
+            tiebreakers=tiebreakers,  # type: ignore[arg-type]
+        )
+
+    qualification = stage.get("qualification", {})
+    assert isinstance(qualification, Mapping)
+    direct_per_group = int(qualification.get("direct_per_group", 0))
+    additional_count = int(qualification.get("best_additional", 0))
+    direct = tuple(
+        row.team_id
+        for group_id in sorted(rankings)
+        for row in rankings[group_id][:direct_per_group]
+    )
+    additional_candidates = tuple(
+        row
+        for group_id in sorted(rankings)
+        for row in rankings[group_id][direct_per_group:]
+    )
+    best_additional = tuple(
+        row.team_id
+        for row in rank_standing_rows(additional_candidates, tiebreakers)[:additional_count]
+    )
+    return rankings, best_additional, direct + best_additional
+
+
+def calculate_league_table(
+    stage: Mapping[str, object],
+    matches: Sequence[TableMatch],
+    *,
+    ratings: Mapping[str, float],
+) -> tuple[StandingRow, ...]:
+    """Resolve one league table from configured fixtures and completed matches."""
+
+    fixture_values = stage["fixtures"]
+    assert isinstance(fixture_values, Sequence)
+    team_ids = sorted(
+        {
+            str(team_id)
+            for fixture in fixture_values
+            if isinstance(fixture, Mapping)
+            for team_id in (fixture["home_team_id"], fixture["away_team_id"])
+        }
+    )
+    points = stage.get("points", DEFAULT_POINTS)
+    tiebreakers = stage.get("tiebreakers", DEFAULT_TIEBREAKERS)
+    assert isinstance(points, Mapping)
+    assert isinstance(tiebreakers, Sequence)
+    return calculate_standings(
+        team_ids,
+        matches,
+        ratings=ratings,
+        points=points,  # type: ignore[arg-type]
+        tiebreakers=tiebreakers,  # type: ignore[arg-type]
+    )

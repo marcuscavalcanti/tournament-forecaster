@@ -5,19 +5,19 @@ from __future__ import annotations
 import random
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import combinations
 
 from ..domain import CompletedMatch, Score
 from ..errors import TournamentValidationError
+from ..group_fixtures import (
+    generate_group_fixture_specs,
+    group_fixture_match_id as group_fixture_match_id,
+)
 from ..probabilities import DEFAULT_RATING, simulate_score
 from ..standings import (
-    DEFAULT_POINTS,
-    DEFAULT_TIEBREAKERS,
     Fixture,
     StandingRow,
     TableMatch,
-    calculate_standings,
-    rank_standing_rows,
+    calculate_group_tables,
 )
 
 
@@ -34,65 +34,17 @@ class GroupStageResult:
     qualified_team_ids: tuple[str, ...]
 
 
-def group_fixture_match_id(
-    stage_id: str,
-    group_id: str,
-    first_team_id: str,
-    second_team_id: str,
-    round_number: int,
-) -> str:
-    """Build a collision-free stable ID from separately encoded components."""
-
-    first, second = sorted((first_team_id, second_team_id))
-    encoded_group = group_id.encode("ascii").hex()
-    encoded_first = first.encode("ascii").hex()
-    encoded_second = second.encode("ascii").hex()
-    return (
-        f"{stage_id}-group-{encoded_group}-round-{round_number}"
-        f"-match-{encoded_first}-{encoded_second}"
-    )
-
-
 def generate_group_fixtures(stage: Mapping[str, object]) -> tuple[Fixture, ...]:
     """Generate a stable round-robin schedule from normalized group data."""
 
-    stage_id = str(stage["id"])
-    groups = stage.get("groups")
-    if not isinstance(groups, Mapping):
-        raise TournamentValidationError("group stage groups must be a mapping")
-    rounds_value = stage.get("rounds_per_pair", 1)
-    if isinstance(rounds_value, bool) or not isinstance(rounds_value, int):
-        raise TournamentValidationError("group rounds per pair must be an integer")
-    rounds = rounds_value
-    fixtures: list[Fixture] = []
-    match_ids: set[str] = set()
-    for group_id in sorted(groups):
-        roster = groups[group_id]
-        if not isinstance(roster, Sequence) or isinstance(roster, (str, bytes)):
-            raise TournamentValidationError("group roster must be a sequence")
-        for first, second in combinations(sorted(str(team_id) for team_id in roster), 2):
-            for round_number in range(1, rounds + 1):
-                home, away = (first, second) if round_number % 2 else (second, first)
-                match_id = group_fixture_match_id(
-                    stage_id,
-                    str(group_id),
-                    first,
-                    second,
-                    round_number,
-                )
-                if match_id in match_ids:
-                    raise TournamentValidationError(
-                        "generated group fixture ids must be unique"
-                    )
-                match_ids.add(match_id)
-                fixtures.append(
-                    Fixture(
-                        match_id=match_id,
-                        home_team_id=home,
-                        away_team_id=away,
-                    )
-                )
-    return tuple(fixtures)
+    return tuple(
+        Fixture(
+            match_id=fixture.match_id,
+            home_team_id=fixture.home_team_id,
+            away_team_id=fixture.away_team_id,
+        )
+        for fixture in generate_group_fixture_specs(stage)
+    )
 
 
 def _completed_results(
@@ -155,46 +107,10 @@ def simulate_group_stage(
             )
         )
 
-    groups = stage["groups"]
-    assert isinstance(groups, Mapping)
-    points = stage.get("points", DEFAULT_POINTS)
-    tiebreakers = stage.get("tiebreakers", DEFAULT_TIEBREAKERS)
-    assert isinstance(points, Mapping)
-    assert isinstance(tiebreakers, Sequence)
-    rankings: dict[str, tuple[StandingRow, ...]] = {}
-    for group_id in sorted(groups):
-        roster = tuple(str(team_id) for team_id in groups[group_id])  # type: ignore[arg-type]
-        roster_set = set(roster)
-        group_matches = tuple(
-            match
-            for match in matches
-            if match.home_team_id in roster_set and match.away_team_id in roster_set
-        )
-        rankings[str(group_id)] = calculate_standings(
-            roster,
-            group_matches,
-            ratings=ratings,
-            points=points,  # type: ignore[arg-type]
-            tiebreakers=tiebreakers,  # type: ignore[arg-type]
-        )
-
-    qualification = stage.get("qualification", {})
-    assert isinstance(qualification, Mapping)
-    direct_per_group = int(qualification.get("direct_per_group", 0))
-    additional_count = int(qualification.get("best_additional", 0))
-    direct = tuple(
-        row.team_id
-        for group_id in sorted(rankings)
-        for row in rankings[group_id][:direct_per_group]
-    )
-    additional_candidates = tuple(
-        row
-        for group_id in sorted(rankings)
-        for row in rankings[group_id][direct_per_group:]
-    )
-    best_additional = tuple(
-        row.team_id
-        for row in rank_standing_rows(additional_candidates, tiebreakers)[:additional_count]
+    rankings, best_additional, qualified = calculate_group_tables(
+        stage,
+        matches,
+        ratings=ratings,
     )
     return GroupStageResult(
         stage_id=stage_id,
@@ -202,5 +118,5 @@ def simulate_group_stage(
         matches=tuple(matches),
         rankings=rankings,
         best_additional_team_ids=best_additional,
-        qualified_team_ids=direct + best_additional,
+        qualified_team_ids=qualified,
     )

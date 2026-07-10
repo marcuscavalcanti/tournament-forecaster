@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import math
 import re
-from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from itertools import combinations
 from types import MappingProxyType
 from typing import ClassVar
 
 from .errors import TournamentValidationError
+from .group_fixtures import group_fixture_contract
+from .pairing import resolve_ties, validate_locked_pairs
+from .qualification import QualificationState
+from .standings import TableMatch, calculate_group_tables, calculate_league_table
 
 
 _STABLE_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
@@ -732,38 +734,6 @@ def _completed_knockout_winner(
     return declared_winner
 
 
-def _group_fixture_pair_counts(stage: Mapping[str, object]) -> Counter[frozenset[str]]:
-    groups = stage["groups"]
-    assert isinstance(groups, Mapping)
-    rounds = _integer(
-        stage.get("rounds_per_pair", 1),
-        "group rounds per pair",
-        minimum=1,
-    )
-    expected: Counter[frozenset[str]] = Counter()
-    for roster in groups.values():
-        assert isinstance(roster, Sequence)
-        for first_team_id, second_team_id in combinations(
-            sorted(str(team_id) for team_id in roster),
-            2,
-        ):
-            expected[frozenset((first_team_id, second_team_id))] = rounds
-    return expected
-
-
-def _group_fixtures_are_complete(
-    stage: Mapping[str, object],
-    completed_matches: Sequence[CompletedMatch],
-) -> bool:
-    stage_id = str(stage["id"])
-    actual: Counter[frozenset[str]] = Counter(
-        frozenset((match.home_team_id, match.away_team_id))
-        for match in completed_matches
-        if match.stage_id == stage_id
-    )
-    return actual == _group_fixture_pair_counts(stage)
-
-
 def validate_tournament(tournament: Tournament) -> None:
     """Validate cross-object invariants after a tournament has been normalized."""
 
@@ -791,6 +761,10 @@ def validate_tournament(tournament: Tournament) -> None:
     stage_ids: list[str] = []
     stages_by_id: dict[str, Mapping[str, object]] = {}
     group_memberships: dict[str, dict[str, str]] = {}
+    group_fixture_contracts: dict[
+        str,
+        dict[str, tuple[frozenset[str], int]],
+    ] = {}
     league_fixtures: dict[str, dict[str, frozenset[str]]] = {}
     stage_leg_limits: dict[str, int] = {}
     knockout_sources: dict[str, tuple[Mapping[str, object], ...]] = {}
@@ -805,6 +779,7 @@ def validate_tournament(tournament: Tournament) -> None:
         stages_by_id[stable_stage_id] = stage
         if stage_type == "round_robin_groups":
             group_memberships[stable_stage_id] = _validate_group_stage(stage, team_ids)
+            group_fixture_contracts[stable_stage_id] = group_fixture_contract(stage)
             stage_leg_limits[stable_stage_id] = 1
         elif stage_type == "league_table":
             league_fixtures[stable_stage_id] = _validate_league_stage(stage, team_ids)
@@ -958,12 +933,18 @@ def validate_tournament(tournament: Tournament) -> None:
                 or membership[match.home_team_id] != membership[match.away_team_id]
             ):
                 raise TournamentValidationError("completed group match teams must share the same configured group")
+            expected_identity = group_fixture_contracts[match.stage_id].get(match.match_id)
+            if expected_identity != (identity[1], match.leg):
+                raise TournamentValidationError(
+                    "completed group match does not match the generated group fixture contract"
+                )
         if match.stage_id in league_fixtures:
             configured_pair = league_fixtures[match.stage_id].get(match.match_id)
             if configured_pair != identity[1]:
                 raise TournamentValidationError("completed league match must reference a configured league fixture")
     completed_winners: dict[str, str] = {}
     locked_entrants_by_stage: dict[str, set[str]] = {}
+    locked_pairs_by_stage: dict[str, dict[str, tuple[str, str]]] = {}
     for (stage_id, match_id), matches in sorted(completed_knockout_ties.items()):
         locked_entrants = locked_entrants_by_stage.setdefault(stage_id, set())
         team_pair = {matches[0].home_team_id, matches[0].away_team_id}
@@ -972,6 +953,10 @@ def validate_tournament(tournament: Tournament) -> None:
                 "a locked entrant cannot be reserved in more than one tie"
             )
         locked_entrants.update(team_pair)
+        locked_pairs_by_stage.setdefault(stage_id, {})[match_id] = (
+            matches[0].home_team_id,
+            matches[0].away_team_id,
+        )
         winner = _completed_knockout_winner(stages_by_id[stage_id], matches)
         if winner is not None:
             completed_winners[match_id] = winner
@@ -1010,10 +995,16 @@ def validate_tournament(tournament: Tournament) -> None:
             if source.get("type") in {"group_rank", "best_additional", "league_rank"}
         }
         for rank_stage_type, rank_stage_id in sorted(rank_stages):
-            source_stage = stages_by_id[rank_stage_id]
             source_facts = completed_by_stage.get(rank_stage_id, [])
             if rank_stage_type == "group":
-                if not _group_fixtures_are_complete(source_stage, source_facts):
+                completed_contract = {
+                    match.match_id: (
+                        frozenset((match.home_team_id, match.away_team_id)),
+                        match.leg,
+                    )
+                    for match in source_facts
+                }
+                if completed_contract != group_fixture_contracts[rank_stage_id]:
                     raise TournamentValidationError(
                         "completed rank-fed tie requires every generated group fixture"
                     )
@@ -1048,3 +1039,93 @@ def validate_tournament(tournament: Tournament) -> None:
                 raise TournamentValidationError(
                     "completed downstream tie contradicts completed ancestor winners"
                 )
+
+    resolved_state = QualificationState(match_winners=dict(completed_winners))
+    for stage_id, expected_contract in group_fixture_contracts.items():
+        source_facts = completed_by_stage.get(stage_id, [])
+        completed_contract = {
+            match.match_id: (
+                frozenset((match.home_team_id, match.away_team_id)),
+                match.leg,
+            )
+            for match in source_facts
+        }
+        if completed_contract != expected_contract:
+            continue
+        table_matches = tuple(
+            TableMatch(
+                match.match_id,
+                match.home_team_id,
+                match.away_team_id,
+                match.score,
+                match.leg,
+            )
+            for match in source_facts
+        )
+        group_rankings, best_additional, _qualified = calculate_group_tables(
+            stages_by_id[stage_id],
+            table_matches,
+            ratings=tournament.ratings,
+        )
+        resolved_state.group_rankings[stage_id] = {
+            group_id: tuple(row.team_id for row in rows)
+            for group_id, rows in group_rankings.items()
+        }
+        resolved_state.best_additional[stage_id] = best_additional
+
+    for stage_id, configured_fixtures in league_fixtures.items():
+        source_facts = completed_by_stage.get(stage_id, [])
+        if {match.match_id for match in source_facts} != set(configured_fixtures):
+            continue
+        table_matches = tuple(
+            TableMatch(
+                match.match_id,
+                match.home_team_id,
+                match.away_team_id,
+                match.score,
+                match.leg,
+            )
+            for match in source_facts
+        )
+        league_rankings = calculate_league_table(
+            stages_by_id[stage_id],
+            table_matches,
+            ratings=tournament.ratings,
+        )
+        resolved_state.league_rankings[stage_id] = tuple(
+            row.team_id for row in league_rankings
+        )
+
+    rank_source_types = {"group_rank", "best_additional", "league_rank"}
+    for stage_id, locked_pairs in sorted(locked_pairs_by_stage.items()):
+        stage = stages_by_id[stage_id]
+        pairing = stage["pairing"]
+        assert isinstance(pairing, Mapping)
+        ties = pairing["ties"]
+        assert isinstance(ties, Sequence)
+        mode = str(pairing["mode"])
+        selected_ties = tuple(
+            tie
+            for tie in ties
+            if isinstance(tie, Mapping)
+            and (mode != "fixed" or str(tie["id"]) in locked_pairs)
+        )
+        selected_sources = tuple(
+            source
+            for tie in selected_ties
+            for source in tie["entrants"]  # type: ignore[index]
+            if isinstance(source, Mapping)
+        )
+        if not any(source.get("type") in rank_source_types for source in selected_sources):
+            continue
+        resolved_ties = resolve_ties(selected_ties, resolved_state)
+        validate_locked_pairs(
+            mode,
+            resolved_ties,
+            locked_pairs,
+            configured_tie_ids=tuple(
+                str(tie["id"])
+                for tie in ties
+                if isinstance(tie, Mapping)
+            ),
+        )
