@@ -1,13 +1,21 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
-name = "worldcup2026-brazil-radar"
+name = "tournament-forecaster"
 version = "0.1.0"
-description = "Daily/three-day Brazil World Cup 2026 LinkedIn forecasting script."
+description = "Configuration-driven tournament forecasting."
 requires-python = ">=3.11"
 dependencies = []
 
 [project.scripts]
+tournament-forecast = "tournament_forecaster.cli:main"
 worldcup-brazil-report = "worldcup_brazil.cli:main"
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/tournament_forecaster", "worldcup_brazil"]
+
 [tool.pytest.ini_options]
-pythonpath = ["."]
+pythonpath = [".", "src"]
 testpaths = ["tests"]

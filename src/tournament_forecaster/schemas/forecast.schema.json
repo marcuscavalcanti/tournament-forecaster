@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tournament-forecaster.example/schemas/forecast.schema.json",
+  "title": "Tournament Forecaster forecast artifact",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_id",
+    "generated_at",
+    "tournament_id",
+    "focus_team_id",
+    "stage_probabilities",
+    "matchup_probabilities",
+    "championship_probability",
+    "confidence_intervals",
+    "input_provenance",
+    "warnings",
+    "council"
+  ],
+  "properties": {
+    "schema_version": {"const": 2},
+    "run_id": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+    "generated_at": {"type": "string", "minLength": 1},
+    "tournament_id": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+    "focus_team_id": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+    "stage_probabilities": {"type": "object", "additionalProperties": {"type": "number", "minimum": 0, "maximum": 1}},
+    "matchup_probabilities": {"type": "array", "items": {"type": "object"}},
+    "championship_probability": {"type": "number", "minimum": 0, "maximum": 1},
+    "confidence_intervals": {"type": "object"},
+    "input_provenance": {"type": "array"},
+    "warnings": {"type": "array", "items": {"type": "string"}},
+    "council": {"type": ["object", "null"]}
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tournament-forecaster.example/schemas/tournament.schema.json",
+  "title": "Tournament Forecaster tournament document",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "tournament",
+    "focus_team_id",
+    "teams",
+    "stages"
+  ],
+  "properties": {
+    "schema_version": {"const": 2},
+    "tournament": {
+      "type": "object",
+      "required": ["id", "display_name"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+        "display_name": {"type": "string", "minLength": 1},
+        "season": {"type": "string", "minLength": 1}
+      }
+    },
+    "focus_team_id": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+    "teams": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "display_name"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+          "display_name": {"type": "string", "minLength": 1},
+          "aliases": {"type": "array", "items": {"type": "string", "minLength": 1}}
+        }
+      }
+    },
+    "stages": {"type": "array", "minItems": 1, "items": {"type": "object"}},
+    "ratings": {"type": "object", "additionalProperties": {"type": "number"}},
+    "completed_matches": {"type": "array", "items": {"type": "object"}}
+  }
+}
