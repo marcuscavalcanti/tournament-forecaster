@@ -181,12 +181,12 @@ tournament-forecast presets list
 - `init` refuses an existing destination and copies a complete config plus adjacent English README.
 - CLI errors are concise English messages with exit code 2 and no traceback for user input errors.
 
-- [ ] Write failing report, CLI, offline-network-block, and clean-wheel tests before implementation.
-- [ ] Implement JSON, Markdown, and SVG rendering plus the six CLI surfaces.
-- [ ] Build a wheel, install only the wheel into a clean venv, clear provider variables and `PYTHONPATH`, block network, and prove quickstart plus init/validate.
-- [ ] Add `make quickstart` as a convenience without making it part of primary onboarding.
-- [ ] Verify CLI tests, wheel test, generic tests, and legacy baseline.
-- [ ] Commit `feat: add offline tournament forecast CLI`.
+- [x] Write failing report, CLI, offline-network-block, and clean-wheel tests before implementation.
+- [x] Implement JSON, Markdown, and SVG rendering plus the six CLI surfaces.
+- [x] Build a wheel, install only the wheel into a clean venv, clear provider variables and `PYTHONPATH`, block network, and prove quickstart plus init/validate.
+- [x] Add `make quickstart` as a convenience without making it part of primary onboarding.
+- [x] Verify CLI tests, wheel test, generic tests, and legacy baseline.
+- [x] Commit `feat: add offline tournament forecast CLI` plus adversarial publication/recovery hardening.
 
 ### Task 5: Provider Boundaries, Compatibility, and Safe Defaults
 
