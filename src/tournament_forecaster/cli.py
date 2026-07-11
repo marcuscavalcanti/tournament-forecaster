@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import tempfile
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from .atomic_io import atomic_write_text
+from .atomic_io import atomic_write_json, atomic_write_text
+from .backtest import evaluate_backtest, load_backtest
 from .config import load_tournament
 from .domain import Forecast, SimulationOptions, Tournament
 from .errors import TournamentValidationError
@@ -249,6 +251,18 @@ def _run_update_odds(arguments: argparse.Namespace) -> int:
     return 0
 
 
+def _run_backtest(arguments: argparse.Namespace) -> int:
+    report = evaluate_backtest(
+        load_backtest(arguments.input),
+        min_resolved=arguments.min_resolved,
+    )
+    document = report.to_dict()
+    if arguments.output is not None:
+        atomic_write_json(arguments.output, document)
+    print(json.dumps(document, allow_nan=False, ensure_ascii=False, sort_keys=True))
+    return 0 if report.ok else 1
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tournament-forecast",
@@ -339,6 +353,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     update_odds.add_argument("--source", type=Path, required=True)
     update_odds.set_defaults(handler=_run_update_odds)
+
+    backtest = commands.add_parser(
+        "backtest",
+        help="evaluate frozen pre-match ratings against resolved 1X2 results",
+    )
+    backtest.add_argument("--input", type=Path, required=True)
+    backtest.add_argument("--output", type=Path)
+    backtest.add_argument("--min-resolved", type=_positive_integer, default=1)
+    backtest.set_defaults(handler=_run_backtest)
     return parser
 
 

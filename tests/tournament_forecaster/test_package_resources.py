@@ -151,6 +151,7 @@ def _schema_resources() -> dict[str, Any]:
         "forecast.schema.json",
         "results.import.schema.json",
         "odds.import.schema.json",
+        "backtest.schema.json",
     ):
         with resource_path("schemas", filename) as path:
             schemas[filename] = json.loads(path.read_text(encoding="utf-8"))
@@ -175,6 +176,7 @@ def test_schema_resources_validate_representative_domain_documents() -> None:
 
     tournament_schema = schemas["tournament.schema.json"]
     forecast_schema = schemas["forecast.schema.json"]
+    backtest_schema = schemas["backtest.schema.json"]
     assert {"stable_id", "group_label", "probability", "score", "entrant_source"} <= set(
         tournament_schema["$defs"]
     )
@@ -190,8 +192,23 @@ def test_schema_resources_validate_representative_domain_documents() -> None:
     forecast_errors = list(
         Draft202012Validator(forecast_schema).iter_errors(_representative_forecast_document())
     )
+    from tournament_forecaster.backtest import ratings_sha256
+
+    ratings = {"north-city": 1600.0, "south-city": 1500.0}
+    backtest_document = {
+        "schema_version": 1,
+        "model_version": "poisson-elo-v1",
+        "home_advantage_rating_points": 0,
+        "ratings": ratings,
+        "ratings_sha256": ratings_sha256(ratings),
+        "cases": [],
+    }
+    backtest_errors = list(
+        Draft202012Validator(backtest_schema).iter_errors(backtest_document)
+    )
     assert tournament_errors == []
     assert forecast_errors == []
+    assert backtest_errors == []
 
 
 def test_schema_and_loader_accept_explicit_additional_rank() -> None:
@@ -306,6 +323,19 @@ def test_knockout_tie_schema_matches_typed_loader_contract() -> None:
     with pytest.raises(TournamentValidationError, match="mapping"):
         load_tournament_document(document)
     assert list(validator.iter_errors(document))
+
+
+def test_schema_accepts_explicit_team_entrant() -> None:
+    document = _representative_tournament_document()
+    final = document["stages"][2]  # type: ignore[index]
+    final["pairing"]["ties"][0]["entrants"] = [  # type: ignore[index]
+        {"type": "team", "team_id": "north-city"},
+        {"type": "team", "team_id": "south-city"},
+    ]
+
+    validator = _draft_2020_validator()(_schema_resources()["tournament.schema.json"])
+
+    assert list(validator.iter_errors(document)) == []
 
 
 @pytest.mark.parametrize("result", ["win", "draw", "loss"])
@@ -479,6 +509,7 @@ def test_built_wheel_exposes_packages_scripts_and_schema_resources_in_isolation(
     assert "tournament_forecaster/schemas/forecast.schema.json" in members
     assert "tournament_forecaster/schemas/results.import.schema.json" in members
     assert "tournament_forecaster/schemas/odds.import.schema.json" in members
+    assert "tournament_forecaster/schemas/backtest.schema.json" in members
     assert "tournament_forecaster/data/presets/synthetic-cup/tournament.json" in members
     assert "tournament_forecaster/data/templates/group-knockout/tournament.json" in members
     assert "worldcup_brazil/cli.py" in members
@@ -517,6 +548,7 @@ for filename in (
     "forecast.schema.json",
     "results.import.schema.json",
     "odds.import.schema.json",
+    "backtest.schema.json",
 ):
     with resource_path("schemas", filename) as path:
         schema = json.loads(path.read_text(encoding="utf-8"))

@@ -22,7 +22,7 @@ _OUTPUT_KEY = re.compile(r"[a-z0-9]+(?:[-_][a-z0-9]+)*\Z")
 _STAGE_TYPES = frozenset({"round_robin_groups", "league_table", "knockout"})
 _PAIRING_MODES = frozenset({"fixed", "seeded_draw", "open_draw"})
 _ENTRANT_TYPES = frozenset(
-    {"group_rank", "best_additional", "league_rank", "match_winner"}
+    {"team", "group_rank", "best_additional", "league_rank", "match_winner"}
 )
 _AGGREGATE_TIEBREAKS = frozenset({"extra_time_then_penalties", "penalties"})
 _HOME_AWAY_ORDERS = frozenset(
@@ -183,7 +183,16 @@ def _validate_tiebreakers(value: object, label: str) -> None:
 
 def _validate_stage_metadata(stage: Mapping[str, object], label: str) -> None:
     if "metadata" in stage:
-        _mapping(stage["metadata"], f"{label} metadata")
+        metadata = _mapping(stage["metadata"], f"{label} metadata")
+        home_advantage = metadata.get("home_advantage_rating_points", 0.0)
+        if (
+            isinstance(home_advantage, bool)
+            or not isinstance(home_advantage, (int, float))
+            or not math.isfinite(float(home_advantage))
+        ):
+            raise TournamentValidationError(
+                f"{label} metadata home_advantage_rating_points must be finite numeric"
+            )
 
 
 def _freeze(value: object) -> object:
@@ -691,7 +700,11 @@ def _validate_entrant(source_value: object) -> Mapping[str, object]:
     source_type = source.get("type")
     if source_type not in _ENTRANT_TYPES:
         raise TournamentValidationError("knockout entrant type is unsupported")
-    if source_type == "group_rank":
+    if source_type == "team":
+        allowed = frozenset({"type", "team_id"})
+        _reject_unknown_properties(source, allowed, "team entrant")
+        _stable_id(source.get("team_id"), "team entrant team id")
+    elif source_type == "group_rank":
         allowed = frozenset({"type", "stage_id", "group", "rank"})
         _reject_unknown_properties(source, allowed, "group_rank entrant")
         _stable_id(source.get("stage_id"), "group_rank entrant stage id")
@@ -1023,12 +1036,15 @@ def validate_tournament(tournament: Tournament) -> None:
                         (source_stage_id, target_stage_id),
                         set(),
                     ).add(source_rank)
-            else:
+            elif source_type == "match_winner":
                 match_id = str(source["match_id"])
                 owner_stage_id = tie_owners.get(match_id)
                 if owner_stage_id is None:
                     raise TournamentValidationError("match_winner entrant references an unknown tie")
                 dependencies[target_stage_id].add(owner_stage_id)
+            else:
+                if source["team_id"] not in team_ids:
+                    raise TournamentValidationError("team entrant references an unknown team")
     band_contracts = {
         (league_stage_id, destination): set(ranks)
         for league_stage_id, bands in league_qualification_bands.items()

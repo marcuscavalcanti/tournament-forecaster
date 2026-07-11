@@ -1,0 +1,2935 @@
+{
+  "completed_matches": [
+    {
+      "away_team_id": "korea-republic",
+      "home_team_id": "czechia",
+      "match_id": "group-stage-group-41-round-1-match-637a6563686961-6b6f7265612d72657075626c6963",
+      "metadata": {
+        "fifa_away_team_id": "czechia",
+        "fifa_home_team_id": "korea-republic",
+        "kickoff_at": "2026-06-12T02:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021441",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021441"
+      },
+      "score": {
+        "away": 2,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "mexico",
+      "home_team_id": "czechia",
+      "match_id": "group-stage-group-41-round-1-match-637a6563686961-6d657869636f",
+      "metadata": {
+        "fifa_away_team_id": "mexico",
+        "fifa_home_team_id": "czechia",
+        "kickoff_at": "2026-06-25T01:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021444",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021444"
+      },
+      "score": {
+        "away": 3,
+        "home": 0
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "south-africa",
+      "home_team_id": "czechia",
+      "match_id": "group-stage-group-41-round-1-match-637a6563686961-736f7574682d616672696361",
+      "metadata": {
+        "fifa_away_team_id": "south-africa",
+        "fifa_home_team_id": "czechia",
+        "kickoff_at": "2026-06-18T16:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021440",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021440"
+      },
+      "score": {
+        "away": 1,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "mexico",
+      "home_team_id": "korea-republic",
+      "match_id": "group-stage-group-41-round-1-match-6b6f7265612d72657075626c6963-6d657869636f",
+      "metadata": {
+        "fifa_away_team_id": "korea-republic",
+        "fifa_home_team_id": "mexico",
+        "kickoff_at": "2026-06-19T01:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021442",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021442"
+      },
+      "score": {
+        "away": 1,
+        "home": 0
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "south-africa",
+      "home_team_id": "korea-republic",
+      "match_id": "group-stage-group-41-round-1-match-6b6f7265612d72657075626c6963-736f7574682d616672696361",
+      "metadata": {
+        "fifa_away_team_id": "korea-republic",
+        "fifa_home_team_id": "south-africa",
+        "kickoff_at": "2026-06-25T01:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021445",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021445"
+      },
+      "score": {
+        "away": 1,
+        "home": 0
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "south-africa",
+      "home_team_id": "mexico",
+      "match_id": "group-stage-group-41-round-1-match-6d657869636f-736f7574682d616672696361",
+      "metadata": {
+        "fifa_away_team_id": "south-africa",
+        "fifa_home_team_id": "mexico",
+        "kickoff_at": "2026-06-11T19:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021443",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021443"
+      },
+      "score": {
+        "away": 0,
+        "home": 2
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "canada",
+      "home_team_id": "bosnia-and-herzegovina",
+      "match_id": "group-stage-group-42-round-1-match-626f736e69612d616e642d6865727a65676f76696e61-63616e616461",
+      "metadata": {
+        "fifa_away_team_id": "bosnia-and-herzegovina",
+        "fifa_home_team_id": "canada",
+        "kickoff_at": "2026-06-12T19:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021449",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021449"
+      },
+      "score": {
+        "away": 1,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "qatar",
+      "home_team_id": "bosnia-and-herzegovina",
+      "match_id": "group-stage-group-42-round-1-match-626f736e69612d616e642d6865727a65676f76696e61-7161746172",
+      "metadata": {
+        "fifa_away_team_id": "qatar",
+        "fifa_home_team_id": "bosnia-and-herzegovina",
+        "kickoff_at": "2026-06-24T19:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021448",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021448"
+      },
+      "score": {
+        "away": 1,
+        "home": 3
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "switzerland",
+      "home_team_id": "bosnia-and-herzegovina",
+      "match_id": "group-stage-group-42-round-1-match-626f736e69612d616e642d6865727a65676f76696e61-737769747a65726c616e64",
+      "metadata": {
+        "fifa_away_team_id": "bosnia-and-herzegovina",
+        "fifa_home_team_id": "switzerland",
+        "kickoff_at": "2026-06-18T19:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021446",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021446"
+      },
+      "score": {
+        "away": 4,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "qatar",
+      "home_team_id": "canada",
+      "match_id": "group-stage-group-42-round-1-match-63616e616461-7161746172",
+      "metadata": {
+        "fifa_away_team_id": "qatar",
+        "fifa_home_team_id": "canada",
+        "kickoff_at": "2026-06-18T22:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021450",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021450"
+      },
+      "score": {
+        "away": 0,
+        "home": 6
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "switzerland",
+      "home_team_id": "canada",
+      "match_id": "group-stage-group-42-round-1-match-63616e616461-737769747a65726c616e64",
+      "metadata": {
+        "fifa_away_team_id": "canada",
+        "fifa_home_team_id": "switzerland",
+        "kickoff_at": "2026-06-24T19:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021451",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021451"
+      },
+      "score": {
+        "away": 2,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "switzerland",
+      "home_team_id": "qatar",
+      "match_id": "group-stage-group-42-round-1-match-7161746172-737769747a65726c616e64",
+      "metadata": {
+        "fifa_away_team_id": "switzerland",
+        "fifa_home_team_id": "qatar",
+        "kickoff_at": "2026-06-13T19:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021447",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021447"
+      },
+      "score": {
+        "away": 1,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "haiti",
+      "home_team_id": "brazil",
+      "match_id": "group-stage-group-43-round-1-match-6272617a696c-6861697469",
+      "metadata": {
+        "fifa_away_team_id": "haiti",
+        "fifa_home_team_id": "brazil",
+        "kickoff_at": "2026-06-20T00:30:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021457",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021457"
+      },
+      "score": {
+        "away": 0,
+        "home": 3
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "morocco",
+      "home_team_id": "brazil",
+      "match_id": "group-stage-group-43-round-1-match-6272617a696c-6d6f726f63636f",
+      "metadata": {
+        "fifa_away_team_id": "morocco",
+        "fifa_home_team_id": "brazil",
+        "kickoff_at": "2026-06-13T22:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021456",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021456"
+      },
+      "score": {
+        "away": 1,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "scotland",
+      "home_team_id": "brazil",
+      "match_id": "group-stage-group-43-round-1-match-6272617a696c-73636f746c616e64",
+      "metadata": {
+        "fifa_away_team_id": "brazil",
+        "fifa_home_team_id": "scotland",
+        "kickoff_at": "2026-06-24T22:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021455",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021455"
+      },
+      "score": {
+        "away": 0,
+        "home": 3
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "morocco",
+      "home_team_id": "haiti",
+      "match_id": "group-stage-group-43-round-1-match-6861697469-6d6f726f63636f",
+      "metadata": {
+        "fifa_away_team_id": "haiti",
+        "fifa_home_team_id": "morocco",
+        "kickoff_at": "2026-06-24T22:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021452",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021452"
+      },
+      "score": {
+        "away": 4,
+        "home": 2
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "scotland",
+      "home_team_id": "haiti",
+      "match_id": "group-stage-group-43-round-1-match-6861697469-73636f746c616e64",
+      "metadata": {
+        "fifa_away_team_id": "scotland",
+        "fifa_home_team_id": "haiti",
+        "kickoff_at": "2026-06-14T01:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021453",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021453"
+      },
+      "score": {
+        "away": 1,
+        "home": 0
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "scotland",
+      "home_team_id": "morocco",
+      "match_id": "group-stage-group-43-round-1-match-6d6f726f63636f-73636f746c616e64",
+      "metadata": {
+        "fifa_away_team_id": "morocco",
+        "fifa_home_team_id": "scotland",
+        "kickoff_at": "2026-06-19T22:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021454",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021454"
+      },
+      "score": {
+        "away": 0,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "paraguay",
+      "home_team_id": "australia",
+      "match_id": "group-stage-group-44-round-1-match-6175737472616c6961-7061726167756179",
+      "metadata": {
+        "fifa_away_team_id": "australia",
+        "fifa_home_team_id": "paraguay",
+        "kickoff_at": "2026-06-26T02:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021461",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021461"
+      },
+      "score": {
+        "away": 0,
+        "home": 0
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "turkiye",
+      "home_team_id": "australia",
+      "match_id": "group-stage-group-44-round-1-match-6175737472616c6961-7475726b697965",
+      "metadata": {
+        "fifa_away_team_id": "turkiye",
+        "fifa_home_team_id": "australia",
+        "kickoff_at": "2026-06-14T04:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021463",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021463"
+      },
+      "score": {
+        "away": 0,
+        "home": 2
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "usa",
+      "home_team_id": "australia",
+      "match_id": "group-stage-group-44-round-1-match-6175737472616c6961-757361",
+      "metadata": {
+        "fifa_away_team_id": "australia",
+        "fifa_home_team_id": "usa",
+        "kickoff_at": "2026-06-19T19:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021462",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021462"
+      },
+      "score": {
+        "away": 2,
+        "home": 0
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "turkiye",
+      "home_team_id": "paraguay",
+      "match_id": "group-stage-group-44-round-1-match-7061726167756179-7475726b697965",
+      "metadata": {
+        "fifa_away_team_id": "paraguay",
+        "fifa_home_team_id": "turkiye",
+        "kickoff_at": "2026-06-20T03:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021460",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021460"
+      },
+      "score": {
+        "away": 0,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "usa",
+      "home_team_id": "paraguay",
+      "match_id": "group-stage-group-44-round-1-match-7061726167756179-757361",
+      "metadata": {
+        "fifa_away_team_id": "paraguay",
+        "fifa_home_team_id": "usa",
+        "kickoff_at": "2026-06-13T01:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021458",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021458"
+      },
+      "score": {
+        "away": 4,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "usa",
+      "home_team_id": "turkiye",
+      "match_id": "group-stage-group-44-round-1-match-7475726b697965-757361",
+      "metadata": {
+        "fifa_away_team_id": "usa",
+        "fifa_home_team_id": "turkiye",
+        "kickoff_at": "2026-06-26T02:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021459",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021459"
+      },
+      "score": {
+        "away": 2,
+        "home": 3
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "curacao",
+      "home_team_id": "cote-d-ivoire",
+      "match_id": "group-stage-group-45-round-1-match-636f74652d642d69766f697265-6375726163616f",
+      "metadata": {
+        "fifa_away_team_id": "cote-d-ivoire",
+        "fifa_home_team_id": "curacao",
+        "kickoff_at": "2026-06-25T20:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021468",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021468"
+      },
+      "score": {
+        "away": 0,
+        "home": 2
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "ecuador",
+      "home_team_id": "cote-d-ivoire",
+      "match_id": "group-stage-group-45-round-1-match-636f74652d642d69766f697265-65637561646f72",
+      "metadata": {
+        "fifa_away_team_id": "ecuador",
+        "fifa_home_team_id": "cote-d-ivoire",
+        "kickoff_at": "2026-06-14T23:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021467",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021467"
+      },
+      "score": {
+        "away": 0,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "germany",
+      "home_team_id": "cote-d-ivoire",
+      "match_id": "group-stage-group-45-round-1-match-636f74652d642d69766f697265-6765726d616e79",
+      "metadata": {
+        "fifa_away_team_id": "cote-d-ivoire",
+        "fifa_home_team_id": "germany",
+        "kickoff_at": "2026-06-20T20:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021469",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021469"
+      },
+      "score": {
+        "away": 2,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "ecuador",
+      "home_team_id": "curacao",
+      "match_id": "group-stage-group-45-round-1-match-6375726163616f-65637561646f72",
+      "metadata": {
+        "fifa_away_team_id": "curacao",
+        "fifa_home_team_id": "ecuador",
+        "kickoff_at": "2026-06-21T00:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021465",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021465"
+      },
+      "score": {
+        "away": 0,
+        "home": 0
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "germany",
+      "home_team_id": "curacao",
+      "match_id": "group-stage-group-45-round-1-match-6375726163616f-6765726d616e79",
+      "metadata": {
+        "fifa_away_team_id": "curacao",
+        "fifa_home_team_id": "germany",
+        "kickoff_at": "2026-06-14T17:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021464",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021464"
+      },
+      "score": {
+        "away": 7,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "germany",
+      "home_team_id": "ecuador",
+      "match_id": "group-stage-group-45-round-1-match-65637561646f72-6765726d616e79",
+      "metadata": {
+        "fifa_away_team_id": "germany",
+        "fifa_home_team_id": "ecuador",
+        "kickoff_at": "2026-06-25T20:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021466",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021466"
+      },
+      "score": {
+        "away": 1,
+        "home": 2
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "netherlands",
+      "home_team_id": "japan",
+      "match_id": "group-stage-group-46-round-1-match-6a6170616e-6e65746865726c616e6473",
+      "metadata": {
+        "fifa_away_team_id": "japan",
+        "fifa_home_team_id": "netherlands",
+        "kickoff_at": "2026-06-14T20:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021470",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021470"
+      },
+      "score": {
+        "away": 2,
+        "home": 2
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "sweden",
+      "home_team_id": "japan",
+      "match_id": "group-stage-group-46-round-1-match-6a6170616e-73776564656e",
+      "metadata": {
+        "fifa_away_team_id": "sweden",
+        "fifa_home_team_id": "japan",
+        "kickoff_at": "2026-06-25T23:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021471",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021471"
+      },
+      "score": {
+        "away": 1,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "tunisia",
+      "home_team_id": "japan",
+      "match_id": "group-stage-group-46-round-1-match-6a6170616e-74756e69736961",
+      "metadata": {
+        "fifa_away_team_id": "japan",
+        "fifa_home_team_id": "tunisia",
+        "kickoff_at": "2026-06-21T04:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021475",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021475"
+      },
+      "score": {
+        "away": 0,
+        "home": 4
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "sweden",
+      "home_team_id": "netherlands",
+      "match_id": "group-stage-group-46-round-1-match-6e65746865726c616e6473-73776564656e",
+      "metadata": {
+        "fifa_away_team_id": "sweden",
+        "fifa_home_team_id": "netherlands",
+        "kickoff_at": "2026-06-20T17:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021472",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021472"
+      },
+      "score": {
+        "away": 1,
+        "home": 5
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "tunisia",
+      "home_team_id": "netherlands",
+      "match_id": "group-stage-group-46-round-1-match-6e65746865726c616e6473-74756e69736961",
+      "metadata": {
+        "fifa_away_team_id": "netherlands",
+        "fifa_home_team_id": "tunisia",
+        "kickoff_at": "2026-06-25T23:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021473",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021473"
+      },
+      "score": {
+        "away": 1,
+        "home": 3
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "tunisia",
+      "home_team_id": "sweden",
+      "match_id": "group-stage-group-46-round-1-match-73776564656e-74756e69736961",
+      "metadata": {
+        "fifa_away_team_id": "tunisia",
+        "fifa_home_team_id": "sweden",
+        "kickoff_at": "2026-06-15T02:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021474",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021474"
+      },
+      "score": {
+        "away": 1,
+        "home": 5
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "egypt",
+      "home_team_id": "belgium",
+      "match_id": "group-stage-group-47-round-1-match-62656c6769756d-6567797074",
+      "metadata": {
+        "fifa_away_team_id": "egypt",
+        "fifa_home_team_id": "belgium",
+        "kickoff_at": "2026-06-15T19:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021478",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021478"
+      },
+      "score": {
+        "away": 1,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "ir-iran",
+      "home_team_id": "belgium",
+      "match_id": "group-stage-group-47-round-1-match-62656c6769756d-69722d6972616e",
+      "metadata": {
+        "fifa_away_team_id": "ir-iran",
+        "fifa_home_team_id": "belgium",
+        "kickoff_at": "2026-06-21T19:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021477",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021477"
+      },
+      "score": {
+        "away": 0,
+        "home": 0
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "new-zealand",
+      "home_team_id": "belgium",
+      "match_id": "group-stage-group-47-round-1-match-62656c6769756d-6e65772d7a65616c616e64",
+      "metadata": {
+        "fifa_away_team_id": "belgium",
+        "fifa_home_team_id": "new-zealand",
+        "kickoff_at": "2026-06-27T03:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021481",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021481"
+      },
+      "score": {
+        "away": 1,
+        "home": 5
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "ir-iran",
+      "home_team_id": "egypt",
+      "match_id": "group-stage-group-47-round-1-match-6567797074-69722d6972616e",
+      "metadata": {
+        "fifa_away_team_id": "ir-iran",
+        "fifa_home_team_id": "egypt",
+        "kickoff_at": "2026-06-27T03:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021479",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021479"
+      },
+      "score": {
+        "away": 1,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "new-zealand",
+      "home_team_id": "egypt",
+      "match_id": "group-stage-group-47-round-1-match-6567797074-6e65772d7a65616c616e64",
+      "metadata": {
+        "fifa_away_team_id": "egypt",
+        "fifa_home_team_id": "new-zealand",
+        "kickoff_at": "2026-06-22T01:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021480",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021480"
+      },
+      "score": {
+        "away": 1,
+        "home": 3
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "new-zealand",
+      "home_team_id": "ir-iran",
+      "match_id": "group-stage-group-47-round-1-match-69722d6972616e-6e65772d7a65616c616e64",
+      "metadata": {
+        "fifa_away_team_id": "new-zealand",
+        "fifa_home_team_id": "ir-iran",
+        "kickoff_at": "2026-06-16T01:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021476",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021476"
+      },
+      "score": {
+        "away": 2,
+        "home": 2
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "saudi-arabia",
+      "home_team_id": "cabo-verde",
+      "match_id": "group-stage-group-48-round-1-match-6361626f2d7665726465-73617564692d617261626961",
+      "metadata": {
+        "fifa_away_team_id": "saudi-arabia",
+        "fifa_home_team_id": "cabo-verde",
+        "kickoff_at": "2026-06-27T00:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021485",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021485"
+      },
+      "score": {
+        "away": 0,
+        "home": 0
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "spain",
+      "home_team_id": "cabo-verde",
+      "match_id": "group-stage-group-48-round-1-match-6361626f2d7665726465-737061696e",
+      "metadata": {
+        "fifa_away_team_id": "cabo-verde",
+        "fifa_home_team_id": "spain",
+        "kickoff_at": "2026-06-15T16:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021482",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021482"
+      },
+      "score": {
+        "away": 0,
+        "home": 0
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "uruguay",
+      "home_team_id": "cabo-verde",
+      "match_id": "group-stage-group-48-round-1-match-6361626f2d7665726465-75727567756179",
+      "metadata": {
+        "fifa_away_team_id": "cabo-verde",
+        "fifa_home_team_id": "uruguay",
+        "kickoff_at": "2026-06-21T22:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021487",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021487"
+      },
+      "score": {
+        "away": 2,
+        "home": 2
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "spain",
+      "home_team_id": "saudi-arabia",
+      "match_id": "group-stage-group-48-round-1-match-73617564692d617261626961-737061696e",
+      "metadata": {
+        "fifa_away_team_id": "saudi-arabia",
+        "fifa_home_team_id": "spain",
+        "kickoff_at": "2026-06-21T16:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021483",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021483"
+      },
+      "score": {
+        "away": 4,
+        "home": 0
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "uruguay",
+      "home_team_id": "saudi-arabia",
+      "match_id": "group-stage-group-48-round-1-match-73617564692d617261626961-75727567756179",
+      "metadata": {
+        "fifa_away_team_id": "uruguay",
+        "fifa_home_team_id": "saudi-arabia",
+        "kickoff_at": "2026-06-15T22:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021486",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021486"
+      },
+      "score": {
+        "away": 1,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "uruguay",
+      "home_team_id": "spain",
+      "match_id": "group-stage-group-48-round-1-match-737061696e-75727567756179",
+      "metadata": {
+        "fifa_away_team_id": "spain",
+        "fifa_home_team_id": "uruguay",
+        "kickoff_at": "2026-06-27T00:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021484",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021484"
+      },
+      "score": {
+        "away": 0,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "iraq",
+      "home_team_id": "france",
+      "match_id": "group-stage-group-49-round-1-match-6672616e6365-69726171",
+      "metadata": {
+        "fifa_away_team_id": "iraq",
+        "fifa_home_team_id": "france",
+        "kickoff_at": "2026-06-22T21:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021492",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021492"
+      },
+      "score": {
+        "away": 0,
+        "home": 3
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "norway",
+      "home_team_id": "france",
+      "match_id": "group-stage-group-49-round-1-match-6672616e6365-6e6f72776179",
+      "metadata": {
+        "fifa_away_team_id": "france",
+        "fifa_home_team_id": "norway",
+        "kickoff_at": "2026-06-26T19:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021489",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021489"
+      },
+      "score": {
+        "away": 1,
+        "home": 4
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "senegal",
+      "home_team_id": "france",
+      "match_id": "group-stage-group-49-round-1-match-6672616e6365-73656e6567616c",
+      "metadata": {
+        "fifa_away_team_id": "senegal",
+        "fifa_home_team_id": "france",
+        "kickoff_at": "2026-06-16T19:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021490",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021490"
+      },
+      "score": {
+        "away": 1,
+        "home": 3
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "norway",
+      "home_team_id": "iraq",
+      "match_id": "group-stage-group-49-round-1-match-69726171-6e6f72776179",
+      "metadata": {
+        "fifa_away_team_id": "norway",
+        "fifa_home_team_id": "iraq",
+        "kickoff_at": "2026-06-16T22:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021488",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021488"
+      },
+      "score": {
+        "away": 4,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "senegal",
+      "home_team_id": "iraq",
+      "match_id": "group-stage-group-49-round-1-match-69726171-73656e6567616c",
+      "metadata": {
+        "fifa_away_team_id": "iraq",
+        "fifa_home_team_id": "senegal",
+        "kickoff_at": "2026-06-26T19:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021493",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021493"
+      },
+      "score": {
+        "away": 5,
+        "home": 0
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "senegal",
+      "home_team_id": "norway",
+      "match_id": "group-stage-group-49-round-1-match-6e6f72776179-73656e6567616c",
+      "metadata": {
+        "fifa_away_team_id": "senegal",
+        "fifa_home_team_id": "norway",
+        "kickoff_at": "2026-06-23T00:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021491",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021491"
+      },
+      "score": {
+        "away": 2,
+        "home": 3
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "argentina",
+      "home_team_id": "algeria",
+      "match_id": "group-stage-group-4a-round-1-match-616c6765726961-617267656e74696e61",
+      "metadata": {
+        "fifa_away_team_id": "algeria",
+        "fifa_home_team_id": "argentina",
+        "kickoff_at": "2026-06-17T01:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021496",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021496"
+      },
+      "score": {
+        "away": 3,
+        "home": 0
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "austria",
+      "home_team_id": "algeria",
+      "match_id": "group-stage-group-4a-round-1-match-616c6765726961-61757374726961",
+      "metadata": {
+        "fifa_away_team_id": "austria",
+        "fifa_home_team_id": "algeria",
+        "kickoff_at": "2026-06-28T02:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021497",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021497"
+      },
+      "score": {
+        "away": 3,
+        "home": 3
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "jordan",
+      "home_team_id": "algeria",
+      "match_id": "group-stage-group-4a-round-1-match-616c6765726961-6a6f7264616e",
+      "metadata": {
+        "fifa_away_team_id": "algeria",
+        "fifa_home_team_id": "jordan",
+        "kickoff_at": "2026-06-23T03:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021499",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021499"
+      },
+      "score": {
+        "away": 1,
+        "home": 2
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "austria",
+      "home_team_id": "argentina",
+      "match_id": "group-stage-group-4a-round-1-match-617267656e74696e61-61757374726961",
+      "metadata": {
+        "fifa_away_team_id": "austria",
+        "fifa_home_team_id": "argentina",
+        "kickoff_at": "2026-06-22T17:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021494",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021494"
+      },
+      "score": {
+        "away": 0,
+        "home": 2
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "jordan",
+      "home_team_id": "argentina",
+      "match_id": "group-stage-group-4a-round-1-match-617267656e74696e61-6a6f7264616e",
+      "metadata": {
+        "fifa_away_team_id": "argentina",
+        "fifa_home_team_id": "jordan",
+        "kickoff_at": "2026-06-28T02:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021495",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021495"
+      },
+      "score": {
+        "away": 1,
+        "home": 3
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "jordan",
+      "home_team_id": "austria",
+      "match_id": "group-stage-group-4a-round-1-match-61757374726961-6a6f7264616e",
+      "metadata": {
+        "fifa_away_team_id": "jordan",
+        "fifa_home_team_id": "austria",
+        "kickoff_at": "2026-06-17T04:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021498",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021498"
+      },
+      "score": {
+        "away": 1,
+        "home": 3
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "congo-dr",
+      "home_team_id": "colombia",
+      "match_id": "group-stage-group-4b-round-1-match-636f6c6f6d626961-636f6e676f2d6472",
+      "metadata": {
+        "fifa_away_team_id": "congo-dr",
+        "fifa_home_team_id": "colombia",
+        "kickoff_at": "2026-06-24T02:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021501",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021501"
+      },
+      "score": {
+        "away": 0,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "portugal",
+      "home_team_id": "colombia",
+      "match_id": "group-stage-group-4b-round-1-match-636f6c6f6d626961-706f72747567616c",
+      "metadata": {
+        "fifa_away_team_id": "portugal",
+        "fifa_home_team_id": "colombia",
+        "kickoff_at": "2026-06-27T23:30:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021505",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021505"
+      },
+      "score": {
+        "away": 0,
+        "home": 0
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "uzbekistan",
+      "home_team_id": "colombia",
+      "match_id": "group-stage-group-4b-round-1-match-636f6c6f6d626961-757a62656b697374616e",
+      "metadata": {
+        "fifa_away_team_id": "colombia",
+        "fifa_home_team_id": "uzbekistan",
+        "kickoff_at": "2026-06-18T02:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021504",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021504"
+      },
+      "score": {
+        "away": 1,
+        "home": 3
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "portugal",
+      "home_team_id": "congo-dr",
+      "match_id": "group-stage-group-4b-round-1-match-636f6e676f2d6472-706f72747567616c",
+      "metadata": {
+        "fifa_away_team_id": "congo-dr",
+        "fifa_home_team_id": "portugal",
+        "kickoff_at": "2026-06-17T17:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021502",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021502"
+      },
+      "score": {
+        "away": 1,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "uzbekistan",
+      "home_team_id": "congo-dr",
+      "match_id": "group-stage-group-4b-round-1-match-636f6e676f2d6472-757a62656b697374616e",
+      "metadata": {
+        "fifa_away_team_id": "uzbekistan",
+        "fifa_home_team_id": "congo-dr",
+        "kickoff_at": "2026-06-27T23:30:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021500",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021500"
+      },
+      "score": {
+        "away": 1,
+        "home": 3
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "uzbekistan",
+      "home_team_id": "portugal",
+      "match_id": "group-stage-group-4b-round-1-match-706f72747567616c-757a62656b697374616e",
+      "metadata": {
+        "fifa_away_team_id": "uzbekistan",
+        "fifa_home_team_id": "portugal",
+        "kickoff_at": "2026-06-23T17:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021503",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021503"
+      },
+      "score": {
+        "away": 0,
+        "home": 5
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "england",
+      "home_team_id": "croatia",
+      "match_id": "group-stage-group-4c-round-1-match-63726f61746961-656e676c616e64",
+      "metadata": {
+        "fifa_away_team_id": "croatia",
+        "fifa_home_team_id": "england",
+        "kickoff_at": "2026-06-17T20:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021507",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021507"
+      },
+      "score": {
+        "away": 4,
+        "home": 2
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "ghana",
+      "home_team_id": "croatia",
+      "match_id": "group-stage-group-4c-round-1-match-63726f61746961-6768616e61",
+      "metadata": {
+        "fifa_away_team_id": "ghana",
+        "fifa_home_team_id": "croatia",
+        "kickoff_at": "2026-06-27T21:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021509",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021509"
+      },
+      "score": {
+        "away": 1,
+        "home": 2
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "panama",
+      "home_team_id": "croatia",
+      "match_id": "group-stage-group-4c-round-1-match-63726f61746961-70616e616d61",
+      "metadata": {
+        "fifa_away_team_id": "croatia",
+        "fifa_home_team_id": "panama",
+        "kickoff_at": "2026-06-23T23:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021511",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021511"
+      },
+      "score": {
+        "away": 0,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "ghana",
+      "home_team_id": "england",
+      "match_id": "group-stage-group-4c-round-1-match-656e676c616e64-6768616e61",
+      "metadata": {
+        "fifa_away_team_id": "ghana",
+        "fifa_home_team_id": "england",
+        "kickoff_at": "2026-06-23T20:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021506",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021506"
+      },
+      "score": {
+        "away": 0,
+        "home": 0
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "panama",
+      "home_team_id": "england",
+      "match_id": "group-stage-group-4c-round-1-match-656e676c616e64-70616e616d61",
+      "metadata": {
+        "fifa_away_team_id": "england",
+        "fifa_home_team_id": "panama",
+        "kickoff_at": "2026-06-27T21:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021508",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021508"
+      },
+      "score": {
+        "away": 0,
+        "home": 2
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "panama",
+      "home_team_id": "ghana",
+      "match_id": "group-stage-group-4c-round-1-match-6768616e61-70616e616d61",
+      "metadata": {
+        "fifa_away_team_id": "panama",
+        "fifa_home_team_id": "ghana",
+        "kickoff_at": "2026-06-17T23:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021510",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021510"
+      },
+      "score": {
+        "away": 0,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "morocco",
+      "home_team_id": "france",
+      "match_id": "400021536",
+      "metadata": {
+        "fifa_away_team_id": "morocco",
+        "fifa_home_team_id": "france",
+        "kickoff_at": "2026-07-09T20:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021536",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021536"
+      },
+      "score": {
+        "away": 0,
+        "home": 2
+      },
+      "stage_id": "quarter-finals",
+      "winner_team_id": "france"
+    },
+    {
+      "away_team_id": "belgium",
+      "home_team_id": "spain",
+      "match_id": "400021538",
+      "metadata": {
+        "fifa_away_team_id": "belgium",
+        "fifa_home_team_id": "spain",
+        "kickoff_at": "2026-07-10T19:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021538",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021538"
+      },
+      "score": {
+        "away": 1,
+        "home": 2
+      },
+      "stage_id": "quarter-finals",
+      "winner_team_id": "spain"
+    },
+    {
+      "away_team_id": "egypt",
+      "home_team_id": "argentina",
+      "match_id": "400021528",
+      "metadata": {
+        "fifa_away_team_id": "egypt",
+        "fifa_home_team_id": "argentina",
+        "kickoff_at": "2026-07-07T16:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021528",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021528"
+      },
+      "score": {
+        "away": 2,
+        "home": 3
+      },
+      "stage_id": "round-of-16",
+      "winner_team_id": "argentina"
+    },
+    {
+      "away_team_id": "spain",
+      "home_team_id": "portugal",
+      "match_id": "400021529",
+      "metadata": {
+        "fifa_away_team_id": "spain",
+        "fifa_home_team_id": "portugal",
+        "kickoff_at": "2026-07-06T19:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021529",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021529"
+      },
+      "score": {
+        "away": 1,
+        "home": 0
+      },
+      "stage_id": "round-of-16",
+      "winner_team_id": "spain"
+    },
+    {
+      "away_team_id": "morocco",
+      "home_team_id": "canada",
+      "match_id": "400021530",
+      "metadata": {
+        "fifa_away_team_id": "morocco",
+        "fifa_home_team_id": "canada",
+        "kickoff_at": "2026-07-04T17:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021530",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021530"
+      },
+      "score": {
+        "away": 3,
+        "home": 0
+      },
+      "stage_id": "round-of-16",
+      "winner_team_id": "morocco"
+    },
+    {
+      "away_team_id": "england",
+      "home_team_id": "mexico",
+      "match_id": "400021531",
+      "metadata": {
+        "fifa_away_team_id": "england",
+        "fifa_home_team_id": "mexico",
+        "kickoff_at": "2026-07-06T01:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021531",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021531"
+      },
+      "score": {
+        "away": 3,
+        "home": 2
+      },
+      "stage_id": "round-of-16",
+      "winner_team_id": "england"
+    },
+    {
+      "away_team_id": "norway",
+      "home_team_id": "brazil",
+      "match_id": "400021532",
+      "metadata": {
+        "fifa_away_team_id": "norway",
+        "fifa_home_team_id": "brazil",
+        "kickoff_at": "2026-07-05T20:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021532",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021532"
+      },
+      "score": {
+        "away": 2,
+        "home": 1
+      },
+      "stage_id": "round-of-16",
+      "winner_team_id": "norway"
+    },
+    {
+      "away_team_id": "france",
+      "home_team_id": "paraguay",
+      "match_id": "400021533",
+      "metadata": {
+        "fifa_away_team_id": "france",
+        "fifa_home_team_id": "paraguay",
+        "kickoff_at": "2026-07-04T21:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021533",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021533"
+      },
+      "score": {
+        "away": 1,
+        "home": 0
+      },
+      "stage_id": "round-of-16",
+      "winner_team_id": "france"
+    },
+    {
+      "away_team_id": "belgium",
+      "home_team_id": "usa",
+      "match_id": "400021534",
+      "metadata": {
+        "fifa_away_team_id": "belgium",
+        "fifa_home_team_id": "usa",
+        "kickoff_at": "2026-07-07T00:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021534",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021534"
+      },
+      "score": {
+        "away": 4,
+        "home": 1
+      },
+      "stage_id": "round-of-16",
+      "winner_team_id": "belgium"
+    },
+    {
+      "away_team_id": "colombia",
+      "home_team_id": "switzerland",
+      "match_id": "400021535",
+      "metadata": {
+        "fifa_away_team_id": "colombia",
+        "fifa_home_team_id": "switzerland",
+        "kickoff_at": "2026-07-07T20:00:00Z",
+        "result_type": 2,
+        "source": "FIFA calendar API",
+        "source_id": "400021535",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021535"
+      },
+      "score": {
+        "away": 0,
+        "home": 0
+      },
+      "stage_id": "round-of-16",
+      "winner_team_id": "switzerland"
+    },
+    {
+      "away_team_id": "congo-dr",
+      "home_team_id": "england",
+      "match_id": "400021512",
+      "metadata": {
+        "fifa_away_team_id": "congo-dr",
+        "fifa_home_team_id": "england",
+        "kickoff_at": "2026-07-01T16:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021512",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021512"
+      },
+      "score": {
+        "away": 1,
+        "home": 2
+      },
+      "stage_id": "round-of-32",
+      "winner_team_id": "england"
+    },
+    {
+      "away_team_id": "paraguay",
+      "home_team_id": "germany",
+      "match_id": "400021513",
+      "metadata": {
+        "fifa_away_team_id": "paraguay",
+        "fifa_home_team_id": "germany",
+        "kickoff_at": "2026-06-29T20:30:00Z",
+        "result_type": 2,
+        "source": "FIFA calendar API",
+        "source_id": "400021513",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021513"
+      },
+      "score": {
+        "away": 1,
+        "home": 1
+      },
+      "stage_id": "round-of-32",
+      "winner_team_id": "paraguay"
+    },
+    {
+      "away_team_id": "norway",
+      "home_team_id": "cote-d-ivoire",
+      "match_id": "400021514",
+      "metadata": {
+        "fifa_away_team_id": "norway",
+        "fifa_home_team_id": "cote-d-ivoire",
+        "kickoff_at": "2026-06-30T17:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021514",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021514"
+      },
+      "score": {
+        "away": 2,
+        "home": 1
+      },
+      "stage_id": "round-of-32",
+      "winner_team_id": "norway"
+    },
+    {
+      "away_team_id": "egypt",
+      "home_team_id": "australia",
+      "match_id": "400021515",
+      "metadata": {
+        "fifa_away_team_id": "egypt",
+        "fifa_home_team_id": "australia",
+        "kickoff_at": "2026-07-03T18:00:00Z",
+        "result_type": 2,
+        "source": "FIFA calendar API",
+        "source_id": "400021515",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021515"
+      },
+      "score": {
+        "away": 1,
+        "home": 1
+      },
+      "stage_id": "round-of-32",
+      "winner_team_id": "egypt"
+    },
+    {
+      "away_team_id": "japan",
+      "home_team_id": "brazil",
+      "match_id": "400021516",
+      "metadata": {
+        "fifa_away_team_id": "japan",
+        "fifa_home_team_id": "brazil",
+        "kickoff_at": "2026-06-29T17:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021516",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021516"
+      },
+      "score": {
+        "away": 1,
+        "home": 2
+      },
+      "stage_id": "round-of-32",
+      "winner_team_id": "brazil"
+    },
+    {
+      "away_team_id": "ghana",
+      "home_team_id": "colombia",
+      "match_id": "400021517",
+      "metadata": {
+        "fifa_away_team_id": "ghana",
+        "fifa_home_team_id": "colombia",
+        "kickoff_at": "2026-07-04T01:30:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021517",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021517"
+      },
+      "score": {
+        "away": 0,
+        "home": 1
+      },
+      "stage_id": "round-of-32",
+      "winner_team_id": "colombia"
+    },
+    {
+      "away_team_id": "canada",
+      "home_team_id": "south-africa",
+      "match_id": "400021518",
+      "metadata": {
+        "fifa_away_team_id": "canada",
+        "fifa_home_team_id": "south-africa",
+        "kickoff_at": "2026-06-28T19:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021518",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021518"
+      },
+      "score": {
+        "away": 1,
+        "home": 0
+      },
+      "stage_id": "round-of-32",
+      "winner_team_id": "canada"
+    },
+    {
+      "away_team_id": "austria",
+      "home_team_id": "spain",
+      "match_id": "400021519",
+      "metadata": {
+        "fifa_away_team_id": "austria",
+        "fifa_home_team_id": "spain",
+        "kickoff_at": "2026-07-02T19:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021519",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021519"
+      },
+      "score": {
+        "away": 0,
+        "home": 3
+      },
+      "stage_id": "round-of-32",
+      "winner_team_id": "spain"
+    },
+    {
+      "away_team_id": "ecuador",
+      "home_team_id": "mexico",
+      "match_id": "400021520",
+      "metadata": {
+        "fifa_away_team_id": "ecuador",
+        "fifa_home_team_id": "mexico",
+        "kickoff_at": "2026-07-01T02:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021520",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021520"
+      },
+      "score": {
+        "away": 0,
+        "home": 2
+      },
+      "stage_id": "round-of-32",
+      "winner_team_id": "mexico"
+    },
+    {
+      "away_team_id": "cabo-verde",
+      "home_team_id": "argentina",
+      "match_id": "400021521",
+      "metadata": {
+        "fifa_away_team_id": "cabo-verde",
+        "fifa_home_team_id": "argentina",
+        "kickoff_at": "2026-07-03T22:00:00Z",
+        "result_type": 3,
+        "source": "FIFA calendar API",
+        "source_id": "400021521",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021521"
+      },
+      "score": {
+        "away": 2,
+        "home": 3
+      },
+      "stage_id": "round-of-32",
+      "winner_team_id": "argentina"
+    },
+    {
+      "away_team_id": "morocco",
+      "home_team_id": "netherlands",
+      "match_id": "400021522",
+      "metadata": {
+        "fifa_away_team_id": "morocco",
+        "fifa_home_team_id": "netherlands",
+        "kickoff_at": "2026-06-30T01:00:00Z",
+        "result_type": 2,
+        "source": "FIFA calendar API",
+        "source_id": "400021522",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021522"
+      },
+      "score": {
+        "away": 1,
+        "home": 1
+      },
+      "stage_id": "round-of-32",
+      "winner_team_id": "morocco"
+    },
+    {
+      "away_team_id": "sweden",
+      "home_team_id": "france",
+      "match_id": "400021523",
+      "metadata": {
+        "fifa_away_team_id": "sweden",
+        "fifa_home_team_id": "france",
+        "kickoff_at": "2026-06-30T21:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021523",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021523"
+      },
+      "score": {
+        "away": 0,
+        "home": 3
+      },
+      "stage_id": "round-of-32",
+      "winner_team_id": "france"
+    },
+    {
+      "away_team_id": "bosnia-and-herzegovina",
+      "home_team_id": "usa",
+      "match_id": "400021524",
+      "metadata": {
+        "fifa_away_team_id": "bosnia-and-herzegovina",
+        "fifa_home_team_id": "usa",
+        "kickoff_at": "2026-07-02T00:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021524",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021524"
+      },
+      "score": {
+        "away": 0,
+        "home": 2
+      },
+      "stage_id": "round-of-32",
+      "winner_team_id": "usa"
+    },
+    {
+      "away_team_id": "senegal",
+      "home_team_id": "belgium",
+      "match_id": "400021525",
+      "metadata": {
+        "fifa_away_team_id": "senegal",
+        "fifa_home_team_id": "belgium",
+        "kickoff_at": "2026-07-01T20:00:00Z",
+        "result_type": 3,
+        "source": "FIFA calendar API",
+        "source_id": "400021525",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021525"
+      },
+      "score": {
+        "away": 2,
+        "home": 3
+      },
+      "stage_id": "round-of-32",
+      "winner_team_id": "belgium"
+    },
+    {
+      "away_team_id": "croatia",
+      "home_team_id": "portugal",
+      "match_id": "400021526",
+      "metadata": {
+        "fifa_away_team_id": "croatia",
+        "fifa_home_team_id": "portugal",
+        "kickoff_at": "2026-07-02T23:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021526",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021526"
+      },
+      "score": {
+        "away": 1,
+        "home": 2
+      },
+      "stage_id": "round-of-32",
+      "winner_team_id": "portugal"
+    },
+    {
+      "away_team_id": "algeria",
+      "home_team_id": "switzerland",
+      "match_id": "400021527",
+      "metadata": {
+        "fifa_away_team_id": "algeria",
+        "fifa_home_team_id": "switzerland",
+        "kickoff_at": "2026-07-03T03:00:00Z",
+        "result_type": 1,
+        "source": "FIFA calendar API",
+        "source_id": "400021527",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021527"
+      },
+      "score": {
+        "away": 0,
+        "home": 2
+      },
+      "stage_id": "round-of-32",
+      "winner_team_id": "switzerland"
+    }
+  ],
+  "focus_team_id": "france",
+  "metadata": {
+    "ratings": {
+      "frozen_at": "2026-06-09T23:27:23-03:00",
+      "git_commit": "a7b6e694",
+      "limitation": "Not an official rating source and not proof of universal calibration.",
+      "sha256": "983a20748541db3612dd75fa2d5dde954d1b89de52a23c1b19f345a427bca259",
+      "source": "project-authored pre-tournament seed"
+    },
+    "snapshot": {
+      "completed_fact_count": 98,
+      "endpoint": "https://api.fifa.com/api/v3/calendar/matches",
+      "parameters": {
+        "idCompetition": "17",
+        "idSeason": "285023"
+      },
+      "retrieved_at": "2026-07-11T19:54:25Z",
+      "source": "official FIFA calendar API"
+    }
+  },
+  "ratings": {
+    "algeria": 1595.0,
+    "argentina": 1910.0,
+    "australia": 1580.0,
+    "austria": 1700.0,
+    "belgium": 1790.0,
+    "bosnia-and-herzegovina": 1560.0,
+    "brazil": 1850.0,
+    "cabo-verde": 1505.0,
+    "canada": 1585.0,
+    "colombia": 1740.0,
+    "congo-dr": 1500.0,
+    "cote-d-ivoire": 1605.0,
+    "croatia": 1745.0,
+    "curacao": 1360.0,
+    "czechia": 1580.0,
+    "ecuador": 1650.0,
+    "egypt": 1615.0,
+    "england": 1880.0,
+    "france": 1920.0,
+    "germany": 1860.0,
+    "ghana": 1560.0,
+    "haiti": 1320.0,
+    "ir-iran": 1625.0,
+    "iraq": 1490.0,
+    "japan": 1690.0,
+    "jordan": 1440.0,
+    "korea-republic": 1630.0,
+    "mexico": 1690.0,
+    "morocco": 1660.0,
+    "netherlands": 1860.0,
+    "new-zealand": 1430.0,
+    "norway": 1660.0,
+    "panama": 1480.0,
+    "paraguay": 1600.0,
+    "portugal": 1870.0,
+    "qatar": 1500.0,
+    "saudi-arabia": 1510.0,
+    "scotland": 1540.0,
+    "senegal": 1655.0,
+    "south-africa": 1470.0,
+    "spain": 1900.0,
+    "sweden": 1650.0,
+    "switzerland": 1710.0,
+    "tunisia": 1480.0,
+    "turkiye": 1640.0,
+    "uruguay": 1780.0,
+    "usa": 1645.0,
+    "uzbekistan": 1515.0
+  },
+  "schema_version": 2,
+  "stages": [
+    {
+      "groups": {
+        "A": [
+          "czechia",
+          "korea-republic",
+          "mexico",
+          "south-africa"
+        ],
+        "B": [
+          "bosnia-and-herzegovina",
+          "canada",
+          "qatar",
+          "switzerland"
+        ],
+        "C": [
+          "brazil",
+          "haiti",
+          "morocco",
+          "scotland"
+        ],
+        "D": [
+          "australia",
+          "paraguay",
+          "turkiye",
+          "usa"
+        ],
+        "E": [
+          "cote-d-ivoire",
+          "curacao",
+          "ecuador",
+          "germany"
+        ],
+        "F": [
+          "japan",
+          "netherlands",
+          "sweden",
+          "tunisia"
+        ],
+        "G": [
+          "belgium",
+          "egypt",
+          "ir-iran",
+          "new-zealand"
+        ],
+        "H": [
+          "cabo-verde",
+          "spain",
+          "saudi-arabia",
+          "uruguay"
+        ],
+        "I": [
+          "france",
+          "iraq",
+          "norway",
+          "senegal"
+        ],
+        "J": [
+          "algeria",
+          "argentina",
+          "austria",
+          "jordan"
+        ],
+        "K": [
+          "congo-dr",
+          "colombia",
+          "portugal",
+          "uzbekistan"
+        ],
+        "L": [
+          "croatia",
+          "england",
+          "ghana",
+          "panama"
+        ]
+      },
+      "id": "group-stage",
+      "metadata": {
+        "home_advantage_rating_points": 0
+      },
+      "points": {
+        "draw": 1,
+        "loss": 0,
+        "win": 3
+      },
+      "rounds_per_pair": 1,
+      "tiebreakers": [
+        "points",
+        "goal_difference",
+        "goals_for",
+        "wins",
+        "rating",
+        "team_id"
+      ],
+      "type": "round_robin_groups"
+    },
+    {
+      "aggregate_tiebreak": "extra_time_then_penalties",
+      "away_goals_rule": false,
+      "home_away_order": "listed_team_first_leg_home",
+      "id": "round-of-32",
+      "legs": 1,
+      "metadata": {
+        "home_advantage_rating_points": 0
+      },
+      "pairing": {
+        "mode": "fixed",
+        "ties": [
+          {
+            "entrants": [
+              {
+                "team_id": "south-africa",
+                "type": "team"
+              },
+              {
+                "team_id": "canada",
+                "type": "team"
+              }
+            ],
+            "id": "400021518"
+          },
+          {
+            "entrants": [
+              {
+                "team_id": "germany",
+                "type": "team"
+              },
+              {
+                "team_id": "paraguay",
+                "type": "team"
+              }
+            ],
+            "id": "400021513"
+          },
+          {
+            "entrants": [
+              {
+                "team_id": "netherlands",
+                "type": "team"
+              },
+              {
+                "team_id": "morocco",
+                "type": "team"
+              }
+            ],
+            "id": "400021522"
+          },
+          {
+            "entrants": [
+              {
+                "team_id": "brazil",
+                "type": "team"
+              },
+              {
+                "team_id": "japan",
+                "type": "team"
+              }
+            ],
+            "id": "400021516"
+          },
+          {
+            "entrants": [
+              {
+                "team_id": "france",
+                "type": "team"
+              },
+              {
+                "team_id": "sweden",
+                "type": "team"
+              }
+            ],
+            "id": "400021523"
+          },
+          {
+            "entrants": [
+              {
+                "team_id": "cote-d-ivoire",
+                "type": "team"
+              },
+              {
+                "team_id": "norway",
+                "type": "team"
+              }
+            ],
+            "id": "400021514"
+          },
+          {
+            "entrants": [
+              {
+                "team_id": "mexico",
+                "type": "team"
+              },
+              {
+                "team_id": "ecuador",
+                "type": "team"
+              }
+            ],
+            "id": "400021520"
+          },
+          {
+            "entrants": [
+              {
+                "team_id": "england",
+                "type": "team"
+              },
+              {
+                "team_id": "congo-dr",
+                "type": "team"
+              }
+            ],
+            "id": "400021512"
+          },
+          {
+            "entrants": [
+              {
+                "team_id": "usa",
+                "type": "team"
+              },
+              {
+                "team_id": "bosnia-and-herzegovina",
+                "type": "team"
+              }
+            ],
+            "id": "400021524"
+          },
+          {
+            "entrants": [
+              {
+                "team_id": "belgium",
+                "type": "team"
+              },
+              {
+                "team_id": "senegal",
+                "type": "team"
+              }
+            ],
+            "id": "400021525"
+          },
+          {
+            "entrants": [
+              {
+                "team_id": "portugal",
+                "type": "team"
+              },
+              {
+                "team_id": "croatia",
+                "type": "team"
+              }
+            ],
+            "id": "400021526"
+          },
+          {
+            "entrants": [
+              {
+                "team_id": "spain",
+                "type": "team"
+              },
+              {
+                "team_id": "austria",
+                "type": "team"
+              }
+            ],
+            "id": "400021519"
+          },
+          {
+            "entrants": [
+              {
+                "team_id": "switzerland",
+                "type": "team"
+              },
+              {
+                "team_id": "algeria",
+                "type": "team"
+              }
+            ],
+            "id": "400021527"
+          },
+          {
+            "entrants": [
+              {
+                "team_id": "argentina",
+                "type": "team"
+              },
+              {
+                "team_id": "cabo-verde",
+                "type": "team"
+              }
+            ],
+            "id": "400021521"
+          },
+          {
+            "entrants": [
+              {
+                "team_id": "colombia",
+                "type": "team"
+              },
+              {
+                "team_id": "ghana",
+                "type": "team"
+              }
+            ],
+            "id": "400021517"
+          },
+          {
+            "entrants": [
+              {
+                "team_id": "australia",
+                "type": "team"
+              },
+              {
+                "team_id": "egypt",
+                "type": "team"
+              }
+            ],
+            "id": "400021515"
+          }
+        ]
+      },
+      "type": "knockout"
+    },
+    {
+      "aggregate_tiebreak": "extra_time_then_penalties",
+      "away_goals_rule": false,
+      "home_away_order": "listed_team_first_leg_home",
+      "id": "round-of-16",
+      "legs": 1,
+      "metadata": {
+        "home_advantage_rating_points": 0
+      },
+      "pairing": {
+        "mode": "fixed",
+        "ties": [
+          {
+            "entrants": [
+              {
+                "match_id": "400021513",
+                "type": "match_winner"
+              },
+              {
+                "match_id": "400021523",
+                "type": "match_winner"
+              }
+            ],
+            "id": "400021533"
+          },
+          {
+            "entrants": [
+              {
+                "match_id": "400021518",
+                "type": "match_winner"
+              },
+              {
+                "match_id": "400021522",
+                "type": "match_winner"
+              }
+            ],
+            "id": "400021530"
+          },
+          {
+            "entrants": [
+              {
+                "match_id": "400021516",
+                "type": "match_winner"
+              },
+              {
+                "match_id": "400021514",
+                "type": "match_winner"
+              }
+            ],
+            "id": "400021532"
+          },
+          {
+            "entrants": [
+              {
+                "match_id": "400021520",
+                "type": "match_winner"
+              },
+              {
+                "match_id": "400021512",
+                "type": "match_winner"
+              }
+            ],
+            "id": "400021531"
+          },
+          {
+            "entrants": [
+              {
+                "match_id": "400021526",
+                "type": "match_winner"
+              },
+              {
+                "match_id": "400021519",
+                "type": "match_winner"
+              }
+            ],
+            "id": "400021529"
+          },
+          {
+            "entrants": [
+              {
+                "match_id": "400021524",
+                "type": "match_winner"
+              },
+              {
+                "match_id": "400021525",
+                "type": "match_winner"
+              }
+            ],
+            "id": "400021534"
+          },
+          {
+            "entrants": [
+              {
+                "match_id": "400021521",
+                "type": "match_winner"
+              },
+              {
+                "match_id": "400021515",
+                "type": "match_winner"
+              }
+            ],
+            "id": "400021528"
+          },
+          {
+            "entrants": [
+              {
+                "match_id": "400021527",
+                "type": "match_winner"
+              },
+              {
+                "match_id": "400021517",
+                "type": "match_winner"
+              }
+            ],
+            "id": "400021535"
+          }
+        ]
+      },
+      "type": "knockout"
+    },
+    {
+      "aggregate_tiebreak": "extra_time_then_penalties",
+      "away_goals_rule": false,
+      "home_away_order": "listed_team_first_leg_home",
+      "id": "quarter-finals",
+      "legs": 1,
+      "metadata": {
+        "home_advantage_rating_points": 0
+      },
+      "pairing": {
+        "mode": "fixed",
+        "ties": [
+          {
+            "entrants": [
+              {
+                "match_id": "400021533",
+                "type": "match_winner"
+              },
+              {
+                "match_id": "400021530",
+                "type": "match_winner"
+              }
+            ],
+            "id": "400021536"
+          },
+          {
+            "entrants": [
+              {
+                "match_id": "400021529",
+                "type": "match_winner"
+              },
+              {
+                "match_id": "400021534",
+                "type": "match_winner"
+              }
+            ],
+            "id": "400021538"
+          },
+          {
+            "entrants": [
+              {
+                "match_id": "400021532",
+                "type": "match_winner"
+              },
+              {
+                "match_id": "400021531",
+                "type": "match_winner"
+              }
+            ],
+            "id": "400021539"
+          },
+          {
+            "entrants": [
+              {
+                "match_id": "400021528",
+                "type": "match_winner"
+              },
+              {
+                "match_id": "400021535",
+                "type": "match_winner"
+              }
+            ],
+            "id": "400021537"
+          }
+        ]
+      },
+      "type": "knockout"
+    },
+    {
+      "aggregate_tiebreak": "extra_time_then_penalties",
+      "away_goals_rule": false,
+      "home_away_order": "listed_team_first_leg_home",
+      "id": "semi-finals",
+      "legs": 1,
+      "metadata": {
+        "home_advantage_rating_points": 0
+      },
+      "pairing": {
+        "mode": "fixed",
+        "ties": [
+          {
+            "entrants": [
+              {
+                "match_id": "400021536",
+                "type": "match_winner"
+              },
+              {
+                "match_id": "400021538",
+                "type": "match_winner"
+              }
+            ],
+            "id": "400021541"
+          },
+          {
+            "entrants": [
+              {
+                "match_id": "400021539",
+                "type": "match_winner"
+              },
+              {
+                "match_id": "400021537",
+                "type": "match_winner"
+              }
+            ],
+            "id": "400021540"
+          }
+        ]
+      },
+      "type": "knockout"
+    },
+    {
+      "aggregate_tiebreak": "extra_time_then_penalties",
+      "away_goals_rule": false,
+      "home_away_order": "listed_team_first_leg_home",
+      "id": "final",
+      "legs": 1,
+      "metadata": {
+        "home_advantage_rating_points": 0
+      },
+      "pairing": {
+        "mode": "fixed",
+        "ties": [
+          {
+            "entrants": [
+              {
+                "match_id": "400021541",
+                "type": "match_winner"
+              },
+              {
+                "match_id": "400021540",
+                "type": "match_winner"
+              }
+            ],
+            "id": "400021543"
+          }
+        ]
+      },
+      "terminal": "championship",
+      "type": "knockout"
+    }
+  ],
+  "teams": [
+    {
+      "display_name": "Algeria",
+      "id": "algeria",
+      "metadata": {
+        "fifa_code": "ALG",
+        "fifa_team_id": "43843"
+      }
+    },
+    {
+      "display_name": "Argentina",
+      "id": "argentina",
+      "metadata": {
+        "fifa_code": "ARG",
+        "fifa_team_id": "43922"
+      }
+    },
+    {
+      "display_name": "Australia",
+      "id": "australia",
+      "metadata": {
+        "fifa_code": "AUS",
+        "fifa_team_id": "43976"
+      }
+    },
+    {
+      "display_name": "Austria",
+      "id": "austria",
+      "metadata": {
+        "fifa_code": "AUT",
+        "fifa_team_id": "43934"
+      }
+    },
+    {
+      "display_name": "Belgium",
+      "id": "belgium",
+      "metadata": {
+        "fifa_code": "BEL",
+        "fifa_team_id": "43935"
+      }
+    },
+    {
+      "display_name": "Bosnia and Herzegovina",
+      "id": "bosnia-and-herzegovina",
+      "metadata": {
+        "fifa_code": "BIH",
+        "fifa_team_id": "44037"
+      }
+    },
+    {
+      "display_name": "Brazil",
+      "id": "brazil",
+      "metadata": {
+        "fifa_code": "BRA",
+        "fifa_team_id": "43924"
+      }
+    },
+    {
+      "display_name": "Cabo Verde",
+      "id": "cabo-verde",
+      "metadata": {
+        "fifa_code": "CPV",
+        "fifa_team_id": "43850"
+      }
+    },
+    {
+      "display_name": "Canada",
+      "id": "canada",
+      "metadata": {
+        "fifa_code": "CAN",
+        "fifa_team_id": "43899"
+      }
+    },
+    {
+      "display_name": "Colombia",
+      "id": "colombia",
+      "metadata": {
+        "fifa_code": "COL",
+        "fifa_team_id": "43926"
+      }
+    },
+    {
+      "display_name": "Congo DR",
+      "id": "congo-dr",
+      "metadata": {
+        "fifa_code": "COD",
+        "fifa_team_id": "20014"
+      }
+    },
+    {
+      "display_name": "Côte d'Ivoire",
+      "id": "cote-d-ivoire",
+      "metadata": {
+        "fifa_code": "CIV",
+        "fifa_team_id": "43854"
+      }
+    },
+    {
+      "display_name": "Croatia",
+      "id": "croatia",
+      "metadata": {
+        "fifa_code": "CRO",
+        "fifa_team_id": "43938"
+      }
+    },
+    {
+      "display_name": "Curaçao",
+      "id": "curacao",
+      "metadata": {
+        "fifa_code": "CUW",
+        "fifa_team_id": "1895293"
+      }
+    },
+    {
+      "display_name": "Czechia",
+      "id": "czechia",
+      "metadata": {
+        "fifa_code": "CZE",
+        "fifa_team_id": "43995"
+      }
+    },
+    {
+      "display_name": "Ecuador",
+      "id": "ecuador",
+      "metadata": {
+        "fifa_code": "ECU",
+        "fifa_team_id": "43927"
+      }
+    },
+    {
+      "display_name": "Egypt",
+      "id": "egypt",
+      "metadata": {
+        "fifa_code": "EGY",
+        "fifa_team_id": "43855"
+      }
+    },
+    {
+      "display_name": "England",
+      "id": "england",
+      "metadata": {
+        "fifa_code": "ENG",
+        "fifa_team_id": "43942"
+      }
+    },
+    {
+      "display_name": "France",
+      "id": "france",
+      "metadata": {
+        "fifa_code": "FRA",
+        "fifa_team_id": "43946"
+      }
+    },
+    {
+      "display_name": "Germany",
+      "id": "germany",
+      "metadata": {
+        "fifa_code": "GER",
+        "fifa_team_id": "43948"
+      }
+    },
+    {
+      "display_name": "Ghana",
+      "id": "ghana",
+      "metadata": {
+        "fifa_code": "GHA",
+        "fifa_team_id": "43860"
+      }
+    },
+    {
+      "display_name": "Haiti",
+      "id": "haiti",
+      "metadata": {
+        "fifa_code": "HAI",
+        "fifa_team_id": "43908"
+      }
+    },
+    {
+      "display_name": "IR Iran",
+      "id": "ir-iran",
+      "metadata": {
+        "fifa_code": "IRN",
+        "fifa_team_id": "43817"
+      }
+    },
+    {
+      "display_name": "Iraq",
+      "id": "iraq",
+      "metadata": {
+        "fifa_code": "IRQ",
+        "fifa_team_id": "43818"
+      }
+    },
+    {
+      "display_name": "Japan",
+      "id": "japan",
+      "metadata": {
+        "fifa_code": "JPN",
+        "fifa_team_id": "43819"
+      }
+    },
+    {
+      "display_name": "Jordan",
+      "id": "jordan",
+      "metadata": {
+        "fifa_code": "JOR",
+        "fifa_team_id": "43820"
+      }
+    },
+    {
+      "display_name": "Korea Republic",
+      "id": "korea-republic",
+      "metadata": {
+        "fifa_code": "KOR",
+        "fifa_team_id": "43822"
+      }
+    },
+    {
+      "display_name": "Mexico",
+      "id": "mexico",
+      "metadata": {
+        "fifa_code": "MEX",
+        "fifa_team_id": "43911"
+      }
+    },
+    {
+      "display_name": "Morocco",
+      "id": "morocco",
+      "metadata": {
+        "fifa_code": "MAR",
+        "fifa_team_id": "43872"
+      }
+    },
+    {
+      "display_name": "Netherlands",
+      "id": "netherlands",
+      "metadata": {
+        "fifa_code": "NED",
+        "fifa_team_id": "43960"
+      }
+    },
+    {
+      "display_name": "New Zealand",
+      "id": "new-zealand",
+      "metadata": {
+        "fifa_code": "NZL",
+        "fifa_team_id": "43978"
+      }
+    },
+    {
+      "display_name": "Norway",
+      "id": "norway",
+      "metadata": {
+        "fifa_code": "NOR",
+        "fifa_team_id": "43961"
+      }
+    },
+    {
+      "display_name": "Panama",
+      "id": "panama",
+      "metadata": {
+        "fifa_code": "PAN",
+        "fifa_team_id": "43914"
+      }
+    },
+    {
+      "display_name": "Paraguay",
+      "id": "paraguay",
+      "metadata": {
+        "fifa_code": "PAR",
+        "fifa_team_id": "43928"
+      }
+    },
+    {
+      "display_name": "Portugal",
+      "id": "portugal",
+      "metadata": {
+        "fifa_code": "POR",
+        "fifa_team_id": "43963"
+      }
+    },
+    {
+      "display_name": "Qatar",
+      "id": "qatar",
+      "metadata": {
+        "fifa_code": "QAT",
+        "fifa_team_id": "43834"
+      }
+    },
+    {
+      "display_name": "Saudi Arabia",
+      "id": "saudi-arabia",
+      "metadata": {
+        "fifa_code": "KSA",
+        "fifa_team_id": "43835"
+      }
+    },
+    {
+      "display_name": "Scotland",
+      "id": "scotland",
+      "metadata": {
+        "fifa_code": "SCO",
+        "fifa_team_id": "43967"
+      }
+    },
+    {
+      "display_name": "Senegal",
+      "id": "senegal",
+      "metadata": {
+        "fifa_code": "SEN",
+        "fifa_team_id": "43879"
+      }
+    },
+    {
+      "display_name": "South Africa",
+      "id": "south-africa",
+      "metadata": {
+        "fifa_code": "RSA",
+        "fifa_team_id": "43883"
+      }
+    },
+    {
+      "display_name": "Spain",
+      "id": "spain",
+      "metadata": {
+        "fifa_code": "ESP",
+        "fifa_team_id": "43969"
+      }
+    },
+    {
+      "display_name": "Sweden",
+      "id": "sweden",
+      "metadata": {
+        "fifa_code": "SWE",
+        "fifa_team_id": "43970"
+      }
+    },
+    {
+      "display_name": "Switzerland",
+      "id": "switzerland",
+      "metadata": {
+        "fifa_code": "SUI",
+        "fifa_team_id": "43971"
+      }
+    },
+    {
+      "display_name": "Tunisia",
+      "id": "tunisia",
+      "metadata": {
+        "fifa_code": "TUN",
+        "fifa_team_id": "43888"
+      }
+    },
+    {
+      "display_name": "Türkiye",
+      "id": "turkiye",
+      "metadata": {
+        "fifa_code": "TUR",
+        "fifa_team_id": "43972"
+      }
+    },
+    {
+      "display_name": "Uruguay",
+      "id": "uruguay",
+      "metadata": {
+        "fifa_code": "URU",
+        "fifa_team_id": "43930"
+      }
+    },
+    {
+      "display_name": "USA",
+      "id": "usa",
+      "metadata": {
+        "fifa_code": "USA",
+        "fifa_team_id": "43921"
+      }
+    },
+    {
+      "display_name": "Uzbekistan",
+      "id": "uzbekistan",
+      "metadata": {
+        "fifa_code": "UZB",
+        "fifa_team_id": "44005"
+      }
+    }
+  ],
+  "tournament": {
+    "display_name": "FIFA World Cup 2026",
+    "id": "fifa-world-cup-2026-live",
+    "season": "2026"
+  }
+}

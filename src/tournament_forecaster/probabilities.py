@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import math
 import random
+from collections.abc import Mapping
+from dataclasses import dataclass
 from statistics import NormalDist
 
 from .domain import Score
@@ -14,6 +16,101 @@ def rating_win_probability(first_rating: float, second_rating: float) -> float:
     """Return the neutral-site Elo win strength for the first team."""
 
     return 1.0 / (1.0 + 10.0 ** ((second_rating - first_rating) / 400.0))
+
+
+@dataclass(frozen=True, slots=True)
+class OutcomeProbabilities:
+    """Exact regulation-time probabilities in home, draw, away order."""
+
+    home_win: float
+    draw: float
+    away_win: float
+
+    def to_dict(self) -> dict[str, float]:
+        return {
+            "home_win": self.home_win,
+            "draw": self.draw,
+            "away_win": self.away_win,
+        }
+
+
+def _finite_rating(value: float, label: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{label} must be a finite numeric value")
+    normalized = float(value)
+    if not math.isfinite(normalized):
+        raise ValueError(f"{label} must be a finite numeric value")
+    return normalized
+
+
+def _goal_rates(
+    home_rating: float,
+    away_rating: float,
+    home_advantage_points: float = 0.0,
+) -> tuple[float, float]:
+    home = _finite_rating(home_rating, "home rating")
+    away = _finite_rating(away_rating, "away rating")
+    advantage = _finite_rating(home_advantage_points, "home advantage points")
+    home_share = rating_win_probability(home + advantage, away)
+    expected_total = 2.6
+    return (
+        max(0.15, expected_total * home_share),
+        max(0.15, expected_total * (1.0 - home_share)),
+    )
+
+
+def _poisson_probabilities(rate: float) -> tuple[float, ...]:
+    probabilities = [math.exp(-rate)]
+    cumulative = probabilities[0]
+    goals = 0
+    while 1.0 - cumulative > 1e-15:
+        goals += 1
+        probabilities.append(probabilities[-1] * rate / goals)
+        cumulative += probabilities[-1]
+    return tuple(probabilities)
+
+
+def predict_match_outcomes(
+    home_rating: float,
+    away_rating: float,
+    *,
+    home_advantage_points: float = 0.0,
+) -> OutcomeProbabilities:
+    """Return deterministic 1X2 probabilities from the Poisson/Elo scorer."""
+
+    home_rate, away_rate = _goal_rates(
+        home_rating,
+        away_rating,
+        home_advantage_points,
+    )
+    home_goals = _poisson_probabilities(home_rate)
+    away_goals = _poisson_probabilities(away_rate)
+    home_win = 0.0
+    draw = 0.0
+    away_win = 0.0
+    for home_score, home_probability in enumerate(home_goals):
+        for away_score, away_probability in enumerate(away_goals):
+            probability = home_probability * away_probability
+            if home_score > away_score:
+                home_win += probability
+            elif home_score == away_score:
+                draw += probability
+            else:
+                away_win += probability
+    total = home_win + draw + away_win
+    return OutcomeProbabilities(home_win / total, draw / total, away_win / total)
+
+
+def stage_home_advantage_points(stage: Mapping[str, object]) -> float:
+    """Read the explicit rating boost for the actual home side of a stage."""
+
+    metadata = stage.get("metadata", {})
+    if not isinstance(metadata, Mapping):
+        raise ValueError("stage metadata must be a mapping")
+    return _finite_rating(
+        metadata.get("home_advantage_rating_points", 0.0),
+        "stage home_advantage_rating_points",
+    )
 
 
 def _poisson(rate: float, rng: random.Random) -> int:
@@ -33,10 +130,7 @@ def simulate_score(
 ) -> Score:
     """Draw a regulation score from ratings using only the supplied RNG."""
 
-    home_share = rating_win_probability(home_rating + 65.0, away_rating)
-    expected_total = 2.6
-    home_rate = max(0.15, expected_total * home_share)
-    away_rate = max(0.15, expected_total * (1.0 - home_share))
+    home_rate, away_rate = _goal_rates(home_rating, away_rating)
     return Score(_poisson(home_rate, rng), _poisson(away_rate, rng))
 
 

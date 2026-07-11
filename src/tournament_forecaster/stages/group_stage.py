@@ -12,7 +12,7 @@ from ..group_fixtures import (
     generate_group_fixture_specs,
     group_fixture_match_id as group_fixture_match_id,
 )
-from ..probabilities import DEFAULT_RATING, simulate_score
+from ..probabilities import DEFAULT_RATING, simulate_score, stage_home_advantage_points
 from ..standings import (
     Fixture,
     StandingRow,
@@ -79,6 +79,7 @@ def simulate_group_stage(
     """Simulate every missing group fixture and calculate qualification."""
 
     stage_id = str(stage["id"])
+    home_advantage = stage_home_advantage_points(stage)
     fixtures = generate_group_fixtures(stage)
     completed = _completed_results(stage_id, fixtures, completed_matches)
     matches: list[TableMatch] = []
@@ -100,7 +101,7 @@ def simulate_group_stage(
                 fixture.home_team_id,
                 fixture.away_team_id,
                 score_simulator(
-                    float(ratings.get(fixture.home_team_id, DEFAULT_RATING)),
+                    float(ratings.get(fixture.home_team_id, DEFAULT_RATING)) + home_advantage,
                     float(ratings.get(fixture.away_team_id, DEFAULT_RATING)),
                     rng,
                 ),

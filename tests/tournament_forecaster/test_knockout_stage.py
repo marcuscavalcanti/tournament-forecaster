@@ -291,6 +291,28 @@ def test_partially_completed_two_leg_tie_simulates_only_the_missing_leg() -> Non
     assert result.winners == {"final-1": "alpha"}
 
 
+def test_two_leg_stage_applies_home_advantage_to_each_actual_home_side() -> None:
+    stage = _stage(legs=2)
+    stage["metadata"] = {"home_advantage_rating_points": 25}
+    calls: list[tuple[float, float]] = []
+
+    def record_ratings(home_rating: float, away_rating: float, rng: random.Random) -> Score:
+        del rng
+        calls.append((home_rating, away_rating))
+        return Score(1, 0)
+
+    simulate_knockout_stage(
+        stage,
+        state=_state(),
+        ratings={"alpha": 1500.0, "bravo": 1500.0},
+        completed_matches=(),
+        rng=random.Random(0),
+        score_simulator=record_ratings,
+    )
+
+    assert calls == [(1525.0, 1500.0), (1525.0, 1500.0)]
+
+
 def test_two_leg_aggregate_tie_applies_configured_away_goals_rule() -> None:
     completed = (
         CompletedMatch(

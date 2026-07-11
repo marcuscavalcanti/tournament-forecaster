@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 from ..domain import CompletedMatch, Score
 from ..errors import TournamentValidationError
-from ..probabilities import DEFAULT_RATING, simulate_score
+from ..probabilities import DEFAULT_RATING, simulate_score, stage_home_advantage_points
 from ..standings import (
     Fixture,
     StandingRow,
@@ -58,6 +58,7 @@ def simulate_league_stage(
     """Simulate missing explicit fixtures and return one ranked league table."""
 
     stage_id = str(stage["id"])
+    home_advantage = stage_home_advantage_points(stage)
     fixtures = _fixtures(stage)
     configured = {fixture.match_id: fixture for fixture in fixtures}
     completed: dict[str, CompletedMatch] = {}
@@ -85,7 +86,7 @@ def simulate_league_stage(
                     fixture.home_team_id,
                     fixture.away_team_id,
                     score_simulator(
-                        float(ratings.get(fixture.home_team_id, DEFAULT_RATING)),
+                        float(ratings.get(fixture.home_team_id, DEFAULT_RATING)) + home_advantage,
                         float(ratings.get(fixture.away_team_id, DEFAULT_RATING)),
                         rng,
                     ),

@@ -30,6 +30,11 @@ def resolve_entrant(source: Mapping[str, object], state: QualificationState) -> 
     if not isinstance(source, Mapping):
         raise TournamentValidationError("knockout entrant must be a mapping")
     source_type = source.get("type")
+    if source_type == "team":
+        team_id = source.get("team_id")
+        if not isinstance(team_id, str):
+            raise TournamentValidationError("team entrant requires team_id")
+        return team_id
     if source_type == "group_rank":
         stage_id = source.get("stage_id")
         group = source.get("group")

@@ -1,0 +1,1074 @@
+{
+  "cases": [
+    {
+      "away_team_id": "south-africa",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "mexico",
+      "kickoff_at": "2026-06-11T19:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 0,
+        "home": 2
+      },
+      "source_id": "400021443"
+    },
+    {
+      "away_team_id": "czechia",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "korea-republic",
+      "kickoff_at": "2026-06-12T02:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 1,
+        "home": 2
+      },
+      "source_id": "400021441"
+    },
+    {
+      "away_team_id": "bosnia-and-herzegovina",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "canada",
+      "kickoff_at": "2026-06-12T19:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 1,
+        "home": 1
+      },
+      "source_id": "400021449"
+    },
+    {
+      "away_team_id": "paraguay",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "usa",
+      "kickoff_at": "2026-06-13T01:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 1,
+        "home": 4
+      },
+      "source_id": "400021458"
+    },
+    {
+      "away_team_id": "scotland",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "haiti",
+      "kickoff_at": "2026-06-14T01:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 1,
+        "home": 0
+      },
+      "source_id": "400021453"
+    },
+    {
+      "away_team_id": "turkiye",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "australia",
+      "kickoff_at": "2026-06-14T04:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 0,
+        "home": 2
+      },
+      "source_id": "400021463"
+    },
+    {
+      "away_team_id": "morocco",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "brazil",
+      "kickoff_at": "2026-06-13T22:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 1,
+        "home": 1
+      },
+      "source_id": "400021456"
+    },
+    {
+      "away_team_id": "switzerland",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "qatar",
+      "kickoff_at": "2026-06-13T19:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 1,
+        "home": 1
+      },
+      "source_id": "400021447"
+    },
+    {
+      "away_team_id": "ecuador",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "cote-d-ivoire",
+      "kickoff_at": "2026-06-14T23:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 0,
+        "home": 1
+      },
+      "source_id": "400021467"
+    },
+    {
+      "away_team_id": "curacao",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "germany",
+      "kickoff_at": "2026-06-14T17:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 1,
+        "home": 7
+      },
+      "source_id": "400021464"
+    },
+    {
+      "away_team_id": "japan",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "netherlands",
+      "kickoff_at": "2026-06-14T20:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 2,
+        "home": 2
+      },
+      "source_id": "400021470"
+    },
+    {
+      "away_team_id": "tunisia",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "sweden",
+      "kickoff_at": "2026-06-15T02:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 1,
+        "home": 5
+      },
+      "source_id": "400021474"
+    },
+    {
+      "away_team_id": "uruguay",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "saudi-arabia",
+      "kickoff_at": "2026-06-15T22:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 1,
+        "home": 1
+      },
+      "source_id": "400021486"
+    },
+    {
+      "away_team_id": "cabo-verde",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "spain",
+      "kickoff_at": "2026-06-15T16:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 0,
+        "home": 0
+      },
+      "source_id": "400021482"
+    },
+    {
+      "away_team_id": "new-zealand",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "ir-iran",
+      "kickoff_at": "2026-06-16T01:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 2,
+        "home": 2
+      },
+      "source_id": "400021476"
+    },
+    {
+      "away_team_id": "egypt",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "belgium",
+      "kickoff_at": "2026-06-15T19:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 1,
+        "home": 1
+      },
+      "source_id": "400021478"
+    },
+    {
+      "away_team_id": "senegal",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "france",
+      "kickoff_at": "2026-06-16T19:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 1,
+        "home": 3
+      },
+      "source_id": "400021490"
+    },
+    {
+      "away_team_id": "norway",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "iraq",
+      "kickoff_at": "2026-06-16T22:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 4,
+        "home": 1
+      },
+      "source_id": "400021488"
+    },
+    {
+      "away_team_id": "algeria",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "argentina",
+      "kickoff_at": "2026-06-17T01:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 0,
+        "home": 3
+      },
+      "source_id": "400021496"
+    },
+    {
+      "away_team_id": "jordan",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "austria",
+      "kickoff_at": "2026-06-17T04:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 1,
+        "home": 3
+      },
+      "source_id": "400021498"
+    },
+    {
+      "away_team_id": "panama",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "ghana",
+      "kickoff_at": "2026-06-17T23:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 0,
+        "home": 1
+      },
+      "source_id": "400021510"
+    },
+    {
+      "away_team_id": "croatia",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "england",
+      "kickoff_at": "2026-06-17T20:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 2,
+        "home": 4
+      },
+      "source_id": "400021507"
+    },
+    {
+      "away_team_id": "congo-dr",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "portugal",
+      "kickoff_at": "2026-06-17T17:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 1,
+        "home": 1
+      },
+      "source_id": "400021502"
+    },
+    {
+      "away_team_id": "colombia",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "uzbekistan",
+      "kickoff_at": "2026-06-18T02:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 3,
+        "home": 1
+      },
+      "source_id": "400021504"
+    },
+    {
+      "away_team_id": "south-africa",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "czechia",
+      "kickoff_at": "2026-06-18T16:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 1,
+        "home": 1
+      },
+      "source_id": "400021440"
+    },
+    {
+      "away_team_id": "bosnia-and-herzegovina",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "switzerland",
+      "kickoff_at": "2026-06-18T19:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 1,
+        "home": 4
+      },
+      "source_id": "400021446"
+    },
+    {
+      "away_team_id": "qatar",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "canada",
+      "kickoff_at": "2026-06-18T22:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 0,
+        "home": 6
+      },
+      "source_id": "400021450"
+    },
+    {
+      "away_team_id": "korea-republic",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "mexico",
+      "kickoff_at": "2026-06-19T01:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 0,
+        "home": 1
+      },
+      "source_id": "400021442"
+    },
+    {
+      "away_team_id": "haiti",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "brazil",
+      "kickoff_at": "2026-06-20T00:30:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 0,
+        "home": 3
+      },
+      "source_id": "400021457"
+    },
+    {
+      "away_team_id": "morocco",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "scotland",
+      "kickoff_at": "2026-06-19T22:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 1,
+        "home": 0
+      },
+      "source_id": "400021454"
+    },
+    {
+      "away_team_id": "paraguay",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "turkiye",
+      "kickoff_at": "2026-06-20T03:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 1,
+        "home": 0
+      },
+      "source_id": "400021460"
+    },
+    {
+      "away_team_id": "australia",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "usa",
+      "kickoff_at": "2026-06-19T19:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 0,
+        "home": 2
+      },
+      "source_id": "400021462"
+    },
+    {
+      "away_team_id": "cote-d-ivoire",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "germany",
+      "kickoff_at": "2026-06-20T20:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 1,
+        "home": 2
+      },
+      "source_id": "400021469"
+    },
+    {
+      "away_team_id": "curacao",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "ecuador",
+      "kickoff_at": "2026-06-21T00:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 0,
+        "home": 0
+      },
+      "source_id": "400021465"
+    },
+    {
+      "away_team_id": "sweden",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "netherlands",
+      "kickoff_at": "2026-06-20T17:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 1,
+        "home": 5
+      },
+      "source_id": "400021472"
+    },
+    {
+      "away_team_id": "japan",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "tunisia",
+      "kickoff_at": "2026-06-21T04:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 4,
+        "home": 0
+      },
+      "source_id": "400021475"
+    },
+    {
+      "away_team_id": "cabo-verde",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "uruguay",
+      "kickoff_at": "2026-06-21T22:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 2,
+        "home": 2
+      },
+      "source_id": "400021487"
+    },
+    {
+      "away_team_id": "saudi-arabia",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "spain",
+      "kickoff_at": "2026-06-21T16:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 0,
+        "home": 4
+      },
+      "source_id": "400021483"
+    },
+    {
+      "away_team_id": "ir-iran",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "belgium",
+      "kickoff_at": "2026-06-21T19:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 0,
+        "home": 0
+      },
+      "source_id": "400021477"
+    },
+    {
+      "away_team_id": "egypt",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "new-zealand",
+      "kickoff_at": "2026-06-22T01:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 3,
+        "home": 1
+      },
+      "source_id": "400021480"
+    },
+    {
+      "away_team_id": "senegal",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "norway",
+      "kickoff_at": "2026-06-23T00:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 2,
+        "home": 3
+      },
+      "source_id": "400021491"
+    },
+    {
+      "away_team_id": "iraq",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "france",
+      "kickoff_at": "2026-06-22T21:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 0,
+        "home": 3
+      },
+      "source_id": "400021492"
+    },
+    {
+      "away_team_id": "austria",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "argentina",
+      "kickoff_at": "2026-06-22T17:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 0,
+        "home": 2
+      },
+      "source_id": "400021494"
+    },
+    {
+      "away_team_id": "algeria",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "jordan",
+      "kickoff_at": "2026-06-23T03:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 2,
+        "home": 1
+      },
+      "source_id": "400021499"
+    },
+    {
+      "away_team_id": "ghana",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "england",
+      "kickoff_at": "2026-06-23T20:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 0,
+        "home": 0
+      },
+      "source_id": "400021506"
+    },
+    {
+      "away_team_id": "croatia",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "panama",
+      "kickoff_at": "2026-06-23T23:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 1,
+        "home": 0
+      },
+      "source_id": "400021511"
+    },
+    {
+      "away_team_id": "uzbekistan",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "portugal",
+      "kickoff_at": "2026-06-23T17:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 0,
+        "home": 5
+      },
+      "source_id": "400021503"
+    },
+    {
+      "away_team_id": "congo-dr",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "colombia",
+      "kickoff_at": "2026-06-24T02:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 0,
+        "home": 1
+      },
+      "source_id": "400021501"
+    },
+    {
+      "away_team_id": "brazil",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "scotland",
+      "kickoff_at": "2026-06-24T22:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 3,
+        "home": 0
+      },
+      "source_id": "400021455"
+    },
+    {
+      "away_team_id": "haiti",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "morocco",
+      "kickoff_at": "2026-06-24T22:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 2,
+        "home": 4
+      },
+      "source_id": "400021452"
+    },
+    {
+      "away_team_id": "canada",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "switzerland",
+      "kickoff_at": "2026-06-24T19:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 1,
+        "home": 2
+      },
+      "source_id": "400021451"
+    },
+    {
+      "away_team_id": "qatar",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "bosnia-and-herzegovina",
+      "kickoff_at": "2026-06-24T19:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 1,
+        "home": 3
+      },
+      "source_id": "400021448"
+    },
+    {
+      "away_team_id": "mexico",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "czechia",
+      "kickoff_at": "2026-06-25T01:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 3,
+        "home": 0
+      },
+      "source_id": "400021444"
+    },
+    {
+      "away_team_id": "korea-republic",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "south-africa",
+      "kickoff_at": "2026-06-25T01:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 0,
+        "home": 1
+      },
+      "source_id": "400021445"
+    },
+    {
+      "away_team_id": "cote-d-ivoire",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "curacao",
+      "kickoff_at": "2026-06-25T20:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 2,
+        "home": 0
+      },
+      "source_id": "400021468"
+    },
+    {
+      "away_team_id": "germany",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "ecuador",
+      "kickoff_at": "2026-06-25T20:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 1,
+        "home": 2
+      },
+      "source_id": "400021466"
+    },
+    {
+      "away_team_id": "sweden",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "japan",
+      "kickoff_at": "2026-06-25T23:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 1,
+        "home": 1
+      },
+      "source_id": "400021471"
+    },
+    {
+      "away_team_id": "netherlands",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "tunisia",
+      "kickoff_at": "2026-06-25T23:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 3,
+        "home": 1
+      },
+      "source_id": "400021473"
+    },
+    {
+      "away_team_id": "usa",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "turkiye",
+      "kickoff_at": "2026-06-26T02:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 2,
+        "home": 3
+      },
+      "source_id": "400021459"
+    },
+    {
+      "away_team_id": "australia",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "paraguay",
+      "kickoff_at": "2026-06-26T02:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 0,
+        "home": 0
+      },
+      "source_id": "400021461"
+    },
+    {
+      "away_team_id": "france",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "norway",
+      "kickoff_at": "2026-06-26T19:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 4,
+        "home": 1
+      },
+      "source_id": "400021489"
+    },
+    {
+      "away_team_id": "iraq",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "senegal",
+      "kickoff_at": "2026-06-26T19:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 0,
+        "home": 5
+      },
+      "source_id": "400021493"
+    },
+    {
+      "away_team_id": "ir-iran",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "egypt",
+      "kickoff_at": "2026-06-27T03:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 1,
+        "home": 1
+      },
+      "source_id": "400021479"
+    },
+    {
+      "away_team_id": "belgium",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "new-zealand",
+      "kickoff_at": "2026-06-27T03:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 5,
+        "home": 1
+      },
+      "source_id": "400021481"
+    },
+    {
+      "away_team_id": "saudi-arabia",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "cabo-verde",
+      "kickoff_at": "2026-06-27T00:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 0,
+        "home": 0
+      },
+      "source_id": "400021485"
+    },
+    {
+      "away_team_id": "spain",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "uruguay",
+      "kickoff_at": "2026-06-27T00:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 1,
+        "home": 0
+      },
+      "source_id": "400021484"
+    },
+    {
+      "away_team_id": "england",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "panama",
+      "kickoff_at": "2026-06-27T21:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 2,
+        "home": 0
+      },
+      "source_id": "400021508"
+    },
+    {
+      "away_team_id": "ghana",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "croatia",
+      "kickoff_at": "2026-06-27T21:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 1,
+        "home": 2
+      },
+      "source_id": "400021509"
+    },
+    {
+      "away_team_id": "austria",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "algeria",
+      "kickoff_at": "2026-06-28T02:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 3,
+        "home": 3
+      },
+      "source_id": "400021497"
+    },
+    {
+      "away_team_id": "argentina",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "jordan",
+      "kickoff_at": "2026-06-28T02:00:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 3,
+        "home": 1
+      },
+      "source_id": "400021495"
+    },
+    {
+      "away_team_id": "portugal",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "colombia",
+      "kickoff_at": "2026-06-27T23:30:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 0,
+        "home": 0
+      },
+      "source_id": "400021505"
+    },
+    {
+      "away_team_id": "uzbekistan",
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "home_team_id": "congo-dr",
+      "kickoff_at": "2026-06-27T23:30:00Z",
+      "metadata": {
+        "source": "official FIFA calendar API"
+      },
+      "result": {
+        "away": 1,
+        "home": 3
+      },
+      "source_id": "400021500"
+    }
+  ],
+  "home_advantage_rating_points": 0,
+  "metadata": {
+    "purpose": "Out-of-sample 1X2 evaluation of the frozen pre-tournament rating seed.",
+    "rating_provenance": {
+      "captured_at": "2026-06-09T23:27:23-03:00",
+      "git_commit": "a7b6e694",
+      "limitation": "Project-authored, not an official FIFA rating source."
+    }
+  },
+  "model_version": "poisson-elo-v1",
+  "ratings": {
+    "algeria": 1595.0,
+    "argentina": 1910.0,
+    "australia": 1580.0,
+    "austria": 1700.0,
+    "belgium": 1790.0,
+    "bosnia-and-herzegovina": 1560.0,
+    "brazil": 1850.0,
+    "cabo-verde": 1505.0,
+    "canada": 1585.0,
+    "colombia": 1740.0,
+    "congo-dr": 1500.0,
+    "cote-d-ivoire": 1605.0,
+    "croatia": 1745.0,
+    "curacao": 1360.0,
+    "czechia": 1580.0,
+    "ecuador": 1650.0,
+    "egypt": 1615.0,
+    "england": 1880.0,
+    "france": 1920.0,
+    "germany": 1860.0,
+    "ghana": 1560.0,
+    "haiti": 1320.0,
+    "ir-iran": 1625.0,
+    "iraq": 1490.0,
+    "japan": 1690.0,
+    "jordan": 1440.0,
+    "korea-republic": 1630.0,
+    "mexico": 1690.0,
+    "morocco": 1660.0,
+    "netherlands": 1860.0,
+    "new-zealand": 1430.0,
+    "norway": 1660.0,
+    "panama": 1480.0,
+    "paraguay": 1600.0,
+    "portugal": 1870.0,
+    "qatar": 1500.0,
+    "saudi-arabia": 1510.0,
+    "scotland": 1540.0,
+    "senegal": 1655.0,
+    "south-africa": 1470.0,
+    "spain": 1900.0,
+    "sweden": 1650.0,
+    "switzerland": 1710.0,
+    "tunisia": 1480.0,
+    "turkiye": 1640.0,
+    "uruguay": 1780.0,
+    "usa": 1645.0,
+    "uzbekistan": 1515.0
+  },
+  "ratings_sha256": "983a20748541db3612dd75fa2d5dde954d1b89de52a23c1b19f345a427bca259",
+  "schema_version": 1
+}

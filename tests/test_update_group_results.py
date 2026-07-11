@@ -3,7 +3,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-from scripts.update_group_results import _fifa_calendar_api_url
+from scripts.update_group_results import (
+    _fifa_calendar_api_url,
+    _fifa_records_from_api_payload,
+    _knockout_phase_from_stage,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -105,6 +109,58 @@ def test_fifa_calendar_query_extends_one_utc_day_after_last_local_fixture() -> N
 
     assert "from=2026-06-27T00%3A00%3A00Z" in url
     assert "to=2026-07-05T23%3A59%3A59Z" in url
+
+
+def test_fifa_extra_time_result_type_is_final_and_preserves_declared_winners() -> None:
+    config = {
+        "groups_config": {
+            "groups": {
+                "A": [
+                    {"name": "Bélgica", "code": "BEL"},
+                    {"name": "Senegal", "code": "SEN"},
+                    {"name": "Argentina", "code": "ARG"},
+                    {"name": "Cabo Verde", "code": "CPV"},
+                ]
+            }
+        }
+    }
+    payload = {
+        "Results": [
+            {
+                "IdMatch": "400021525",
+                "StageName": [{"Description": "Round of 32"}],
+                "Date": "2026-07-04T20:00:00Z",
+                "Home": {"Abbreviation": "BEL", "IdTeam": "belgium", "Score": 3},
+                "Away": {"Abbreviation": "SEN", "IdTeam": "senegal", "Score": 2},
+                "HomeTeamScore": 3,
+                "AwayTeamScore": 2,
+                "Winner": "belgium",
+                "ResultType": 3,
+            },
+            {
+                "IdMatch": "400021521",
+                "StageName": [{"Description": "Round of 32"}],
+                "Date": "2026-07-05T20:00:00Z",
+                "Home": {"Abbreviation": "ARG", "IdTeam": "argentina", "Score": 3},
+                "Away": {"Abbreviation": "CPV", "IdTeam": "cabo-verde", "Score": 2},
+                "HomeTeamScore": 3,
+                "AwayTeamScore": 2,
+                "Winner": "argentina",
+                "ResultType": 3,
+            },
+        ]
+    }
+
+    records = _fifa_records_from_api_payload(payload, config)
+
+    assert [(record["match_id"], record["winner"]) for record in records] == [
+        ("400021525", "Bélgica"),
+        ("400021521", "Argentina"),
+    ]
+
+
+def test_fifa_singular_quarter_final_stage_is_supported() -> None:
+    assert _knockout_phase_from_stage("Quarter-final") == "Quartas"
 
 
 def test_update_group_results_apply_writes_canonical_fixture_order(tmp_path: Path) -> None:

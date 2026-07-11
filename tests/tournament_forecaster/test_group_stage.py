@@ -31,6 +31,32 @@ def test_group_fixture_generation_is_stable_and_alternates_home_teams() -> None:
     assert (fixtures[1].home_team_id, fixtures[1].away_team_id) == ("bravo", "alpha")
 
 
+def test_group_stage_applies_only_explicit_home_advantage() -> None:
+    stage = {
+        "id": "groups",
+        "type": "round_robin_groups",
+        "groups": {"A": ["alpha", "bravo"]},
+        "rounds_per_pair": 1,
+        "metadata": {"home_advantage_rating_points": 40},
+    }
+    calls: list[tuple[float, float]] = []
+
+    def record_ratings(home_rating: float, away_rating: float, rng: random.Random) -> Score:
+        del rng
+        calls.append((home_rating, away_rating))
+        return Score(0, 0)
+
+    simulate_group_stage(
+        stage,
+        ratings={"alpha": 1500.0, "bravo": 1500.0},
+        completed_matches=(),
+        rng=random.Random(0),
+        score_simulator=record_ratings,
+    )
+
+    assert calls == [(1540.0, 1500.0)]
+
+
 def test_group_fixture_ids_are_collision_free_for_delimiter_like_team_ids() -> None:
     stage = {
         "id": "groups",

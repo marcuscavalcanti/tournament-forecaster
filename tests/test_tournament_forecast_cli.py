@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -141,6 +142,51 @@ def test_init_refuses_even_an_empty_existing_destination(tmp_path: Path) -> None
 
     _assert_user_error(result, "destination already exists")
     assert list(destination.iterdir()) == []
+
+
+def test_backtest_writes_report_and_returns_nonzero_when_sample_is_insufficient(
+    tmp_path: Path,
+) -> None:
+    from tournament_forecaster.backtest import ratings_sha256
+
+    ratings = {"alpha": 1600.0, "bravo": 1500.0}
+    document = {
+        "schema_version": 1,
+        "model_version": "poisson-elo-v1",
+        "home_advantage_rating_points": 0,
+        "ratings": ratings,
+        "ratings_sha256": ratings_sha256(ratings),
+        "cases": [
+            {
+                "source_id": "official-1",
+                "captured_at": "2026-06-09T12:00:00+00:00",
+                "kickoff_at": "2026-06-11T12:00:00+00:00",
+                "home_team_id": "alpha",
+                "away_team_id": "bravo",
+                "result": {"home": 1, "away": 0},
+            }
+        ],
+    }
+    source = tmp_path / "backtest.json"
+    output = tmp_path / "backtest-report.json"
+    source.write_text(json.dumps(document), encoding="utf-8")
+
+    result = _run_cli(
+        tmp_path,
+        "backtest",
+        "--input",
+        str(source),
+        "--output",
+        str(output),
+        "--min-resolved",
+        "2",
+    )
+
+    assert result.returncode == 1, result.stderr
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["status"] == "insufficient"
+    assert report["ok"] is False
+    assert json.loads(result.stdout) == report
 
 
 @pytest.mark.parametrize(

@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tournament-forecaster.example/schemas/backtest.schema.json",
+  "title": "Tournament Forecaster backtest document",
+  "$defs": {
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T.+(?:Z|[+-][0-9]{2}:[0-9]{2})$"
+    },
+    "score": {
+      "type": "object",
+      "required": ["home", "away"],
+      "properties": {
+        "home": {"type": "integer", "minimum": 0},
+        "away": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "case": {
+      "type": "object",
+      "required": [
+        "source_id",
+        "captured_at",
+        "kickoff_at",
+        "home_team_id",
+        "away_team_id",
+        "result"
+      ],
+      "properties": {
+        "source_id": {"type": "string", "minLength": 1},
+        "captured_at": {"$ref": "#/$defs/timestamp"},
+        "kickoff_at": {"$ref": "#/$defs/timestamp"},
+        "home_team_id": {"type": "string", "minLength": 1},
+        "away_team_id": {"type": "string", "minLength": 1},
+        "result": {
+          "oneOf": [
+            {"$ref": "#/$defs/score"},
+            {"type": "null"}
+          ]
+        },
+        "metadata": {"type": "object", "additionalProperties": true}
+      },
+      "additionalProperties": false
+    }
+  },
+  "type": "object",
+  "required": [
+    "schema_version",
+    "model_version",
+    "home_advantage_rating_points",
+    "ratings",
+    "ratings_sha256",
+    "cases"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "model_version": {"type": "string", "minLength": 1},
+    "home_advantage_rating_points": {"type": "number"},
+    "ratings": {
+      "type": "object",
+      "propertyNames": {"type": "string", "minLength": 1},
+      "additionalProperties": {"type": "number"}
+    },
+    "ratings_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "cases": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/case"}
+    },
+    "metadata": {"type": "object", "additionalProperties": true}
+  },
+  "additionalProperties": false
+}

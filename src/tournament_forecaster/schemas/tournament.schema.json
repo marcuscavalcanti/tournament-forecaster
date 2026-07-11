@@ -149,6 +149,15 @@
       },
       "additionalProperties": false
     },
+    "team_source": {
+      "type": "object",
+      "required": ["type", "team_id"],
+      "properties": {
+        "type": {"const": "team"},
+        "team_id": {"$ref": "#/$defs/stable_id"}
+      },
+      "additionalProperties": false
+    },
     "best_additional_source": {
       "type": "object",
       "required": ["type", "stage_id", "rank"],
@@ -180,6 +189,7 @@
     },
     "entrant_source": {
       "oneOf": [
+        {"$ref": "#/$defs/team_source"},
         {"$ref": "#/$defs/group_rank_source"},
         {"$ref": "#/$defs/best_additional_source"},
         {"$ref": "#/$defs/league_rank_source"},

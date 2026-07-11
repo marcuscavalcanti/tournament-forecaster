@@ -119,7 +119,7 @@ def _fifa_result_is_final(item: dict[str, Any]) -> bool:
     if value is None:
         return True
     try:
-        return int(value) in {1, 2}
+        return int(value) in {1, 2, 3}
     except (TypeError, ValueError):
         return _normalize(str(value)) in {"final", "finished", "completed", "played"}
 
@@ -259,6 +259,7 @@ def _knockout_phase_from_stage(stage: str) -> str | None:
         "round of 16": "Oitavas",
         "quarter-finals": "Quartas",
         "quarter finals": "Quartas",
+        "quarter-final": "Quartas",
         "semifinals": "Semifinal",
         "semi-finals": "Semifinal",
         "final": "Final",

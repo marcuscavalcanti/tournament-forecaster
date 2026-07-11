@@ -14,6 +14,7 @@ from ..probabilities import (
     resolve_knockout_draw,
     resolve_penalty_shootout,
     simulate_score,
+    stage_home_advantage_points,
 )
 from ..qualification import QualificationState
 from ..standings import TableMatch
@@ -119,6 +120,7 @@ def simulate_knockout_stage(
     """Resolve pairings, preserve completed legs, and advance every tie winner."""
 
     stage_id = str(stage["id"])
+    home_advantage = stage_home_advantage_points(stage)
     pairing_config = stage["pairing"]
     assert isinstance(pairing_config, Mapping)
     ties = pairing_config["ties"]
@@ -180,7 +182,7 @@ def simulate_knockout_stage(
                         home_team_id,
                         away_team_id,
                         score_simulator(
-                            float(ratings.get(home_team_id, DEFAULT_RATING)),
+                            float(ratings.get(home_team_id, DEFAULT_RATING)) + home_advantage,
                             float(ratings.get(away_team_id, DEFAULT_RATING)),
                             rng,
                         ),

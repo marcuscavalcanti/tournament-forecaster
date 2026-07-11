@@ -96,6 +96,50 @@ def _append_terminal(document: dict[str, object]) -> dict[str, object]:
     return document
 
 
+def test_explicit_team_entrant_supports_locked_mid_tournament_start() -> None:
+    from tournament_forecaster.config import load_tournament_document
+    from tournament_forecaster.domain import SimulationOptions
+    from tournament_forecaster.simulation import simulate_tournament
+
+    document = _document()
+    document["stages"] = [
+        _terminal_stage(
+            entrants=[
+                {"type": "team", "team_id": "north-city"},
+                {"type": "team", "team_id": "south-city"},
+            ]
+        )
+    ]
+    document["completed_matches"] = []
+
+    forecast = simulate_tournament(
+        load_tournament_document(document),
+        options=SimulationOptions(seed=7, iterations=5),
+    )
+
+    assert forecast.stage_order == ("final",)
+    assert forecast.stage_probabilities == {"final": 1.0}
+
+
+def test_explicit_team_entrant_rejects_unknown_team_reference() -> None:
+    from tournament_forecaster.config import load_tournament_document
+    from tournament_forecaster.errors import TournamentValidationError
+
+    document = _document()
+    document["stages"] = [
+        _terminal_stage(
+            entrants=[
+                {"type": "team", "team_id": "north-city"},
+                {"type": "team", "team_id": "missing-team"},
+            ]
+        )
+    ]
+    document["completed_matches"] = []
+
+    with pytest.raises(TournamentValidationError, match="unknown team"):
+        load_tournament_document(document)
+
+
 def _source_group_stage() -> dict[str, object]:
     return {
         "id": "source-groups",
@@ -1171,7 +1215,7 @@ def test_loader_preserves_typed_knockout_entrants_as_data() -> None:
         (["1A", {"type": "group_rank", "stage_id": "groups", "group": "A", "rank": 2}], "mapping"),
         (
             [
-                {"type": "team", "team_id": "north-city"},
+                {"type": "seed", "team_id": "north-city"},
                 {"type": "group_rank", "stage_id": "groups", "group": "A", "rank": 2},
             ],
             "entrant type",
