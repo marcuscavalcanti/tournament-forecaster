@@ -39,6 +39,34 @@ def load_bundled_preset(name: str) -> Tournament:
         return load_tournament(path)
 
 
+def list_bundled_presets() -> tuple[str, ...]:
+    """Return the names of complete tournament presets shipped in the package."""
+
+    root = files("tournament_forecaster").joinpath("data", "presets")
+    return tuple(
+        sorted(
+            child.name
+            for child in root.iterdir()
+            if child.is_dir() and child.joinpath("tournament.json").is_file()
+        )
+    )
+
+
+def list_bundled_templates() -> tuple[str, ...]:
+    """Return the names of complete scaffold templates shipped in the package."""
+
+    root = files("tournament_forecaster").joinpath("data", "templates")
+    return tuple(
+        sorted(
+            child.name
+            for child in root.iterdir()
+            if child.is_dir()
+            and child.joinpath("tournament.json").is_file()
+            and child.joinpath("README.md").is_file()
+        )
+    )
+
+
 def copy_template(name: str, destination: Path) -> Path:
     """Copy a complete packaged template directory and return its JSON config path."""
 

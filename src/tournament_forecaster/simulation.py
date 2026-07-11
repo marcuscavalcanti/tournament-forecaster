@@ -342,4 +342,11 @@ def simulate_tournament(
         confidence_intervals=confidence_intervals,
         input_provenance=({"kind": "tournament", "source_id": tournament.id},),
         warnings=warnings,
+        tournament_display_name=tournament.display_name,
+        team_display_names={team.id: team.display_name for team in tournament.teams},
+        simulation={
+            "seed": simulation_options.seed,
+            "iterations": simulation_options.iterations,
+            "confidence_level": float(simulation_options.confidence_level),
+        },
     )

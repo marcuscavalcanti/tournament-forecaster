@@ -1,7 +1,7 @@
 SHELL := /bin/zsh
 
 PYTHON ?= uv run python
-PYTEST ?= uv run --with pytest python -m pytest
+PYTEST ?= uv run --with pytest --with jsonschema python -m pytest
 PYTHON_WITH_PILLOW ?= uv run --with pillow python
 
 CONFIG ?= config/worldcup_brazil.json
@@ -60,7 +60,7 @@ ifeq ($(MARKET_ODDS_REQUIRED),1)
 UPDATE_MARKET_ODDS_ARGS += --require
 endif
 
-.PHONY: help daily force watch doctor diagrams calibration profile validate debate update-results update-market-odds calibrate-rho calibrate-base-rating
+.PHONY: help quickstart daily force watch doctor diagrams calibration profile validate debate update-results update-market-odds calibrate-rho calibrate-base-rating
 
 help:
 	@printf "Comandos principais:\n"
@@ -75,6 +75,10 @@ help:
 	@printf "  make update-results busca placares oficiais da FIFA e atualiza com APPLY=1; RESULTS_INPUT mantém modo manual\n"
 	@printf "  make update-market-odds busca odds outright estruturadas e atualiza market_outright_odds com APPLY=1\n"
 	@printf "  make validate   roda testes, compileall e valida o JSON exemplo\n"
+	@printf "  make quickstart gera um forecast sintético completo e offline\n"
+
+quickstart:
+	$(PYTHON) -m tournament_forecaster quickstart
 
 daily:
 	@mkdir -p data "$(OUTPUT_DIR)"

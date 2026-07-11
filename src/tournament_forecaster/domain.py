@@ -354,6 +354,9 @@ class Forecast:
     input_provenance: tuple[Mapping[str, object], ...]
     warnings: tuple[str, ...]
     council: Mapping[str, object] | None = None
+    tournament_display_name: str | None = None
+    team_display_names: Mapping[str, str] = field(default_factory=dict)
+    simulation: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         _stable_id(self.run_id, "forecast run id")
@@ -411,14 +414,61 @@ class Forecast:
             _text(warning, "forecast warning")
         if self.council is not None and not isinstance(self.council, Mapping):
             raise TournamentValidationError("forecast council metadata must be a mapping")
+        if self.tournament_display_name is not None:
+            _text(self.tournament_display_name, "forecast tournament display name")
+        if not isinstance(self.team_display_names, Mapping):
+            raise TournamentValidationError("forecast team display names must be a mapping")
+        normalized_names: dict[str, str] = {}
+        for team_id, display_name in self.team_display_names.items():
+            normalized_names[_stable_id(team_id, "forecast display-name team id")] = _text(
+                display_name,
+                "forecast team display name",
+            )
+        if normalized_names and self.focus_team_id not in normalized_names:
+            raise TournamentValidationError(
+                "forecast team display names must include the focus team"
+            )
+        if not isinstance(self.simulation, Mapping):
+            raise TournamentValidationError("forecast simulation metadata must be a mapping")
+        normalized_simulation: dict[str, object] = {}
+        if self.simulation:
+            _reject_unknown_properties(
+                self.simulation,
+                frozenset({"seed", "iterations", "confidence_level"}),
+                "forecast simulation metadata",
+            )
+            normalized_simulation = {
+                "seed": _integer(
+                    self.simulation.get("seed"),
+                    "forecast simulation seed",
+                ),
+                "iterations": _integer(
+                    self.simulation.get("iterations"),
+                    "forecast simulation iterations",
+                    minimum=1,
+                ),
+            }
+            confidence_level = self.simulation.get("confidence_level")
+            if (
+                isinstance(confidence_level, bool)
+                or not isinstance(confidence_level, (int, float))
+                or not math.isfinite(float(confidence_level))
+                or not 0.0 < float(confidence_level) < 1.0
+            ):
+                raise TournamentValidationError(
+                    "forecast simulation confidence level must be between 0 and 1"
+                )
+            normalized_simulation["confidence_level"] = float(confidence_level)
         object.__setattr__(self, "confidence_intervals", MappingProxyType(normalized_intervals))
         object.__setattr__(self, "input_provenance", tuple(normalized_provenance))
         object.__setattr__(self, "warnings", warnings)
+        object.__setattr__(self, "team_display_names", MappingProxyType(normalized_names))
+        object.__setattr__(self, "simulation", MappingProxyType(normalized_simulation))
         if self.council is not None:
             object.__setattr__(self, "council", _freeze_mapping(self.council))
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        document: dict[str, object] = {
             "schema_version": self.SCHEMA_VERSION,
             "run_id": self.run_id,
             "generated_at": self.generated_at,
@@ -434,6 +484,13 @@ class Forecast:
             "warnings": list(self.warnings),
             "council": _thaw(self.council) if self.council is not None else None,
         }
+        if self.tournament_display_name is not None:
+            document["tournament_display_name"] = self.tournament_display_name
+        if self.team_display_names:
+            document["team_display_names"] = dict(self.team_display_names)
+        if self.simulation:
+            document["simulation"] = dict(self.simulation)
+        return document
 
 
 def _validate_group_stage(

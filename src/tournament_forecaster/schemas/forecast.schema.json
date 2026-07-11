@@ -49,6 +49,16 @@
         "metadata": {"$ref": "#/$defs/metadata"}
       },
       "additionalProperties": false
+    },
+    "simulation": {
+      "type": "object",
+      "required": ["seed", "iterations", "confidence_level"],
+      "properties": {
+        "seed": {"type": "integer", "minimum": 0},
+        "iterations": {"type": "integer", "minimum": 1},
+        "confidence_level": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1}
+      },
+      "additionalProperties": false
     }
   },
   "type": "object",
@@ -100,7 +110,14 @@
         {"$ref": "#/$defs/metadata"},
         {"type": "null"}
       ]
-    }
+    },
+    "tournament_display_name": {"type": "string", "minLength": 1},
+    "team_display_names": {
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/stable_id"},
+      "additionalProperties": {"type": "string", "minLength": 1}
+    },
+    "simulation": {"$ref": "#/$defs/simulation"}
   },
   "additionalProperties": false
 }
