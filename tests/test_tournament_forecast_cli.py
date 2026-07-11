@@ -42,6 +42,9 @@ def test_quickstart_creates_exactly_three_artifacts_and_prints_next_commands(
     files = sorted(path.relative_to(output).as_posix() for path in output.rglob("*") if path.is_file())
     assert files == ["bracket.svg", "forecast.json", "report.md"]
     assert all((output / name).stat().st_size > 0 for name in files)
+    assert "Artifacts (immutable generation):" in result.stdout
+    assert "Current alias:" in result.stdout
+    assert "outputs/synthetic-cup/north-city" in result.stdout
     assert "tournament-forecast presets list" in result.stdout
     assert "tournament-forecast init my-tournament --template group-knockout" in result.stdout
     assert "tournament-forecast validate --config my-tournament/tournament.json" in result.stdout
@@ -178,6 +181,27 @@ def test_report_rejects_output_path_conflict_without_traceback(tmp_path: Path) -
     )
 
     _assert_user_error(result, "output path conflicts with an existing file")
+
+
+def test_quickstart_rejects_a_symlinked_output_ancestor_without_mutation(
+    tmp_path: Path,
+) -> None:
+    real_output = tmp_path / "real-output"
+    (real_output / "synthetic-cup").mkdir(parents=True)
+    output_alias = tmp_path / "output-alias"
+    output_alias.symlink_to(real_output, target_is_directory=True)
+
+    result = _run_cli(
+        tmp_path,
+        "quickstart",
+        "--iterations",
+        "10",
+        "--output-dir",
+        str(output_alias),
+    )
+
+    _assert_user_error(result, "ancestor symlink")
+    assert list((real_output / "synthetic-cup").iterdir()) == []
 
 
 def test_validate_does_not_simulate_or_open_a_socket(

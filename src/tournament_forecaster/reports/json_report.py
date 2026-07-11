@@ -20,7 +20,6 @@ _REQUIRED_PROPERTIES = frozenset(
         "tournament_id",
         "focus_team_id",
         "stage_probabilities",
-        "stage_order",
         "matchup_probabilities",
         "championship_probability",
         "confidence_intervals",
@@ -30,7 +29,7 @@ _REQUIRED_PROPERTIES = frozenset(
     }
 )
 _OPTIONAL_PROPERTIES = frozenset(
-    {"tournament_display_name", "team_display_names", "simulation"}
+    {"stage_order", "tournament_display_name", "team_display_names", "simulation"}
 )
 
 
@@ -70,7 +69,7 @@ def render_json_report(forecast: Forecast) -> str:
 
 
 def forecast_from_document(document: Mapping[str, object]) -> Forecast:
-    """Build a validated forecast from a versioned JSON-compatible mapping."""
+    """Build a forecast, preserving v2 insertion order when stage_order is absent."""
 
     version = document.get("schema_version")
     if version != Forecast.SCHEMA_VERSION:
@@ -109,24 +108,31 @@ def forecast_from_document(document: Mapping[str, object]) -> Forecast:
 
     warnings = _sequence(document["warnings"], "forecast warnings")
     provenance = _sequence(document["input_provenance"], "forecast input provenance")
+    stage_probabilities = cast(
+        Mapping[str, float],
+        _mapping(
+            document["stage_probabilities"],
+            "forecast stage probabilities",
+        ),
+    )
+    stage_order_value = document.get("stage_order")
+    stage_order = (
+        tuple(stage_probabilities)
+        if "stage_order" not in document
+        else tuple(
+            cast(
+                Sequence[str],
+                _sequence(stage_order_value, "forecast stage order"),
+            )
+        )
+    )
     return Forecast(
         run_id=document["run_id"],  # type: ignore[arg-type]
         generated_at=document["generated_at"],  # type: ignore[arg-type]
         tournament_id=document["tournament_id"],  # type: ignore[arg-type]
         focus_team_id=document["focus_team_id"],  # type: ignore[arg-type]
-        stage_probabilities=cast(
-            Mapping[str, float],
-            _mapping(
-                document["stage_probabilities"],
-                "forecast stage probabilities",
-            ),
-        ),
-        stage_order=tuple(
-            cast(
-                Sequence[str],
-                _sequence(document["stage_order"], "forecast stage order"),
-            )
-        ),
+        stage_probabilities=stage_probabilities,
+        stage_order=stage_order,
         matchup_probabilities=tuple(matchups),
         championship_probability=document["championship_probability"],  # type: ignore[arg-type]
         confidence_intervals=_mapping(

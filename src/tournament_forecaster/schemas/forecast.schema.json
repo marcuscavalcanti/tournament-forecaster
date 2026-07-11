@@ -69,7 +69,6 @@
     "tournament_id",
     "focus_team_id",
     "stage_probabilities",
-    "stage_order",
     "matchup_probabilities",
     "championship_probability",
     "confidence_intervals",
@@ -89,6 +88,7 @@
       "additionalProperties": {"$ref": "#/$defs/probability"}
     },
     "stage_order": {
+      "description": "Explicit stage order. Schema-v2 readers fall back to stage_probabilities property insertion order when omitted.",
       "type": "array",
       "items": {"$ref": "#/$defs/stable_id"},
       "uniqueItems": true

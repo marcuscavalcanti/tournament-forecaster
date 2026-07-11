@@ -63,10 +63,12 @@ def _print_probability_summary(forecast: Forecast) -> None:
     print(f"  championship: {forecast.championship_probability:.1%}")
 
 
-def _print_artifacts(paths: Sequence[Path]) -> None:
-    print("Artifacts:")
+def _print_artifacts(paths: Sequence[Path], current: Path) -> None:
+    print("Artifacts (immutable generation):")
     for path in paths:
         print(f"  {path}")
+    print("Current alias:")
+    print(f"  {current}")
 
 
 def _print_next_commands() -> None:
@@ -107,7 +109,7 @@ def _run_quickstart(arguments: argparse.Namespace) -> int:
         _artifact_directory(arguments.output_dir, forecast),
     )
     _print_probability_summary(forecast)
-    _print_artifacts(tuple(paths))
+    _print_artifacts(tuple(paths), paths.current)
     _print_next_commands()
     return 0
 
@@ -145,7 +147,7 @@ def _run_simulate(arguments: argparse.Namespace) -> int:
         _artifact_directory(arguments.output_dir, forecast),
     )
     _print_probability_summary(forecast)
-    _print_artifacts(tuple(paths))
+    _print_artifacts(tuple(paths), paths.current)
     return 0
 
 
@@ -155,7 +157,7 @@ def _run_report(arguments: argparse.Namespace) -> int:
         forecast,
         _artifact_directory(arguments.output_dir, forecast),
     )
-    _print_artifacts(tuple(paths))
+    _print_artifacts(tuple(paths), paths.current)
     return 0
 
 

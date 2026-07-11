@@ -1,0 +1,45 @@
+{
+  "championship_probability": 0.27,
+  "confidence_intervals": {
+    "championship_probability": [0.23, 0.31],
+    "final": [0.37, 0.45],
+    "group-stage": [1.0, 1.0],
+    "semi-finals": [0.68, 0.76]
+  },
+  "council": null,
+  "focus_team_id": "north-city",
+  "generated_at": "2026-07-11T12:00:00+00:00",
+  "input_provenance": [
+    {
+      "kind": "preset",
+      "name": "Synthetic Cup"
+    }
+  ],
+  "matchup_probabilities": [
+    {
+      "opponent_team_id": "river-town",
+      "probability": 0.36,
+      "stage_id": "semi-finals"
+    }
+  ],
+  "run_id": "run-report-0001",
+  "schema_version": 2,
+  "simulation": {
+    "confidence_level": 0.95,
+    "iterations": 250,
+    "seed": 17
+  },
+  "stage_probabilities": {
+    "final": 0.41,
+    "group-stage": 1.0,
+    "semi-finals": 0.72
+  },
+  "team_display_names": {
+    "east-city": "East City",
+    "north-city": "North City",
+    "river-town": "River Town"
+  },
+  "tournament_display_name": "Synthetic Cup",
+  "tournament_id": "synthetic-cup",
+  "warnings": []
+}

@@ -71,9 +71,14 @@ def test_report_bundle_is_one_versioned_generation_at_stable_public_paths(
         "forecast.json",
         "report.md",
     ]
-    assert paths.json == destination / "forecast.json"
-    assert paths.markdown == destination / "report.md"
-    assert paths.svg == destination / "bracket.svg"
+    assert paths.current == destination
+    assert paths.generation == resolved
+    assert paths.json == resolved / "forecast.json"
+    assert paths.markdown == resolved / "report.md"
+    assert paths.svg == resolved / "bracket.svg"
+    assert paths.current_json == destination / "forecast.json"
+    assert paths.current_markdown == destination / "report.md"
+    assert paths.current_svg == destination / "bracket.svg"
     assert all(path.is_file() and path.stat().st_size > 0 for path in paths)
 
     document = json.loads(paths.json.read_text(encoding="utf-8"))
@@ -113,6 +118,9 @@ def test_rendered_reports_publish_a_complete_generation_but_return_two_paths(
 
     assert tuple(path.name for path in paths) == ("report.md", "bracket.svg")
     assert destination.is_symlink()
+    assert paths.current == destination
+    assert paths.generation == destination.resolve(strict=True)
+    assert all(path.parent == paths.generation for path in paths)
     assert sorted(path.name for path in destination.resolve().iterdir()) == [
         "bracket.svg",
         "forecast.json",
@@ -243,7 +251,8 @@ def test_parent_conflicts_are_rejected_before_reporter_state_is_created(
         parent.symlink_to(real_parent, target_is_directory=True)
     destination = parent / "north-city"
 
-    with pytest.raises(ValueError, match="report parent conflicts"):
+    message = "report parent conflicts" if parent_conflict == "file" else "ancestor symlink"
+    with pytest.raises(ValueError, match=message):
         write_report_bundle(_forecast(), destination)
 
     if parent_conflict == "file":
@@ -268,6 +277,264 @@ def test_platform_without_atomic_symlink_publication_fails_loudly(
         reports.write_report_bundle(_forecast(), destination)
 
     assert not os.path.lexists(destination)
+
+
+class _InjectedMutationFailure(OSError):
+    pass
+
+
+def _assert_visible_generation_is_coherent(destination: Path) -> str | None:
+    if not os.path.lexists(destination):
+        return None
+    assert destination.is_symlink()
+    generation = destination.resolve(strict=True)
+    document = json.loads((generation / "forecast.json").read_text(encoding="utf-8"))
+    run_id = str(document["run_id"])
+    assert f"`{run_id}`" in (generation / "report.md").read_text(encoding="utf-8")
+    svg = (generation / "bracket.svg").read_text(encoding="utf-8")
+    assert f"Run {run_id}" in svg
+    ElementTree.fromstring(svg)
+    return run_id
+
+
+def _assert_no_unmarked_final_directories(destination: Path) -> None:
+    control = destination.parent / ".tournament-forecast"
+    if not control.exists():
+        return
+    assert (control / "owner.json").is_file()
+    focus = control / destination.name
+    if not focus.exists():
+        return
+    assert (focus / "owner.json").is_file()
+    staging = focus / "staging"
+    for directory in (path for path in staging.iterdir() if path.is_dir()):
+        if directory.name.startswith(".stage-init-"):
+            continue
+        assert (directory / ".stage-owner.json").is_file() or (
+            staging / f"{directory.name}.json"
+        ).is_file()
+
+
+def test_every_first_publication_mutation_is_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import tournament_forecaster.reports.publication as publication
+
+    observed: list[tuple[str, Path]] = []
+    probe = _destination(tmp_path / "probe")
+    with monkeypatch.context() as patcher:
+        patcher.setattr(
+            publication,
+            "_after_filesystem_mutation",
+            lambda operation, path: observed.append((operation, path)),
+        )
+        publication.write_report_bundle(_forecast(), probe)
+    assert observed
+    assert {
+        "mkdir-parent",
+        "mkdir",
+        "write",
+        "rename",
+        "promote-generation",
+        "symlink",
+        "swap-pointer",
+        "unlink",
+    } <= {operation for operation, _path in observed}
+
+    for failure_index in range(len(observed)):
+        destination = _destination(tmp_path / f"failure-{failure_index}")
+        calls = 0
+
+        def fail_after_mutation(_operation: str, _path: Path) -> None:
+            nonlocal calls
+            calls += 1
+            if calls == failure_index + 1:
+                raise _InjectedMutationFailure(f"mutation {calls}")
+
+        with monkeypatch.context() as patcher:
+            patcher.setattr(
+                publication,
+                "_after_filesystem_mutation",
+                fail_after_mutation,
+            )
+            with pytest.raises(_InjectedMutationFailure, match="mutation"):
+                publication.write_report_bundle(_forecast(), destination)
+
+        assert _assert_visible_generation_is_coherent(destination) in {
+            None,
+            "run-report-0001",
+        }
+        _assert_no_unmarked_final_directories(destination)
+        publication.write_report_bundle(_forecast(), destination)
+        assert _assert_visible_generation_is_coherent(destination) == "run-report-0001"
+
+
+def test_every_update_mutation_preserves_a_coherent_pointer_and_is_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import tournament_forecaster.reports.publication as publication
+
+    replacement = replace(
+        _forecast(),
+        run_id="run-report-0002",
+        generated_at="2026-07-11T13:00:00+00:00",
+    )
+    probe = _destination(tmp_path / "probe-update")
+    publication.write_report_bundle(_forecast(), probe)
+    observed: list[tuple[str, Path]] = []
+    with monkeypatch.context() as patcher:
+        patcher.setattr(
+            publication,
+            "_after_filesystem_mutation",
+            lambda operation, path: observed.append((operation, path)),
+        )
+        publication.write_report_bundle(replacement, probe)
+    assert observed
+
+    for failure_index in range(len(observed)):
+        destination = _destination(tmp_path / f"update-failure-{failure_index}")
+        publication.write_report_bundle(_forecast(), destination)
+        calls = 0
+
+        def fail_after_mutation(_operation: str, _path: Path) -> None:
+            nonlocal calls
+            calls += 1
+            if calls == failure_index + 1:
+                raise _InjectedMutationFailure(f"mutation {calls}")
+
+        with monkeypatch.context() as patcher:
+            patcher.setattr(
+                publication,
+                "_after_filesystem_mutation",
+                fail_after_mutation,
+            )
+            with pytest.raises(_InjectedMutationFailure, match="mutation"):
+                publication.write_report_bundle(replacement, destination)
+
+        assert _assert_visible_generation_is_coherent(destination) in {
+            "run-report-0001",
+            "run-report-0002",
+        }
+        _assert_no_unmarked_final_directories(destination)
+        publication.write_report_bundle(replacement, destination)
+        assert _assert_visible_generation_is_coherent(destination) == "run-report-0002"
+
+
+@pytest.mark.parametrize(
+    "residue_location",
+    ["marked-stage", "staging", "metadata"],
+)
+def test_owned_atomic_write_residue_is_recovered_on_retry(
+    tmp_path: Path,
+    residue_location: str,
+) -> None:
+    import tournament_forecaster.reports.publication as publication
+
+    destination = _destination(tmp_path)
+    publication.write_report_bundle(_forecast(), destination)
+    old_pointer = os.readlink(destination)
+    layout = publication._layout(destination)
+    generation = "v2-interrupted-0123456789abcdef"
+    token = "a" * 32
+    write_token = "b" * 32
+
+    if residue_location == "marked-stage":
+        stage = layout.staging / f".stage-init-{token}"
+        stage.mkdir()
+        (stage / ".stage-owner.json").write_text(
+            publication._json_text(
+                publication._staging_metadata(generation, "0" * 64)
+            ),
+            encoding="utf-8",
+        )
+        residue = stage / f".forecast.json.{write_token}.tmp"
+    elif residue_location == "staging":
+        residue = layout.staging / f".{token}.json.{write_token}.tmp"
+    else:
+        residue = layout.metadata / f".{generation}.json.{write_token}.tmp"
+    residue.write_text("partial", encoding="utf-8")
+
+    replacement = replace(
+        _forecast(),
+        run_id="run-report-0002",
+        generated_at="2026-07-11T13:00:00+00:00",
+    )
+    publication.write_report_bundle(replacement, destination)
+
+    assert os.readlink(destination) != old_pointer
+    assert _assert_visible_generation_is_coherent(destination) == "run-report-0002"
+    assert not residue.exists()
+
+
+def test_mutation_sensitive_traversal_never_reopens_an_absolute_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import tournament_forecaster.reports.publication as publication
+
+    if not publication._USE_DIR_FD:
+        pytest.skip("directory-fd traversal is unavailable")
+    real_open = publication.os.open
+
+    def audited_open(
+        path: str | bytes | int,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        lexical = Path(os.fsdecode(path)) if not isinstance(path, int) else None
+        if (
+            lexical is not None
+            and lexical.is_absolute()
+            and lexical != Path(lexical.anchor)
+        ):
+            raise AssertionError(f"reopened checked absolute path: {lexical}")
+        kwargs = {} if dir_fd is None else {"dir_fd": dir_fd}
+        return real_open(path, flags, mode, **kwargs)
+
+    monkeypatch.setattr(publication.os, "open", audited_open)
+
+    paths = publication.write_report_bundle(_forecast(), _destination(tmp_path))
+
+    assert paths.json.is_file()
+
+
+def test_traversal_destination_is_rejected_before_mutation(tmp_path: Path) -> None:
+    from tournament_forecaster.reports import write_report_bundle
+
+    destination = tmp_path / "safe" / ".." / "escaped" / "north-city"
+
+    with pytest.raises(ValueError, match="must not contain '..'"):
+        write_report_bundle(_forecast(), destination)
+
+    assert not (tmp_path / "escaped").exists()
+
+
+def test_ancestor_symlink_inserted_after_preflight_is_rejected_before_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import tournament_forecaster.reports.publication as publication
+
+    output_root = tmp_path / "output-alias"
+    real_root = tmp_path / "real-output"
+    (real_root / "synthetic-cup").mkdir(parents=True)
+    destination = output_root / "synthetic-cup" / "north-city"
+    real_render = publication.render_json_report
+
+    def insert_symlink(forecast: Forecast) -> str:
+        output_root.symlink_to(real_root, target_is_directory=True)
+        return real_render(forecast)
+
+    monkeypatch.setattr(publication, "render_json_report", insert_symlink)
+
+    with pytest.raises(ValueError, match="ancestor symlink"):
+        publication.write_report_bundle(_forecast(), destination)
+
+    assert list((real_root / "synthetic-cup").iterdir()) == []
 
 
 def test_interruption_before_generation_promotion_leaves_old_generation_and_recovers(
@@ -363,14 +630,14 @@ def test_invalid_svg_fails_before_the_public_pointer_changes(
     assert os.readlink(destination) == old_pointer
 
 
-def test_reader_resolving_pointer_once_never_observes_a_mixed_generation(
+def test_returned_snapshot_paths_never_observe_a_later_public_generation(
     tmp_path: Path,
 ) -> None:
     from tournament_forecaster.reports import write_report_bundle
 
     destination = _destination(tmp_path)
     initial = replace(_forecast(), run_id="run-reader-0000")
-    write_report_bundle(initial, destination)
+    snapshot = write_report_bundle(initial, destination)
     stop = threading.Event()
     errors: list[str] = []
     observed: set[str] = set()
@@ -378,13 +645,12 @@ def test_reader_resolving_pointer_once_never_observes_a_mixed_generation(
     def read_generations() -> None:
         while not stop.is_set():
             try:
-                generation = destination.resolve(strict=True)
                 document = json.loads(
-                    (generation / "forecast.json").read_text(encoding="utf-8")
+                    snapshot.json.read_text(encoding="utf-8")
                 )
                 run_id = str(document["run_id"])
-                markdown = (generation / "report.md").read_text(encoding="utf-8")
-                svg = (generation / "bracket.svg").read_text(encoding="utf-8")
+                markdown = snapshot.markdown.read_text(encoding="utf-8")
+                svg = snapshot.svg.read_text(encoding="utf-8")
                 if f"`{run_id}`" not in markdown or f"Run {run_id}" not in svg:
                     errors.append(run_id)
                     return
@@ -413,7 +679,10 @@ def test_reader_resolving_pointer_once_never_observes_a_mixed_generation(
 
     assert not reader.is_alive()
     assert errors == []
-    assert observed
+    assert observed == {"run-reader-0000"}
+    assert json.loads(snapshot.json.read_text(encoding="utf-8"))["run_id"] == (
+        "run-reader-0000"
+    )
 
 
 def test_markdown_sanitizes_all_accepted_user_text_contexts() -> None:
@@ -477,7 +746,7 @@ def test_forecast_stage_order_must_be_a_duplicate_free_permutation(
         replace(_forecast(), stage_order=stage_order)
 
 
-def test_forecast_loader_rejects_non_finite_unsupported_and_missing_order(
+def test_forecast_loader_rejects_non_finite_and_unsupported_documents(
     tmp_path: Path,
 ) -> None:
     from tournament_forecaster.reports.json_report import load_forecast
@@ -503,10 +772,33 @@ def test_forecast_loader_rejects_non_finite_unsupported_and_missing_order(
     with pytest.raises(TournamentValidationError, match="must be finite"):
         load_forecast(non_finite)
 
-    missing_order = tmp_path / "missing-order.json"
-    missing_order.write_text(
-        json.dumps({key: value for key, value in valid.items() if key != "stage_order"}),
-        encoding="utf-8",
+
+
+def test_frozen_pre_stage_order_v2_artifact_uses_insertion_order_fallback() -> None:
+    from tournament_forecaster.reports.json_report import load_forecast
+
+    fixture = (
+        Path(__file__).parent
+        / "fixtures"
+        / "forecast-v2-pre-stage-order.json"
     )
-    with pytest.raises(TournamentValidationError, match="stage_order"):
-        load_forecast(missing_order)
+    document = json.loads(fixture.read_text(encoding="utf-8"))
+
+    forecast = load_forecast(fixture)
+
+    assert forecast.stage_order == tuple(document["stage_probabilities"])
+    assert forecast.to_dict()["stage_order"] == list(document["stage_probabilities"])
+
+
+def test_current_v2_forecast_round_trip_preserves_explicit_stage_order(
+    tmp_path: Path,
+) -> None:
+    from tournament_forecaster.reports.json_report import load_forecast
+
+    path = tmp_path / "current-v2.json"
+    path.write_text(json.dumps(_forecast().to_dict()), encoding="utf-8")
+
+    loaded = load_forecast(path)
+
+    assert loaded.to_dict() == _forecast().to_dict()
+    assert loaded.stage_order == ("group-stage", "semi-finals", "final")
