@@ -307,6 +307,7 @@ def simulate_tournament(
         stage_id: reach_counts[stage_id] / iterations
         for stage_id in sorted(str(stage["id"]) for stage in stages)
     }
+    stage_order = tuple(str(stage["id"]) for stage in stages)
     matchup_probabilities = tuple(
         MatchupProbability(stage_id, opponent_team_id, count / iterations)
         for (stage_id, opponent_team_id), count in sorted(matchup_counts.items())
@@ -337,6 +338,7 @@ def simulate_tournament(
         tournament_id=tournament.id,
         focus_team_id=selected_focus,
         stage_probabilities=stage_probabilities,
+        stage_order=stage_order,
         matchup_probabilities=matchup_probabilities,
         championship_probability=championship_probability,
         confidence_intervals=confidence_intervals,

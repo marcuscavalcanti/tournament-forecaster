@@ -1593,6 +1593,7 @@ def test_forecast_rejects_non_finite_number_in_nested_provenance() -> None:
             tournament_id="synthetic-cup",
             focus_team_id="north-city",
             stage_probabilities={"group-stage": 1.0},
+            stage_order=("group-stage",),
             matchup_probabilities=(),
             championship_probability=0.18,
             confidence_intervals={"championship_probability": (0.12, 0.24)},
@@ -1755,6 +1756,7 @@ def test_forecast_rejects_schema_invalid_provenance(
             tournament_id="synthetic-cup",
             focus_team_id="north-city",
             stage_probabilities={"group-stage": 1.0},
+            stage_order=("group-stage",),
             matchup_probabilities=(),
             championship_probability=0.18,
             confidence_intervals={"championship_probability": (0.12, 0.24)},
@@ -1834,6 +1836,7 @@ def test_forecast_rejects_malformed_sequence_containers(field: str, value: objec
         "tournament_id": "synthetic-cup",
         "focus_team_id": "north-city",
         "stage_probabilities": {"group-stage": 1.0},
+        "stage_order": ("group-stage",),
         "matchup_probabilities": (),
         "championship_probability": 0.18,
         "confidence_intervals": {"championship_probability": (0.12, 0.24)},
@@ -1856,6 +1859,7 @@ def test_forecast_serializes_the_versioned_generic_contract() -> None:
         tournament_id="synthetic-cup",
         focus_team_id="north-city",
         stage_probabilities={"group-stage": 1.0, "final": 0.25},
+        stage_order=("group-stage", "final"),
         matchup_probabilities=(
             MatchupProbability(
                 stage_id="final",
@@ -1877,6 +1881,7 @@ def test_forecast_serializes_the_versioned_generic_contract() -> None:
         "tournament_id": "synthetic-cup",
         "focus_team_id": "north-city",
         "stage_probabilities": {"group-stage": 1.0, "final": 0.25},
+        "stage_order": ["group-stage", "final"],
         "matchup_probabilities": [
             {
                 "stage_id": "final",

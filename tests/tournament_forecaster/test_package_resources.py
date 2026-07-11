@@ -125,6 +125,7 @@ def _representative_forecast_document() -> dict[str, object]:
         tournament_id="synthetic-cup",
         focus_team_id="north-city",
         stage_probabilities={"group-stage": 1.0, "final": 0.25},
+        stage_order=("group-stage", "final"),
         matchup_probabilities=(
             MatchupProbability(
                 stage_id="final",

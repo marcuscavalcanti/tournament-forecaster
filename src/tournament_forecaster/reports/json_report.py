@@ -20,6 +20,7 @@ _REQUIRED_PROPERTIES = frozenset(
         "tournament_id",
         "focus_team_id",
         "stage_probabilities",
+        "stage_order",
         "matchup_probabilities",
         "championship_probability",
         "confidence_intervals",
@@ -119,6 +120,12 @@ def forecast_from_document(document: Mapping[str, object]) -> Forecast:
                 document["stage_probabilities"],
                 "forecast stage probabilities",
             ),
+        ),
+        stage_order=tuple(
+            cast(
+                Sequence[str],
+                _sequence(document["stage_order"], "forecast stage order"),
+            )
         ),
         matchup_probabilities=tuple(matchups),
         championship_probability=document["championship_probability"],  # type: ignore[arg-type]

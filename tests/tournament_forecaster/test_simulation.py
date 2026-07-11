@@ -116,6 +116,7 @@ def test_complete_tournament_probability_fields_replay_deterministically() -> No
 
     assert first.run_id == replay.run_id
     assert first.stage_probabilities == replay.stage_probabilities
+    assert first.stage_order == ("groups", "semi-finals", "final")
     assert first.matchup_probabilities == replay.matchup_probabilities
     assert first.championship_probability == replay.championship_probability
     assert first.confidence_intervals == replay.confidence_intervals

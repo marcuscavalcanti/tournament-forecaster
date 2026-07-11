@@ -96,7 +96,21 @@ def _group_label(value: object) -> str:
 def _text(value: object, label: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise TournamentValidationError(f"{label} must be non-empty text")
+    if any(not _is_xml_1_0_character(character) for character in value):
+        raise TournamentValidationError(
+            f"{label} must contain only XML 1.0-safe text"
+        )
     return value
+
+
+def _is_xml_1_0_character(character: str) -> bool:
+    codepoint = ord(character)
+    return (
+        codepoint in {0x09, 0x0A, 0x0D}
+        or 0x20 <= codepoint <= 0xD7FF
+        or 0xE000 <= codepoint <= 0xFFFD
+        or 0x10000 <= codepoint <= 0x10FFFF
+    )
 
 
 def _integer(value: object, label: str, *, minimum: int = 0) -> int:
@@ -348,6 +362,7 @@ class Forecast:
     tournament_id: str
     focus_team_id: str
     stage_probabilities: Mapping[str, float]
+    stage_order: tuple[str, ...]
     matchup_probabilities: tuple[MatchupProbability, ...]
     championship_probability: float
     confidence_intervals: Mapping[str, Sequence[float]]
@@ -370,11 +385,24 @@ class Forecast:
             normalized_stage_probabilities[_stable_id(stage_id, "forecast stage id")] = _probability(
                 value, "forecast stage probability"
             )
+        stage_order = tuple(
+            _stable_id(stage_id, "forecast stage order id")
+            for stage_id in _sequence(self.stage_order, "forecast stage order")
+        )
+        if len(stage_order) != len(set(stage_order)):
+            raise TournamentValidationError(
+                "forecast stage order must not contain duplicates"
+            )
+        if set(stage_order) != set(normalized_stage_probabilities):
+            raise TournamentValidationError(
+                "forecast stage order must be a permutation of stage probability keys"
+            )
         matchups = _sequence(self.matchup_probabilities, "forecast matchup probabilities")
         if not all(isinstance(matchup, MatchupProbability) for matchup in matchups):
             raise TournamentValidationError("forecast matchup probabilities must be MatchupProbability values")
         object.__setattr__(self, "matchup_probabilities", matchups)
         object.__setattr__(self, "stage_probabilities", MappingProxyType(normalized_stage_probabilities))
+        object.__setattr__(self, "stage_order", stage_order)
         object.__setattr__(
             self,
             "championship_probability",
@@ -475,6 +503,7 @@ class Forecast:
             "tournament_id": self.tournament_id,
             "focus_team_id": self.focus_team_id,
             "stage_probabilities": dict(self.stage_probabilities),
+            "stage_order": list(self.stage_order),
             "matchup_probabilities": [matchup.to_dict() for matchup in self.matchup_probabilities],
             "championship_probability": self.championship_probability,
             "confidence_intervals": {

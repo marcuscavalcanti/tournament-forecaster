@@ -57,7 +57,8 @@ def _print_probability_summary(forecast: Forecast) -> None:
         forecast.focus_team_id,
     )
     print(f"Forecast for {focus_name}")
-    for stage_id, probability in forecast.stage_probabilities.items():
+    for stage_id in forecast.stage_order:
+        probability = forecast.stage_probabilities[stage_id]
         print(f"  {stage_id}: {probability:.1%}")
     print(f"  championship: {forecast.championship_probability:.1%}")
 

@@ -49,6 +49,11 @@ def test_quickstart_creates_exactly_three_artifacts_and_prints_next_commands(
         "tournament-forecast simulate --config my-tournament/tournament.json "
         "--focus-team bravo-town" in result.stdout
     )
+    assert (
+        result.stdout.index("  group-stage:")
+        < result.stdout.index("  semi-finals:")
+        < result.stdout.index("  final:")
+    )
 
 
 def test_init_validate_simulate_report_doctor_and_presets_surfaces(tmp_path: Path) -> None:
@@ -102,7 +107,11 @@ def test_init_validate_simulate_report_doctor_and_presets_surfaces(tmp_path: Pat
     )
     assert rerendered.returncode == 0, rerendered.stderr
     rendered_dir = tmp_path / "rendered" / "group-knockout-template" / "alpha-club"
-    assert sorted(path.name for path in rendered_dir.iterdir()) == ["bracket.svg", "report.md"]
+    assert sorted(path.name for path in rendered_dir.iterdir()) == [
+        "bracket.svg",
+        "forecast.json",
+        "report.md",
+    ]
 
     doctor = _run_cli(tmp_path, "doctor")
     assert doctor.returncode == 0, doctor.stderr

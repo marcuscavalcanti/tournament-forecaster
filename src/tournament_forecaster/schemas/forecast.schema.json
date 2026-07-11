@@ -69,6 +69,7 @@
     "tournament_id",
     "focus_team_id",
     "stage_probabilities",
+    "stage_order",
     "matchup_probabilities",
     "championship_probability",
     "confidence_intervals",
@@ -86,6 +87,11 @@
       "type": "object",
       "propertyNames": {"$ref": "#/$defs/stable_id"},
       "additionalProperties": {"$ref": "#/$defs/probability"}
+    },
+    "stage_order": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/stable_id"},
+      "uniqueItems": true
     },
     "matchup_probabilities": {
       "type": "array",

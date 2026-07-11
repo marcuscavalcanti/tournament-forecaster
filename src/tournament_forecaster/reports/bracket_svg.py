@@ -5,9 +5,22 @@ from __future__ import annotations
 from html import escape
 
 from ..domain import Forecast
+from ..errors import TournamentValidationError
+
+
+def _xml_1_0_safe(value: str) -> bool:
+    return all(
+        ord(character) in {0x09, 0x0A, 0x0D}
+        or 0x20 <= ord(character) <= 0xD7FF
+        or 0xE000 <= ord(character) <= 0xFFFD
+        or 0x10000 <= ord(character) <= 0x10FFFF
+        for character in value
+    )
 
 
 def _label(value: str, *, limit: int = 42) -> str:
+    if not _xml_1_0_safe(value):
+        raise TournamentValidationError("SVG text must contain only XML 1.0-safe text")
     compact = " ".join(value.split())
     if len(compact) > limit:
         compact = f"{compact[: limit - 3]}..."
@@ -22,7 +35,10 @@ def render_bracket_svg(forecast: Forecast) -> str:
         forecast.focus_team_id,
         forecast.focus_team_id,
     )
-    stages = list(forecast.stage_probabilities.items())[:6]
+    stages = [
+        (stage_id, forecast.stage_probabilities[stage_id])
+        for stage_id in forecast.stage_order[:6]
+    ]
     stage_rows: list[str] = []
     for index, (stage_id, probability) in enumerate(stages):
         y = 196 + index * 44
