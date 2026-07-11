@@ -134,6 +134,33 @@ def test_redact_url_handles_provider_prefixes_and_name_variants(
     assert "ranking_key=rank" in redacted
 
 
+@pytest.mark.parametrize(
+    "credential_name",
+    [
+        "x-auth-key",
+        "xAuthKey",
+        "provider_auth_key",
+        "providerAuthKey",
+        "consumer_key",
+        "consumerKey",
+        "client-key",
+        "clientKey",
+    ],
+)
+def test_redact_url_handles_terminal_key_credential_phrases(
+    credential_name: str,
+) -> None:
+    redacted = redact_url(
+        f"https://example.test/path?{credential_name}=credential-secret&"
+        "public_key=public&team_key=team"
+    )
+
+    assert "credential-secret" not in redacted
+    assert "REDACTED" in redacted
+    assert "public_key=public" in redacted
+    assert "team_key=team" in redacted
+
+
 def test_metadata_preserves_benign_key_suffixes_but_redacts_exact_conventions(
     tmp_path: Path,
 ) -> None:
@@ -203,6 +230,58 @@ def test_metadata_redacts_provider_prefixed_and_camel_case_credentials(
         "client_secret": "[REDACTED]",
         "public_key": "public",
         "monkey": "banana",
+    }
+
+
+def test_nested_metadata_redacts_terminal_key_credential_phrases(
+    tmp_path: Path,
+) -> None:
+    source = _odds_source(
+        tmp_path,
+        odds=[
+            {
+                "market": "champion",
+                "selection_id": "alpha-club",
+                "decimal_odds": 4.25,
+                "metadata": {
+                    "nested": [
+                        {
+                            "x-auth-key": "x-auth-secret",
+                            "providerAuthKey": "provider-auth-secret",
+                            "consumer_key": "consumer-secret",
+                            "consumerKey": "consumer-camel-secret",
+                            "client-key": "client-secret-value",
+                            "clientKey": "client-camel-secret",
+                            "public_key": "public",
+                            "ranking_key": "rank",
+                            "team_key": "team",
+                            "monkey": "banana",
+                            "hockey": "puck",
+                        }
+                    ]
+                },
+            }
+        ],
+    )
+
+    metadata = preview_odds(source).to_dict()["records"][0]["metadata"]
+
+    assert metadata == {
+        "nested": [
+            {
+                "x-auth-key": "[REDACTED]",
+                "providerAuthKey": "[REDACTED]",
+                "consumer_key": "[REDACTED]",
+                "consumerKey": "[REDACTED]",
+                "client-key": "[REDACTED]",
+                "clientKey": "[REDACTED]",
+                "public_key": "public",
+                "ranking_key": "rank",
+                "team_key": "team",
+                "monkey": "banana",
+                "hockey": "puck",
+            }
+        ]
     }
 
 

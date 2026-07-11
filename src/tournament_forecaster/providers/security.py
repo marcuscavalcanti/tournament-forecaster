@@ -77,19 +77,6 @@ _SENSITIVE_TERMINAL_TOKENS = frozenset(
         "token",
     }
 )
-_SENSITIVE_KEY_QUALIFIERS = frozenset(
-    {
-        "access",
-        "api",
-        "app",
-        "private",
-        "secret",
-        "signing",
-        "subscription",
-    }
-)
-
-
 def _name_tokens(name: str) -> tuple[str, ...]:
     acronym_split = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", name)
     camel_split = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", acronym_split)
@@ -113,8 +100,8 @@ def credential_shaped_name(name: str) -> bool:
         return False
     if tokens[-1] in _SENSITIVE_TERMINAL_TOKENS:
         return True
-    if len(tokens) >= 2 and tokens[-1] == "key":
-        return tokens[-2] in _SENSITIVE_KEY_QUALIFIERS
+    if tokens[-1] == "key":
+        return True
     return normalized.endswith(
         (
             "accesstoken",

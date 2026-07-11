@@ -4,6 +4,7 @@ import fcntl
 import json
 import os
 import stat
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from tournament_forecaster.cli import main
 from tournament_forecaster.config import load_tournament
 from tournament_forecaster.errors import TournamentValidationError
 from tournament_forecaster.group_fixtures import list_group_fixtures
+from tournament_forecaster.providers import results as results_provider
 from tournament_forecaster.providers.results import apply_results, preview_results
 from tournament_forecaster.resources import resource_path
 
@@ -83,6 +85,49 @@ def _complete_group_stage(config: Path) -> None:
         for fixture in fixtures
     ]
     config.write_text(json.dumps(document), encoding="utf-8")
+
+
+def _patch_final_transition(
+    monkeypatch: pytest.MonkeyPatch,
+    inject: Callable[[str | os.PathLike[str], int], None],
+) -> None:
+    exchange = getattr(results_provider, "_atomic_exchange_at", None)
+    if exchange is not None:
+
+        def exchange_with_injection(
+            parent_descriptor: int,
+            source_name: str,
+            destination_name: str,
+        ) -> None:
+            inject(destination_name, parent_descriptor)
+            exchange(parent_descriptor, source_name, destination_name)
+
+        monkeypatch.setattr(
+            results_provider,
+            "_atomic_exchange_at",
+            exchange_with_injection,
+        )
+        return
+
+    original_replace = os.replace
+
+    def replace_with_injection(
+        source: str | os.PathLike[str],
+        destination: str | os.PathLike[str],
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+    ) -> None:
+        if dst_dir_fd is not None:
+            inject(destination, dst_dir_fd)
+        original_replace(
+            source,
+            destination,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+        )
+
+    monkeypatch.setattr(os, "replace", replace_with_injection)
 
 
 def test_preview_apply_and_repreview_classify_addition_then_idempotent(
@@ -298,44 +343,34 @@ def test_apply_revalidates_digest_after_temp_fsync_before_replace(
     assert not list(tmp_path.glob(".tournament.json.*.tmp"))
 
 
-def test_apply_preserves_destination_edit_injected_inside_final_replace(
+def test_apply_preserves_destination_edit_injected_inside_final_transition(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = _config(tmp_path)
     preview = preview_results(config, _json_source(tmp_path, [_result()]), format="json")
     concurrent_bytes = config.read_bytes() + b"\n"
-    original_replace = os.replace
     injected = False
 
-    def replace_with_destination_edit(
-        source: str | os.PathLike[str],
+    def inject_destination_edit(
         destination: str | os.PathLike[str],
-        *,
-        src_dir_fd: int | None = None,
-        dst_dir_fd: int | None = None,
+        parent_descriptor: int,
     ) -> None:
         nonlocal injected
-        if not injected and dst_dir_fd is not None:
+        if not injected:
             injected = True
             descriptor = os.open(
                 destination,
                 os.O_WRONLY | os.O_TRUNC | os.O_NOFOLLOW,
-                dir_fd=dst_dir_fd,
+                dir_fd=parent_descriptor,
             )
             try:
                 os.write(descriptor, concurrent_bytes)
                 os.fsync(descriptor)
             finally:
                 os.close(descriptor)
-        original_replace(
-            source,
-            destination,
-            src_dir_fd=src_dir_fd,
-            dst_dir_fd=dst_dir_fd,
-        )
 
-    monkeypatch.setattr(os, "replace", replace_with_destination_edit)
+    _patch_final_transition(monkeypatch, inject_destination_edit)
 
     with pytest.raises(TournamentValidationError, match="commit boundary|concurrent"):
         apply_results(config, preview)
@@ -344,7 +379,70 @@ def test_apply_preserves_destination_edit_injected_inside_final_replace(
     assert config.read_bytes() == concurrent_bytes
 
 
-def test_apply_parent_swap_inside_final_replace_cannot_return_success(
+def test_apply_atomic_destination_replacement_inside_final_transition_survives(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    preview = preview_results(config, _json_source(tmp_path, [_result()]), format="json")
+    concurrent_document = json.loads(config.read_text(encoding="utf-8"))
+    concurrent_document["metadata"]["concurrent_atomic_edit"] = "preserved"
+    concurrent_bytes = (
+        json.dumps(concurrent_document, indent=2, sort_keys=True) + "\n"
+    ).encode()
+    original_replace = os.replace
+    injected = False
+    concurrent_identity: tuple[int, int] | None = None
+
+    def inject_atomic_destination_replacement(
+        destination: str | os.PathLike[str],
+        parent_descriptor: int,
+    ) -> None:
+        nonlocal concurrent_identity, injected
+        if injected:
+            return
+        injected = True
+        temporary_name = f".{config.name}.concurrent-atomic.tmp"
+        descriptor = os.open(
+            temporary_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=parent_descriptor,
+        )
+        try:
+            os.write(descriptor, concurrent_bytes)
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        original_replace(
+            temporary_name,
+            destination,
+            src_dir_fd=parent_descriptor,
+            dst_dir_fd=parent_descriptor,
+        )
+        installed_stat = os.stat(
+            destination,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+        concurrent_identity = (installed_stat.st_dev, installed_stat.st_ino)
+
+    _patch_final_transition(monkeypatch, inject_atomic_destination_replacement)
+
+    with pytest.raises(TournamentValidationError, match="commit boundary|concurrent"):
+        apply_results(config, preview)
+
+    assert injected is True
+    assert concurrent_identity is not None
+    assert config.read_bytes() == concurrent_bytes
+    assert (config.stat().st_dev, config.stat().st_ino) == concurrent_identity
+    assert json.loads(config.read_bytes())["metadata"]["concurrent_atomic_edit"] == (
+        "preserved"
+    )
+    assert not list(tmp_path.glob(".tournament.json.*.tmp"))
+
+
+def test_apply_parent_swap_inside_final_transition_cannot_return_success(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -355,30 +453,20 @@ def test_apply_parent_swap_inside_final_replace_cannot_return_success(
     original_bytes = config.read_bytes()
     detached_parent = tmp_path / "detached"
     decoy_bytes = b'{"decoy": true}\n'
-    original_replace = os.replace
     swapped = False
 
-    def replace_with_parent_swap(
-        source: str | os.PathLike[str],
+    def inject_parent_swap(
         destination: str | os.PathLike[str],
-        *,
-        src_dir_fd: int | None = None,
-        dst_dir_fd: int | None = None,
+        parent_descriptor: int,
     ) -> None:
         nonlocal swapped
-        if not swapped and dst_dir_fd is not None:
+        if not swapped:
             swapped = True
             parent.rename(detached_parent)
             parent.mkdir()
             (parent / config.name).write_bytes(decoy_bytes)
-        original_replace(
-            source,
-            destination,
-            src_dir_fd=src_dir_fd,
-            dst_dir_fd=dst_dir_fd,
-        )
 
-    monkeypatch.setattr(os, "replace", replace_with_parent_swap)
+    _patch_final_transition(monkeypatch, inject_parent_swap)
 
     with pytest.raises(TournamentValidationError, match="parent.*changed|detached"):
         apply_results(config, preview)
@@ -418,6 +506,27 @@ def test_apply_fails_closed_without_directory_descriptor_primitives(
         apply_results(config, preview)
 
     assert config.read_bytes() == before
+
+
+def test_apply_fails_closed_before_mutation_without_atomic_exchange(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    preview = preview_results(config, _json_source(tmp_path, [_result()]), format="json")
+    before = config.read_bytes()
+    monkeypatch.setattr(
+        results_provider,
+        "_atomic_exchange_function",
+        None,
+        raising=False,
+    )
+
+    with pytest.raises(TournamentValidationError, match="exchange.*unavailable"):
+        apply_results(config, preview)
+
+    assert config.read_bytes() == before
+    assert not (tmp_path / f".{config.name}.lock").exists()
 
 
 def test_relative_apply_rejects_changed_working_directory(

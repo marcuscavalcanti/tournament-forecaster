@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import ctypes
 import hashlib
 import importlib
 import io
@@ -10,6 +11,7 @@ import json
 import os
 import secrets
 import stat
+import sys
 import unicodedata
 from collections import Counter
 from collections.abc import Collection, Mapping, Sequence
@@ -18,6 +20,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from types import MappingProxyType
+from typing import Protocol, cast
 
 from ..config import load_tournament_document
 from ..domain import CompletedMatch, Score, Tournament
@@ -25,9 +28,55 @@ from ..errors import TournamentValidationError
 from ..group_fixtures import generate_group_fixture_specs
 from .security import sanitize_metadata, serializable_value
 
+
+class _ExchangeFunction(Protocol):
+    argtypes: list[object]
+    restype: object
+
+    def __call__(
+        self,
+        source_directory: int,
+        source_name: bytes,
+        destination_directory: int,
+        destination_name: bytes,
+        flags: int,
+    ) -> int: ...
+
+
+def _load_atomic_exchange_function() -> tuple[
+    ctypes.CDLL | None,
+    _ExchangeFunction | None,
+]:
+    if sys.platform == "darwin":
+        symbol = "renameatx_np"
+    elif sys.platform.startswith("linux"):
+        symbol = "renameat2"
+    else:
+        return None, None
+    try:
+        library = ctypes.CDLL(None, use_errno=True)
+        raw_function: object = getattr(library, symbol)
+    except (AttributeError, OSError):
+        return None, None
+    function = cast(_ExchangeFunction, raw_function)
+    function.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    function.restype = ctypes.c_int
+    return library, function
+
 _fcntl = None
 with suppress(ImportError):  # pragma: no cover - unsupported platforms fail closed.
     _fcntl = importlib.import_module("fcntl")
+
+_RENAME_EXCHANGE = 0x00000002
+_atomic_exchange_library, _atomic_exchange_function = (
+    _load_atomic_exchange_function()
+)
 
 _JSON_ROOT_FIELDS = frozenset({"schema_version", "provider", "retrieved_at", "results"})
 _RESULT_FIELDS = frozenset(
@@ -266,6 +315,8 @@ def _require_race_resistant_primitives() -> None:
         "supports_follow_symlinks",
         (),
     )
+    if _atomic_exchange_function is None:
+        raise _error("atomic exchange is unavailable on this platform")
     if (
         not hasattr(os, "O_DIRECTORY")
         or not hasattr(os, "O_NOFOLLOW")
@@ -279,6 +330,36 @@ def _require_race_resistant_primitives() -> None:
         raise _error(
             "race-resistant results apply is unavailable on this platform"
         )
+
+
+def _atomic_exchange_at(
+    parent_descriptor: int,
+    source_name: str,
+    destination_name: str,
+) -> None:
+    function = _atomic_exchange_function
+    if function is None:
+        raise _error("atomic exchange is unavailable on this platform")
+    for name in (source_name, destination_name):
+        if (
+            not name
+            or name in {".", ".."}
+            or os.path.basename(name) != name
+            or "\x00" in name
+        ):
+            raise _error("atomic exchange requires safe relative entry names")
+    ctypes.set_errno(0)
+    result = function(
+        parent_descriptor,
+        os.fsencode(source_name),
+        parent_descriptor,
+        os.fsencode(destination_name),
+        _RENAME_EXCHANGE,
+    )
+    if result != 0:
+        error_number = ctypes.get_errno()
+        detail = os.strerror(error_number) if error_number else "unknown platform error"
+        raise _error(f"atomic exchange failed: {detail}")
 
 
 def _directory_identity(
@@ -988,37 +1069,48 @@ def _remove_temp_at(parent_descriptor: int, temporary_name: str | None) -> None:
         os.unlink(temporary_name, dir_fd=parent_descriptor)
 
 
-def _restore_target_at(
+def _rollback_atomic_exchange_at(
     parent_descriptor: int,
+    temporary_name: str,
     target_name: str,
     canonical_path: Path,
-    content: bytes,
+    restored_identity: LocalFileIdentity,
+    restored_bytes: bytes,
+    replacement_identity: LocalFileIdentity,
+    replacement_bytes: bytes,
 ) -> None:
-    temporary_name: str | None = None
     try:
-        temporary_name = _write_temp_at(parent_descriptor, target_name, content)
-        os.replace(
+        _atomic_exchange_at(
+            parent_descriptor,
             temporary_name,
             target_name,
-            src_dir_fd=parent_descriptor,
-            dst_dir_fd=parent_descriptor,
         )
-        temporary_name = None
         os.fsync(parent_descriptor)
-        _, restored_bytes = _read_file_at(
+        current_identity, current_bytes = _read_file_at(
             parent_descriptor,
             target_name,
             canonical_path,
             "restored tournament config",
         )
-        if restored_bytes != content:
+        if current_identity != restored_identity or current_bytes != restored_bytes:
             raise _error("tournament config rollback could not be verified")
+        displaced_identity, displaced_bytes = _read_file_at(
+            parent_descriptor,
+            temporary_name,
+            canonical_path,
+            "rolled-back provider update",
+        )
+        if (
+            displaced_identity != replacement_identity
+            or displaced_bytes != replacement_bytes
+        ):
+            raise _error("tournament config rollback displaced an unexpected update")
+        _remove_temp_at(parent_descriptor, temporary_name)
+        os.fsync(parent_descriptor)
     except TournamentValidationError:
         raise
     except (OSError, TypeError, NotImplementedError) as error:
         raise _error("tournament config rollback failed closed") from error
-    finally:
-        _remove_temp_at(parent_descriptor, temporary_name)
 
 
 def _load_tournament_bytes(content: bytes) -> Tournament:
@@ -1204,6 +1296,15 @@ def apply_results(
         except OSError as error:
             raise _error("could not prepare a race-resistant results update") from error
 
+        replacement_identity, prepared_bytes = _read_file_at(
+            parent_descriptor,
+            temporary_name,
+            canonical,
+            "prepared tournament config",
+        )
+        if prepared_bytes != replacement_bytes:
+            raise _error("prepared tournament config could not be verified")
+
         _verify_parent_identity(parent_descriptor, preview.config_parent_identity)
         commit_guard_descriptor, commit_identity, commit_bytes = _open_file_at(
             parent_descriptor,
@@ -1217,15 +1318,13 @@ def apply_results(
         ):
             raise _error("tournament config content changed before commit")
         try:
-            os.replace(
+            _atomic_exchange_at(
+                parent_descriptor,
                 temporary_name,
                 canonical.name,
-                src_dir_fd=parent_descriptor,
-                dst_dir_fd=parent_descriptor,
             )
-        except (OSError, TypeError, NotImplementedError) as error:
-            raise _error("race-resistant atomic replace is unavailable") from error
-        temporary_name = None
+        except TournamentValidationError:
+            raise
         try:
             os.fsync(parent_descriptor)
         except OSError as error:
@@ -1240,52 +1339,70 @@ def apply_results(
             boundary_identity != commit_identity
             or boundary_bytes != commit_bytes
         )
-        try:
-            _verify_parent_identity(parent_descriptor, preview.config_parent_identity)
-        except TournamentValidationError as parent_error:
-            rollback_bytes = boundary_bytes if boundary_changed else commit_bytes
-            try:
-                _restore_target_at(
-                    parent_descriptor,
-                    canonical.name,
-                    canonical,
-                    rollback_bytes,
-                )
-            except TournamentValidationError as rollback_error:
-                raise _error(
-                    "tournament config parent changed at the commit boundary and "
-                    "the detached update could not be rolled back"
-                ) from rollback_error
-            raise _error(
-                "tournament config parent changed at the commit boundary; "
-                "the detached update was rolled back"
-            ) from parent_error
-
-        if boundary_changed:
-            try:
-                _restore_target_at(
-                    parent_descriptor,
-                    canonical.name,
-                    canonical,
-                    boundary_bytes,
-                )
-            except TournamentValidationError as rollback_error:
-                raise _error(
-                    "concurrent destination edit detected at the commit boundary and "
-                    "could not be restored"
-                ) from rollback_error
-            raise _error(
-                "concurrent destination edit detected at the commit boundary; "
-                "the edit was restored"
-            )
-
+        displaced_identity, displaced_bytes = _read_file_at(
+            parent_descriptor,
+            temporary_name,
+            canonical,
+            "displaced tournament config",
+        )
+        displaced_changed = (
+            displaced_identity != commit_identity
+            or displaced_bytes != commit_bytes
+        )
         committed_identity, committed_bytes = _read_file_at(
             parent_descriptor,
             canonical.name,
             canonical,
             "committed tournament config",
         )
-        if committed_bytes != replacement_bytes:
+        replacement_intact = (
+            committed_identity == replacement_identity
+            and committed_bytes == replacement_bytes
+        )
+        parent_error: TournamentValidationError | None = None
+        try:
+            _verify_parent_identity(parent_descriptor, preview.config_parent_identity)
+        except TournamentValidationError as error:
+            parent_error = error
+
+        if parent_error is not None or boundary_changed or displaced_changed:
+            if not replacement_intact:
+                raise _error(
+                    "tournament config changed while a commit rollback was pending"
+                )
+            rollback_name = temporary_name
+            temporary_name = None
+            try:
+                _rollback_atomic_exchange_at(
+                    parent_descriptor,
+                    rollback_name,
+                    canonical.name,
+                    canonical,
+                    displaced_identity,
+                    displaced_bytes,
+                    replacement_identity,
+                    replacement_bytes,
+                )
+            except TournamentValidationError as rollback_error:
+                reason = (
+                    "tournament config parent changed at the commit boundary"
+                    if parent_error is not None
+                    else "concurrent destination edit detected at the commit boundary"
+                )
+                raise _error(
+                    f"{reason} and could not be rolled back"
+                ) from rollback_error
+            if parent_error is not None:
+                raise _error(
+                    "tournament config parent changed at the commit boundary; "
+                    "the detached update was rolled back"
+                ) from parent_error
+            raise _error(
+                "concurrent destination edit detected at the commit boundary; "
+                "the edit was restored"
+            )
+
+        if not replacement_intact:
             raise _error("tournament config changed at the commit boundary")
         _verify_parent_identity(parent_descriptor, preview.config_parent_identity)
         committed_path, committed_stat = _resolved_regular_path(
@@ -1297,6 +1414,36 @@ def apply_results(
             or not _identity_matches_stat(committed_identity, committed_stat)
         ):
             raise _error("tournament config target changed after commit")
+        _verify_parent_identity(parent_descriptor, preview.config_parent_identity)
+
+        _remove_temp_at(parent_descriptor, temporary_name)
+        temporary_name = None
+        try:
+            os.fsync(parent_descriptor)
+        except OSError as error:
+            raise _error("tournament config parent could not be fsynced") from error
+
+        final_identity, final_bytes = _read_file_at(
+            parent_descriptor,
+            canonical.name,
+            canonical,
+            "final tournament config",
+        )
+        if (
+            final_identity != committed_identity
+            or final_bytes != replacement_bytes
+        ):
+            raise _error("tournament config changed during commit finalization")
+        _verify_parent_identity(parent_descriptor, preview.config_parent_identity)
+        final_path, final_stat = _resolved_regular_path(
+            canonical,
+            "final tournament config",
+        )
+        if (
+            final_path != canonical
+            or not _identity_matches_stat(final_identity, final_stat)
+        ):
+            raise _error("tournament config target changed during commit finalization")
         _verify_parent_identity(parent_descriptor, preview.config_parent_identity)
     finally:
         try:
