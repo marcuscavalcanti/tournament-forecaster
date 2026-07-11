@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import stat
@@ -102,9 +103,10 @@ def test_preview_apply_and_repreview_classify_addition_then_idempotent(
 
     apply_results(config, preview)
     tournament = load_tournament(config)
-    assert [(match.match_id, match.score.home, match.score.away) for match in tournament.completed_matches] == [
-        (expected_match_id, 2, 1)
-    ]
+    assert [
+        (match.match_id, match.score.home, match.score.away)
+        for match in tournament.completed_matches
+    ] == [(expected_match_id, 2, 1)]
 
     repeated = preview_results(config, source, format="json")
     assert repeated.additions == ()
@@ -187,7 +189,11 @@ def test_preview_records_canonical_regular_file_identity(
     source = _json_source(tmp_path, [_result()])
     monkeypatch.chdir(tmp_path)
 
-    preview = preview_results(config.relative_to(tmp_path), source.relative_to(tmp_path), format="json")
+    preview = preview_results(
+        config.relative_to(tmp_path),
+        source.relative_to(tmp_path),
+        format="json",
+    )
 
     assert preview.config_path == config.resolve(strict=True)
     assert preview.source_path == source.resolve(strict=True)
@@ -290,6 +296,113 @@ def test_apply_revalidates_digest_after_temp_fsync_before_replace(
     assert injected is True
     assert config.read_bytes() == concurrent_bytes
     assert not list(tmp_path.glob(".tournament.json.*.tmp"))
+
+
+def test_apply_preserves_destination_edit_injected_inside_final_replace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    preview = preview_results(config, _json_source(tmp_path, [_result()]), format="json")
+    concurrent_bytes = config.read_bytes() + b"\n"
+    original_replace = os.replace
+    injected = False
+
+    def replace_with_destination_edit(
+        source: str | os.PathLike[str],
+        destination: str | os.PathLike[str],
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+    ) -> None:
+        nonlocal injected
+        if not injected and dst_dir_fd is not None:
+            injected = True
+            descriptor = os.open(
+                destination,
+                os.O_WRONLY | os.O_TRUNC | os.O_NOFOLLOW,
+                dir_fd=dst_dir_fd,
+            )
+            try:
+                os.write(descriptor, concurrent_bytes)
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        original_replace(
+            source,
+            destination,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+        )
+
+    monkeypatch.setattr(os, "replace", replace_with_destination_edit)
+
+    with pytest.raises(TournamentValidationError, match="commit boundary|concurrent"):
+        apply_results(config, preview)
+
+    assert injected is True
+    assert config.read_bytes() == concurrent_bytes
+
+
+def test_apply_parent_swap_inside_final_replace_cannot_return_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parent = tmp_path / "active"
+    parent.mkdir()
+    config = _config(parent)
+    preview = preview_results(config, _json_source(parent, [_result()]), format="json")
+    original_bytes = config.read_bytes()
+    detached_parent = tmp_path / "detached"
+    decoy_bytes = b'{"decoy": true}\n'
+    original_replace = os.replace
+    swapped = False
+
+    def replace_with_parent_swap(
+        source: str | os.PathLike[str],
+        destination: str | os.PathLike[str],
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+    ) -> None:
+        nonlocal swapped
+        if not swapped and dst_dir_fd is not None:
+            swapped = True
+            parent.rename(detached_parent)
+            parent.mkdir()
+            (parent / config.name).write_bytes(decoy_bytes)
+        original_replace(
+            source,
+            destination,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+        )
+
+    monkeypatch.setattr(os, "replace", replace_with_parent_swap)
+
+    with pytest.raises(TournamentValidationError, match="parent.*changed|detached"):
+        apply_results(config, preview)
+
+    assert swapped is True
+    assert (parent / config.name).read_bytes() == decoy_bytes
+    assert (detached_parent / config.name).read_bytes() == original_bytes
+
+
+def test_apply_honors_existing_project_writer_lock(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    preview = preview_results(config, _json_source(tmp_path, [_result()]), format="json")
+    before = config.read_bytes()
+    lock_path = config.parent / f".{config.name}.lock"
+    descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with pytest.raises(TournamentValidationError, match="locked.*writer|writer.*lock"):
+            apply_results(config, preview)
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+    assert config.read_bytes() == before
 
 
 def test_apply_fails_closed_without_directory_descriptor_primitives(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import importlib
 import io
 import json
 import os
@@ -12,6 +13,7 @@ import stat
 import unicodedata
 from collections import Counter
 from collections.abc import Collection, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -23,6 +25,9 @@ from ..errors import TournamentValidationError
 from ..group_fixtures import generate_group_fixture_specs
 from .security import sanitize_metadata, serializable_value
 
+_fcntl = None
+with suppress(ImportError):  # pragma: no cover - unsupported platforms fail closed.
+    _fcntl = importlib.import_module("fcntl")
 
 _JSON_ROOT_FIELDS = frozenset({"schema_version", "provider", "retrieved_at", "results"})
 _RESULT_FIELDS = frozenset(
@@ -269,6 +274,7 @@ def _require_race_resistant_primitives() -> None:
         or os.stat not in supports_follow_symlinks
         or os.unlink not in supports_dir_fd
         or os.rename not in supports_dir_fd
+        or _fcntl is None
     ):
         raise _error(
             "race-resistant results apply is unavailable on this platform"
@@ -331,12 +337,122 @@ def _open_parent_directory(
         raise
 
 
-def _read_file_at(
+def _acquire_config_writer_lock(parent_descriptor: int, target_name: str) -> int:
+    if _fcntl is None:
+        raise _error("race-resistant results apply is unavailable on this platform")
+    lock_name = f".{target_name}.lock"
+    flags = (
+        os.O_RDWR
+        | os.O_CREAT
+        | os.O_NOFOLLOW
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    try:
+        descriptor = os.open(
+            lock_name,
+            flags,
+            0o600,
+            dir_fd=parent_descriptor,
+        )
+    except OSError as error:
+        raise _error("tournament config writer lock could not be opened safely") from error
+    try:
+        path_stat = os.stat(
+            lock_name,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+        lock_stat = os.fstat(descriptor)
+        if not stat.S_ISREG(lock_stat.st_mode):
+            raise _error("tournament config writer lock must be a regular file")
+        if _stat_signature(lock_stat) != _stat_signature(path_stat):
+            raise _error("tournament config writer lock changed while opening")
+        _fcntl.flock(descriptor, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+        current_stat = os.stat(
+            lock_name,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+        if _stat_signature(os.fstat(descriptor)) != _stat_signature(current_stat):
+            raise _error("tournament config writer lock changed while acquiring")
+        return descriptor
+    except BlockingIOError as error:
+        os.close(descriptor)
+        raise _error("tournament config is locked by another project writer") from error
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _release_config_writer_lock(descriptor: int) -> None:
+    try:
+        if _fcntl is not None:
+            _fcntl.flock(descriptor, _fcntl.LOCK_UN)
+    finally:
+        os.close(descriptor)
+
+
+def _identity_from_content(
+    canonical_path: Path,
+    file_stat: os.stat_result,
+    content: bytes,
+) -> LocalFileIdentity:
+    return LocalFileIdentity(
+        path=canonical_path,
+        device=file_stat.st_dev,
+        inode=file_stat.st_ino,
+        size=file_stat.st_size,
+        mtime_ns=file_stat.st_mtime_ns,
+        digest=_digest(content),
+    )
+
+
+def _identity_matches_stat(
+    identity: LocalFileIdentity,
+    file_stat: os.stat_result,
+) -> bool:
+    return stat.S_ISREG(file_stat.st_mode) and (
+        identity.device,
+        identity.inode,
+        identity.size,
+        identity.mtime_ns,
+    ) == (
+        file_stat.st_dev,
+        file_stat.st_ino,
+        file_stat.st_size,
+        file_stat.st_mtime_ns,
+    )
+
+
+def _read_open_descriptor(
+    descriptor: int,
+    canonical_path: Path,
+    label: str,
+) -> tuple[LocalFileIdentity, bytes]:
+    try:
+        before = os.fstat(descriptor)
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        chunks: list[bytes] = []
+        while chunk := os.read(descriptor, 1024 * 1024):
+            chunks.append(chunk)
+        content = b"".join(chunks)
+        after = os.fstat(descriptor)
+    except OSError as error:
+        raise _error(f"{label} file could not be read safely: {canonical_path}") from error
+    if (
+        _stat_signature(before) != _stat_signature(after)
+        or len(content) != after.st_size
+    ):
+        raise _error(f"{label} identity changed while reading")
+    return _identity_from_content(canonical_path, after, content), content
+
+
+def _open_file_at(
     parent_descriptor: int,
     filename: str,
     canonical_path: Path,
     label: str,
-) -> tuple[LocalFileIdentity, bytes]:
+) -> tuple[int, LocalFileIdentity, bytes]:
     flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
     descriptor = -1
     try:
@@ -353,38 +469,48 @@ def _read_file_at(
         opened_stat = os.fstat(descriptor)
         if _stat_signature(opened_stat) != _stat_signature(path_stat):
             raise _error(f"{label} identity changed while opening")
-        with os.fdopen(descriptor, "rb") as handle:
-            descriptor = -1
-            content = handle.read()
-            read_stat = os.fstat(handle.fileno())
+        identity, content = _read_open_descriptor(
+            descriptor,
+            canonical_path,
+            label,
+        )
         current_stat = os.stat(
             filename,
             dir_fd=parent_descriptor,
             follow_symlinks=False,
         )
+        descriptor_stat = os.fstat(descriptor)
+        if _stat_signature(descriptor_stat) != _stat_signature(current_stat):
+            raise _error(f"{label} identity changed while reading")
+        if _stat_signature(descriptor_stat) != _stat_signature(opened_stat):
+            raise _error(f"{label} identity changed while reading")
+        return descriptor, identity, content
     except TournamentValidationError:
-        raise
-    except OSError as error:
-        raise _error(f"{label} file could not be read safely: {canonical_path}") from error
-    finally:
         if descriptor >= 0:
             os.close(descriptor)
-    if (
-        _stat_signature(read_stat) != _stat_signature(current_stat)
-        or len(content) != read_stat.st_size
-    ):
-        raise _error(f"{label} identity changed while reading")
-    return (
-        LocalFileIdentity(
-            path=canonical_path,
-            device=read_stat.st_dev,
-            inode=read_stat.st_ino,
-            size=read_stat.st_size,
-            mtime_ns=read_stat.st_mtime_ns,
-            digest=_digest(content),
-        ),
-        content,
+        raise
+    except OSError as error:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise _error(f"{label} file could not be read safely: {canonical_path}") from error
+
+
+def _read_file_at(
+    parent_descriptor: int,
+    filename: str,
+    canonical_path: Path,
+    label: str,
+) -> tuple[LocalFileIdentity, bytes]:
+    descriptor, identity, content = _open_file_at(
+        parent_descriptor,
+        filename,
+        canonical_path,
+        label,
     )
+    try:
+        return identity, content
+    finally:
+        os.close(descriptor)
 
 
 def _read_local_file(path: Path, label: str) -> tuple[LocalFileIdentity, bytes]:
@@ -492,7 +618,10 @@ def _alias_index(tournament: Tournament) -> dict[str, str | None]:
     return index
 
 
-def _resolve_team(value: object, aliases: Mapping[str, str | None]) -> tuple[str | None, str | None]:
+def _resolve_team(
+    value: object,
+    aliases: Mapping[str, str | None],
+) -> tuple[str | None, str | None]:
     display = _text(value, "result team")
     normalized = _normalized_name(display)
     if normalized not in aliases:
@@ -846,10 +975,8 @@ def _write_temp_at(
         except BaseException:
             if descriptor >= 0:
                 os.close(descriptor)
-            try:
+            with suppress(FileNotFoundError):
                 os.unlink(temporary_name, dir_fd=parent_descriptor)
-            except FileNotFoundError:
-                pass
             raise
     raise _error("could not allocate a secure temporary results file")
 
@@ -857,10 +984,41 @@ def _write_temp_at(
 def _remove_temp_at(parent_descriptor: int, temporary_name: str | None) -> None:
     if temporary_name is None:
         return
-    try:
+    with suppress(FileNotFoundError):
         os.unlink(temporary_name, dir_fd=parent_descriptor)
-    except FileNotFoundError:
-        pass
+
+
+def _restore_target_at(
+    parent_descriptor: int,
+    target_name: str,
+    canonical_path: Path,
+    content: bytes,
+) -> None:
+    temporary_name: str | None = None
+    try:
+        temporary_name = _write_temp_at(parent_descriptor, target_name, content)
+        os.replace(
+            temporary_name,
+            target_name,
+            src_dir_fd=parent_descriptor,
+            dst_dir_fd=parent_descriptor,
+        )
+        temporary_name = None
+        os.fsync(parent_descriptor)
+        _, restored_bytes = _read_file_at(
+            parent_descriptor,
+            target_name,
+            canonical_path,
+            "restored tournament config",
+        )
+        if restored_bytes != content:
+            raise _error("tournament config rollback could not be verified")
+    except TournamentValidationError:
+        raise
+    except (OSError, TypeError, NotImplementedError) as error:
+        raise _error("tournament config rollback failed closed") from error
+    finally:
+        _remove_temp_at(parent_descriptor, temporary_name)
 
 
 def _load_tournament_bytes(content: bytes) -> Tournament:
@@ -953,7 +1111,13 @@ def preview_results(config: Path, source: Path, *, format: str) -> ImportPreview
         elif _same_fact(previous, fact):
             idempotent.append(fact)
         else:
-            conflicts.append(ResultConflict(previous, fact, "incoming result differs from immutable completed fact"))
+            conflicts.append(
+                ResultConflict(
+                    previous,
+                    fact,
+                    "incoming result differs from immutable completed fact",
+                )
+            )
 
     _candidate_document(
         config_bytes,
@@ -997,7 +1161,14 @@ def apply_results(
         expected=preview.config_parent_identity,
     )
     temporary_name: str | None = None
+    lock_descriptor = -1
+    commit_guard_descriptor = -1
     try:
+        lock_descriptor = _acquire_config_writer_lock(
+            parent_descriptor,
+            canonical.name,
+        )
+        _verify_parent_identity(parent_descriptor, preview.config_parent_identity)
         current_identity, current_bytes = _read_file_at(
             parent_descriptor,
             canonical.name,
@@ -1023,17 +1194,18 @@ def apply_results(
             preview.conflicts,
             replace_conflicts=replace_conflicts,
         )
+        replacement_bytes = _encode_json_document(root)
         try:
             temporary_name = _write_temp_at(
                 parent_descriptor,
                 canonical.name,
-                _encode_json_document(root),
+                replacement_bytes,
             )
         except OSError as error:
             raise _error("could not prepare a race-resistant results update") from error
 
         _verify_parent_identity(parent_descriptor, preview.config_parent_identity)
-        commit_identity, _ = _read_file_at(
+        commit_guard_descriptor, commit_identity, commit_bytes = _open_file_at(
             parent_descriptor,
             canonical.name,
             canonical,
@@ -1058,8 +1230,84 @@ def apply_results(
             os.fsync(parent_descriptor)
         except OSError as error:
             raise _error("tournament config parent could not be fsynced") from error
+
+        boundary_identity, boundary_bytes = _read_open_descriptor(
+            commit_guard_descriptor,
+            canonical,
+            "pre-commit tournament config",
+        )
+        boundary_changed = (
+            boundary_identity != commit_identity
+            or boundary_bytes != commit_bytes
+        )
+        try:
+            _verify_parent_identity(parent_descriptor, preview.config_parent_identity)
+        except TournamentValidationError as parent_error:
+            rollback_bytes = boundary_bytes if boundary_changed else commit_bytes
+            try:
+                _restore_target_at(
+                    parent_descriptor,
+                    canonical.name,
+                    canonical,
+                    rollback_bytes,
+                )
+            except TournamentValidationError as rollback_error:
+                raise _error(
+                    "tournament config parent changed at the commit boundary and "
+                    "the detached update could not be rolled back"
+                ) from rollback_error
+            raise _error(
+                "tournament config parent changed at the commit boundary; "
+                "the detached update was rolled back"
+            ) from parent_error
+
+        if boundary_changed:
+            try:
+                _restore_target_at(
+                    parent_descriptor,
+                    canonical.name,
+                    canonical,
+                    boundary_bytes,
+                )
+            except TournamentValidationError as rollback_error:
+                raise _error(
+                    "concurrent destination edit detected at the commit boundary and "
+                    "could not be restored"
+                ) from rollback_error
+            raise _error(
+                "concurrent destination edit detected at the commit boundary; "
+                "the edit was restored"
+            )
+
+        committed_identity, committed_bytes = _read_file_at(
+            parent_descriptor,
+            canonical.name,
+            canonical,
+            "committed tournament config",
+        )
+        if committed_bytes != replacement_bytes:
+            raise _error("tournament config changed at the commit boundary")
+        _verify_parent_identity(parent_descriptor, preview.config_parent_identity)
+        committed_path, committed_stat = _resolved_regular_path(
+            canonical,
+            "committed tournament config",
+        )
+        if (
+            committed_path != canonical
+            or not _identity_matches_stat(committed_identity, committed_stat)
+        ):
+            raise _error("tournament config target changed after commit")
+        _verify_parent_identity(parent_descriptor, preview.config_parent_identity)
     finally:
         try:
             _remove_temp_at(parent_descriptor, temporary_name)
         finally:
-            os.close(parent_descriptor)
+            try:
+                if commit_guard_descriptor >= 0:
+                    os.close(commit_guard_descriptor)
+            finally:
+                try:
+                    if lock_descriptor >= 0:
+                        _release_config_writer_lock(lock_descriptor)
+                finally:
+                    os.close(parent_descriptor)

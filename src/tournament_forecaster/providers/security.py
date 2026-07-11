@@ -9,7 +9,6 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from ..errors import TournamentValidationError
 
-
 REDACTED = "[REDACTED]"
 _SENSITIVE_NAMES = frozenset(
     {
@@ -57,13 +56,72 @@ _SENSITIVE_NAMES = frozenset(
         "xgoogsignature",
     }
 )
+_BENIGN_NAMES = frozenset(
+    {
+        "hockey",
+        "monkey",
+        "publickey",
+        "rankingkey",
+        "teamkey",
+    }
+)
+_SENSITIVE_TERMINAL_TOKENS = frozenset(
+    {
+        "auth",
+        "authorization",
+        "credential",
+        "credentials",
+        "password",
+        "secret",
+        "signature",
+        "token",
+    }
+)
+_SENSITIVE_KEY_QUALIFIERS = frozenset(
+    {
+        "access",
+        "api",
+        "app",
+        "private",
+        "secret",
+        "signing",
+        "subscription",
+    }
+)
+
+
+def _name_tokens(name: str) -> tuple[str, ...]:
+    acronym_split = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", name)
+    camel_split = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", acronym_split)
+    return tuple(
+        token.casefold()
+        for token in re.split(r"[^A-Za-z0-9]+", camel_split)
+        if token
+    )
 
 
 def credential_shaped_name(name: str) -> bool:
     """Return whether a metadata/query key conventionally carries a credential."""
 
     normalized = re.sub(r"[^a-z0-9]", "", name.casefold())
-    return normalized in _SENSITIVE_NAMES
+    if normalized in _BENIGN_NAMES:
+        return False
+    if normalized in _SENSITIVE_NAMES:
+        return True
+    tokens = _name_tokens(name)
+    if not tokens:
+        return False
+    if tokens[-1] in _SENSITIVE_TERMINAL_TOKENS:
+        return True
+    if len(tokens) >= 2 and tokens[-1] == "key":
+        return tokens[-2] in _SENSITIVE_KEY_QUALIFIERS
+    return normalized.endswith(
+        (
+            "accesstoken",
+            "apikey",
+            "clientsecret",
+        )
+    )
 
 
 def redact_url(url: str) -> str:

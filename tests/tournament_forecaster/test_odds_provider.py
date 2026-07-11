@@ -91,16 +91,47 @@ def test_redact_url_removes_userinfo_and_all_sensitive_duplicate_values(url: str
 def test_redact_url_preserves_benign_names_that_merely_end_in_key() -> None:
     redacted = redact_url(
         "https://example.test/path?ranking_key=rank&team_key=team&"
-        "monkey=banana&hockey=puck&key=raw-key&private_key=raw-private"
+        "public_key=public&monkey=banana&hockey=puck&key=raw-key&"
+        "private_key=raw-private"
     )
 
     assert "ranking_key=rank" in redacted
     assert "team_key=team" in redacted
+    assert "public_key=public" in redacted
     assert "monkey=banana" in redacted
     assert "hockey=puck" in redacted
     assert "raw-key" not in redacted
     assert "raw-private" not in redacted
     assert redacted.count("REDACTED") == 2
+
+
+@pytest.mark.parametrize(
+    "credential_name",
+    [
+        "x-api-key",
+        "XApiKey",
+        "provider_api_key",
+        "providerApiKey",
+        "football-data-token",
+        "footballDataToken",
+        "access_token",
+        "accessToken",
+        "client_secret",
+        "clientSecret",
+    ],
+)
+def test_redact_url_handles_provider_prefixes_and_name_variants(
+    credential_name: str,
+) -> None:
+    redacted = redact_url(
+        f"https://example.test/path?{credential_name}=provider-secret&"
+        "public_key=public&ranking_key=rank"
+    )
+
+    assert "provider-secret" not in redacted
+    assert "REDACTED" in redacted
+    assert "public_key=public" in redacted
+    assert "ranking_key=rank" in redacted
 
 
 def test_metadata_preserves_benign_key_suffixes_but_redacts_exact_conventions(
@@ -116,6 +147,7 @@ def test_metadata_preserves_benign_key_suffixes_but_redacts_exact_conventions(
                 "metadata": {
                     "ranking_key": "rank",
                     "team_key": "team",
+                    "public_key": "public",
                     "monkey": "banana",
                     "hockey": "puck",
                     "access_key": "access-secret",
@@ -130,10 +162,47 @@ def test_metadata_preserves_benign_key_suffixes_but_redacts_exact_conventions(
     assert metadata == {
         "ranking_key": "rank",
         "team_key": "team",
+        "public_key": "public",
         "monkey": "banana",
         "hockey": "puck",
         "access_key": "[REDACTED]",
         "private_key": "[REDACTED]",
+    }
+
+
+def test_metadata_redacts_provider_prefixed_and_camel_case_credentials(
+    tmp_path: Path,
+) -> None:
+    source = _odds_source(
+        tmp_path,
+        odds=[
+            {
+                "market": "champion",
+                "selection_id": "alpha-club",
+                "decimal_odds": 4.25,
+                "metadata": {
+                    "x-api-key": "x-secret",
+                    "provider_api_key": "provider-secret",
+                    "footballDataToken": "football-secret",
+                    "accessToken": "access-secret",
+                    "client_secret": "client-secret",
+                    "public_key": "public",
+                    "monkey": "banana",
+                },
+            }
+        ],
+    )
+
+    metadata = preview_odds(source).to_dict()["records"][0]["metadata"]
+
+    assert metadata == {
+        "x-api-key": "[REDACTED]",
+        "provider_api_key": "[REDACTED]",
+        "footballDataToken": "[REDACTED]",
+        "accessToken": "[REDACTED]",
+        "client_secret": "[REDACTED]",
+        "public_key": "public",
+        "monkey": "banana",
     }
 
 
@@ -226,7 +295,10 @@ def test_odds_input_failures_are_validation_errors(
         preview_odds(source)
 
 
-def test_cli_odds_surface_is_preview_only(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_cli_odds_surface_is_preview_only(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     source = _odds_source(tmp_path)
 
     assert main(["update-odds", "--source", str(source)]) == 0
