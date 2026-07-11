@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -136,28 +137,46 @@ def test_csv_preview_resolves_unique_aliases_and_infers_configured_fixture_id(
     assert preview.additions[0].match_id == _configured_match_id(config)
 
 
-@pytest.mark.parametrize("path_kind", ["config", "source", "parent"])
-def test_preview_rejects_symlinked_files_and_path_components(
+@pytest.mark.parametrize("path_kind", ["config", "source"])
+def test_preview_rejects_symlinked_leaf_files(
     tmp_path: Path,
     path_kind: str,
 ) -> None:
     config = _config(tmp_path)
     source = _json_source(tmp_path, [_result()])
-    if path_kind == "parent":
-        linked_parent = tmp_path / "linked"
-        linked_parent.symlink_to(tmp_path, target_is_directory=True)
-        config = linked_parent / config.name
+    original = config if path_kind == "config" else source
+    link = tmp_path / f"linked-{original.name}"
+    link.symlink_to(original)
+    if path_kind == "config":
+        config = link
     else:
-        original = config if path_kind == "config" else source
-        link = tmp_path / f"linked-{original.name}"
-        link.symlink_to(original)
-        if path_kind == "config":
-            config = link
-        else:
-            source = link
+        source = link
 
     with pytest.raises(TournamentValidationError, match="symlink"):
         preview_results(config, source, format="json")
+
+
+def test_preview_accepts_stable_ancestor_alias_and_binds_resolved_parent(
+    tmp_path: Path,
+) -> None:
+    real_parent = tmp_path / "real"
+    real_parent.mkdir()
+    config = _config(real_parent)
+    source = _json_source(real_parent, [_result()])
+    alias = tmp_path / "alias"
+    alias.symlink_to(real_parent, target_is_directory=True)
+
+    preview = preview_results(
+        alias / config.name,
+        alias / source.name,
+        format="json",
+    )
+
+    assert preview.config_path == config.resolve(strict=True)
+    assert preview.source_path == source.resolve(strict=True)
+    assert preview.config_parent_identity.path == real_parent.resolve(strict=True)
+    assert preview.config_parent_identity.device == real_parent.stat().st_dev
+    assert preview.config_parent_identity.inode == real_parent.stat().st_ino
 
 
 def test_preview_records_canonical_regular_file_identity(
@@ -176,6 +195,7 @@ def test_preview_records_canonical_regular_file_identity(
     assert preview.config_identity.inode == config.stat().st_ino
     assert preview.config_identity.size == config.stat().st_size
     assert preview.source_identity.inode == source.stat().st_ino
+    assert preview.config_parent_identity.path == config.parent.resolve(strict=True)
 
 
 def test_apply_rejects_same_bytes_at_a_different_inode_before_mutation(
@@ -208,6 +228,83 @@ def test_apply_rejects_symlink_swap_before_mutation(tmp_path: Path) -> None:
 
     assert config.is_symlink()
     assert original.read_bytes() == before
+
+
+def test_apply_parent_swap_cannot_redirect_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parent = tmp_path / "active"
+    parent.mkdir()
+    config = _config(parent)
+    preview = preview_results(config, _json_source(parent, [_result()]), format="json")
+    original_bytes = config.read_bytes()
+    detached_parent = tmp_path / "detached"
+    decoy_bytes = b'{"decoy": true}\n'
+    original_fsync = os.fsync
+    swapped = False
+
+    def swap_parent_at_temp_fsync(descriptor: int) -> None:
+        nonlocal swapped
+        original_fsync(descriptor)
+        if not swapped and stat.S_ISREG(os.fstat(descriptor).st_mode):
+            swapped = True
+            parent.rename(detached_parent)
+            parent.mkdir()
+            (parent / config.name).write_bytes(decoy_bytes)
+
+    monkeypatch.setattr(os, "fsync", swap_parent_at_temp_fsync)
+
+    with pytest.raises(TournamentValidationError, match="parent.*changed|changed.*parent"):
+        apply_results(config, preview)
+
+    assert swapped is True
+    assert (parent / config.name).read_bytes() == decoy_bytes
+    assert (detached_parent / config.name).read_bytes() == original_bytes
+    assert not list(parent.glob(".tournament.json.*.tmp"))
+    assert not list(detached_parent.glob(".tournament.json.*.tmp"))
+
+
+def test_apply_revalidates_digest_after_temp_fsync_before_replace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    preview = preview_results(config, _json_source(tmp_path, [_result()]), format="json")
+    concurrent_bytes = config.read_bytes() + b"\n"
+    original_fsync = os.fsync
+    injected = False
+
+    def inject_concurrent_edit(descriptor: int) -> None:
+        nonlocal injected
+        original_fsync(descriptor)
+        if not injected and stat.S_ISREG(os.fstat(descriptor).st_mode):
+            injected = True
+            config.write_bytes(concurrent_bytes)
+
+    monkeypatch.setattr(os, "fsync", inject_concurrent_edit)
+
+    with pytest.raises(TournamentValidationError, match="changed.*commit|content.*changed"):
+        apply_results(config, preview)
+
+    assert injected is True
+    assert config.read_bytes() == concurrent_bytes
+    assert not list(tmp_path.glob(".tournament.json.*.tmp"))
+
+
+def test_apply_fails_closed_without_directory_descriptor_primitives(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    preview = preview_results(config, _json_source(tmp_path, [_result()]), format="json")
+    before = config.read_bytes()
+    monkeypatch.setattr(os, "supports_dir_fd", set())
+
+    with pytest.raises(TournamentValidationError, match="race-resistant.*unavailable"):
+        apply_results(config, preview)
+
+    assert config.read_bytes() == before
 
 
 def test_relative_apply_rejects_changed_working_directory(

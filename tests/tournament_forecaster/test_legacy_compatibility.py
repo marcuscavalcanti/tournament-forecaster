@@ -90,6 +90,31 @@ def test_absent_legacy_warnings_are_defaulted_and_never_mapped() -> None:
     _assert_leaf_complete_ledger(legacy, conversion)
 
 
+def test_unknown_legacy_stage_payload_is_dropped_at_every_nested_leaf() -> None:
+    legacy = {
+        "bundle": {
+            "generated_at_iso": "2026-07-11T12:00:00+00:00",
+            "stage_probabilities": {
+                "titulo": 11.7,
+                "unsupported": {
+                    "model": [0.2, {"variant": 0.3}],
+                    "empty": [],
+                },
+            },
+        }
+    }
+
+    conversion = legacy_to_generic(legacy)
+
+    assert {
+        "bundle.stage_probabilities.unsupported.model[0]",
+        "bundle.stage_probabilities.unsupported.model[1].variant",
+        "bundle.stage_probabilities.unsupported.empty",
+    } <= set(conversion.report.dropped)
+    assert "bundle.stage_probabilities.unsupported" not in conversion.report.dropped
+    _assert_leaf_complete_ledger(legacy, conversion)
+
+
 def test_generic_to_legacy_reports_translation_without_importing_legacy_into_core() -> None:
     generic = {
         "schema_version": 2,

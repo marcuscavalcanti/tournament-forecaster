@@ -88,6 +88,55 @@ def test_redact_url_removes_userinfo_and_all_sensitive_duplicate_values(url: str
     assert "x=1" in redacted
 
 
+def test_redact_url_preserves_benign_names_that_merely_end_in_key() -> None:
+    redacted = redact_url(
+        "https://example.test/path?ranking_key=rank&team_key=team&"
+        "monkey=banana&hockey=puck&key=raw-key&private_key=raw-private"
+    )
+
+    assert "ranking_key=rank" in redacted
+    assert "team_key=team" in redacted
+    assert "monkey=banana" in redacted
+    assert "hockey=puck" in redacted
+    assert "raw-key" not in redacted
+    assert "raw-private" not in redacted
+    assert redacted.count("REDACTED") == 2
+
+
+def test_metadata_preserves_benign_key_suffixes_but_redacts_exact_conventions(
+    tmp_path: Path,
+) -> None:
+    source = _odds_source(
+        tmp_path,
+        odds=[
+            {
+                "market": "champion",
+                "selection_id": "alpha-club",
+                "decimal_odds": 4.25,
+                "metadata": {
+                    "ranking_key": "rank",
+                    "team_key": "team",
+                    "monkey": "banana",
+                    "hockey": "puck",
+                    "access_key": "access-secret",
+                    "private_key": "private-secret",
+                },
+            }
+        ],
+    )
+
+    metadata = preview_odds(source).to_dict()["records"][0]["metadata"]
+
+    assert metadata == {
+        "ranking_key": "rank",
+        "team_key": "team",
+        "monkey": "banana",
+        "hockey": "puck",
+        "access_key": "[REDACTED]",
+        "private_key": "[REDACTED]",
+    }
+
+
 def test_odds_metadata_is_recursively_sanitized_and_serializable(tmp_path: Path) -> None:
     source = _odds_source(
         tmp_path,

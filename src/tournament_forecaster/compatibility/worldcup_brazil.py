@@ -120,7 +120,7 @@ def legacy_to_generic(document: Mapping[str, object]) -> CompatibilityConversion
             generic_stages[generic_stage] = _percentage(value, source_path)
             mapped[source_path] = f"stage_probabilities.{generic_stage}"
         else:
-            dropped.add(source_path)
+            dropped.update(_leaf_paths(value, source_path))
     if championship is None:
         raise TournamentValidationError("legacy stage probabilities must contain titulo")
 
@@ -229,7 +229,7 @@ def generic_to_legacy(document: Mapping[str, object]) -> CompatibilityConversion
         source_path = f"stage_probabilities.{stage_id}"
         legacy_stage = _GENERIC_TO_LEGACY_STAGE.get(stage_id)
         if legacy_stage is None:
-            dropped.add(source_path)
+            dropped.update(_leaf_paths(probability, source_path))
             continue
         legacy_stages[legacy_stage] = round(probability * 100.0, 1)
         mapped[source_path] = f"bundle.stage_probabilities.{legacy_stage}"

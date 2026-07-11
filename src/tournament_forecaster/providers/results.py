@@ -7,16 +7,16 @@ import hashlib
 import io
 import json
 import os
+import secrets
 import stat
 import unicodedata
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from types import MappingProxyType
 
-from ..atomic_io import atomic_write_json
 from ..config import load_tournament_document
 from ..domain import CompletedMatch, Score, Tournament
 from ..errors import TournamentValidationError
@@ -73,6 +73,20 @@ class LocalFileIdentity:
             "size": self.size,
             "mtime_ns": self.mtime_ns,
             "digest": self.digest,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class LocalDirectoryIdentity:
+    path: Path
+    device: int
+    inode: int
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "path": str(self.path),
+            "device": self.device,
+            "inode": self.inode,
         }
 
 
@@ -162,6 +176,7 @@ class ImportPreview:
     source_format: str
     config_digest: str
     config_identity: LocalFileIdentity
+    config_parent_identity: LocalDirectoryIdentity
     source_identity: LocalFileIdentity
     source_provenance: SourceProvenance
     additions: tuple[ResultFact, ...] = ()
@@ -182,6 +197,7 @@ class ImportPreview:
         }
         return {
             "config": self.config_identity.to_dict(),
+            "config_parent": self.config_parent_identity.to_dict(),
             "source": self.source_identity.to_dict(),
             "source_format": self.source_format,
             "source_provenance": provenance,
@@ -221,36 +237,158 @@ def _stat_signature(value: os.stat_result) -> tuple[int, int, int, int, int]:
     )
 
 
-def _checked_regular_path(path: Path, label: str) -> tuple[Path, os.stat_result]:
+def _resolved_regular_path(path: Path, label: str) -> tuple[Path, os.stat_result]:
     supplied = Path(path)
-    current = Path(supplied.anchor) if supplied.is_absolute() else Path.cwd()
-    components = supplied.parts[1:] if supplied.is_absolute() else supplied.parts
     try:
-        for component in components:
-            if component in {"", "."}:
-                continue
-            if component == "..":
-                current = current.parent
-                continue
-            current /= component
-            component_stat = current.lstat()
-            if stat.S_ISLNK(component_stat.st_mode):
-                raise _error(f"{label} path must not contain symlinks: {current}")
-        canonical = current.absolute()
-        final_stat = canonical.lstat()
+        canonical_parent = supplied.parent.resolve(strict=True)
+        canonical = canonical_parent / supplied.name
+        final_stat = canonical.stat(follow_symlinks=False)
     except TournamentValidationError:
         raise
     except OSError as error:
         raise _error(f"{label} file could not be accessed: {supplied}") from error
     if stat.S_ISLNK(final_stat.st_mode):
-        raise _error(f"{label} path must not contain symlinks: {canonical}")
+        raise _error(f"{label} path must not end in a symlink: {canonical}")
     if not stat.S_ISREG(final_stat.st_mode):
         raise _error(f"{label} must be a regular file: {canonical}")
     return canonical, final_stat
 
 
+def _require_race_resistant_primitives() -> None:
+    supports_dir_fd: Collection[object] = getattr(os, "supports_dir_fd", ())
+    supports_follow_symlinks: Collection[object] = getattr(
+        os,
+        "supports_follow_symlinks",
+        (),
+    )
+    if (
+        not hasattr(os, "O_DIRECTORY")
+        or not hasattr(os, "O_NOFOLLOW")
+        or os.open not in supports_dir_fd
+        or os.stat not in supports_dir_fd
+        or os.stat not in supports_follow_symlinks
+        or os.unlink not in supports_dir_fd
+        or os.rename not in supports_dir_fd
+    ):
+        raise _error(
+            "race-resistant results apply is unavailable on this platform"
+        )
+
+
+def _directory_identity(
+    path: Path,
+    directory_stat: os.stat_result,
+) -> LocalDirectoryIdentity:
+    return LocalDirectoryIdentity(
+        path=path,
+        device=directory_stat.st_dev,
+        inode=directory_stat.st_ino,
+    )
+
+
+def _verify_parent_identity(
+    descriptor: int,
+    expected: LocalDirectoryIdentity,
+) -> None:
+    try:
+        descriptor_stat = os.fstat(descriptor)
+        path_stat = os.stat(expected.path, follow_symlinks=False)
+    except OSError as error:
+        raise _error("tournament config parent changed since preview") from error
+    if (
+        not stat.S_ISDIR(descriptor_stat.st_mode)
+        or not stat.S_ISDIR(path_stat.st_mode)
+        or (descriptor_stat.st_dev, descriptor_stat.st_ino)
+        != (expected.device, expected.inode)
+        or (path_stat.st_dev, path_stat.st_ino)
+        != (expected.device, expected.inode)
+    ):
+        raise _error("tournament config parent changed since preview")
+
+
+def _open_parent_directory(
+    path: Path,
+    *,
+    expected: LocalDirectoryIdentity | None = None,
+) -> tuple[int, LocalDirectoryIdentity]:
+    _require_race_resistant_primitives()
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise _error("tournament config parent could not be opened safely") from error
+    try:
+        descriptor_stat = os.fstat(descriptor)
+        if not stat.S_ISDIR(descriptor_stat.st_mode):
+            raise _error("tournament config parent must be a directory")
+        identity = _directory_identity(path, descriptor_stat)
+        _verify_parent_identity(descriptor, expected or identity)
+        if expected is not None and identity != expected:
+            raise _error("tournament config parent changed since preview")
+        return descriptor, identity
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _read_file_at(
+    parent_descriptor: int,
+    filename: str,
+    canonical_path: Path,
+    label: str,
+) -> tuple[LocalFileIdentity, bytes]:
+    flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    descriptor = -1
+    try:
+        path_stat = os.stat(
+            filename,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+        if stat.S_ISLNK(path_stat.st_mode):
+            raise _error(f"{label} path must not end in a symlink: {canonical_path}")
+        if not stat.S_ISREG(path_stat.st_mode):
+            raise _error(f"{label} must be a regular file: {canonical_path}")
+        descriptor = os.open(filename, flags, dir_fd=parent_descriptor)
+        opened_stat = os.fstat(descriptor)
+        if _stat_signature(opened_stat) != _stat_signature(path_stat):
+            raise _error(f"{label} identity changed while opening")
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = -1
+            content = handle.read()
+            read_stat = os.fstat(handle.fileno())
+        current_stat = os.stat(
+            filename,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+    except TournamentValidationError:
+        raise
+    except OSError as error:
+        raise _error(f"{label} file could not be read safely: {canonical_path}") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    if (
+        _stat_signature(read_stat) != _stat_signature(current_stat)
+        or len(content) != read_stat.st_size
+    ):
+        raise _error(f"{label} identity changed while reading")
+    return (
+        LocalFileIdentity(
+            path=canonical_path,
+            device=read_stat.st_dev,
+            inode=read_stat.st_ino,
+            size=read_stat.st_size,
+            mtime_ns=read_stat.st_mtime_ns,
+            digest=_digest(content),
+        ),
+        content,
+    )
+
+
 def _read_local_file(path: Path, label: str) -> tuple[LocalFileIdentity, bytes]:
-    canonical, path_stat = _checked_regular_path(path, label)
+    canonical, path_stat = _resolved_regular_path(path, label)
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     descriptor = -1
     try:
@@ -262,7 +400,7 @@ def _read_local_file(path: Path, label: str) -> tuple[LocalFileIdentity, bytes]:
             descriptor = -1
             content = handle.read()
             read_stat = os.fstat(handle.fileno())
-        current_path, current_stat = _checked_regular_path(canonical, label)
+        current_path, current_stat = _resolved_regular_path(canonical, label)
     except TournamentValidationError:
         raise
     except OSError as error:
@@ -283,6 +421,24 @@ def _read_local_file(path: Path, label: str) -> tuple[LocalFileIdentity, bytes]:
         ),
         content,
     )
+
+
+def _read_preview_target(
+    path: Path,
+) -> tuple[LocalDirectoryIdentity, LocalFileIdentity, bytes]:
+    canonical, _ = _resolved_regular_path(path, "tournament config")
+    parent_descriptor, parent_identity = _open_parent_directory(canonical.parent)
+    try:
+        identity, content = _read_file_at(
+            parent_descriptor,
+            canonical.name,
+            canonical,
+            "tournament config",
+        )
+        _verify_parent_identity(parent_descriptor, parent_identity)
+        return parent_identity, identity, content
+    finally:
+        os.close(parent_descriptor)
 
 
 def _mapping(value: object, label: str) -> Mapping[str, object]:
@@ -643,6 +799,70 @@ def _digest(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
+def _encode_json_document(value: Mapping[str, object]) -> bytes:
+    return (
+        json.dumps(
+            serializable_value(value),
+            allow_nan=False,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def _write_temp_at(
+    parent_descriptor: int,
+    target_name: str,
+    content: bytes,
+) -> str:
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | os.O_NOFOLLOW
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    for _ in range(128):
+        temporary_name = f".{target_name}.{secrets.token_hex(12)}.tmp"
+        descriptor = -1
+        try:
+            descriptor = os.open(
+                temporary_name,
+                flags,
+                0o600,
+                dir_fd=parent_descriptor,
+            )
+        except FileExistsError:
+            continue
+        try:
+            with os.fdopen(descriptor, "wb") as handle:
+                descriptor = -1
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+            return temporary_name
+        except BaseException:
+            if descriptor >= 0:
+                os.close(descriptor)
+            try:
+                os.unlink(temporary_name, dir_fd=parent_descriptor)
+            except FileNotFoundError:
+                pass
+            raise
+    raise _error("could not allocate a secure temporary results file")
+
+
+def _remove_temp_at(parent_descriptor: int, temporary_name: str | None) -> None:
+    if temporary_name is None:
+        return
+    try:
+        os.unlink(temporary_name, dir_fd=parent_descriptor)
+    except FileNotFoundError:
+        pass
+
+
 def _load_tournament_bytes(content: bytes) -> Tournament:
     try:
         document = json.loads(content)
@@ -691,7 +911,7 @@ def preview_results(config: Path, source: Path, *, format: str) -> ImportPreview
     normalized_format = format.casefold()
     if normalized_format not in {"json", "csv"}:
         raise _error("results format must be json or csv")
-    config_identity, config_bytes = _read_local_file(config, "tournament config")
+    config_parent_identity, config_identity, config_bytes = _read_preview_target(config)
     tournament = _load_tournament_bytes(config_bytes)
     source_identity, source_bytes = _read_local_file(source, "results source")
     provenance, rows = (
@@ -747,6 +967,7 @@ def preview_results(config: Path, source: Path, *, format: str) -> ImportPreview
         source_format=normalized_format,
         config_digest=_digest(config_bytes),
         config_identity=config_identity,
+        config_parent_identity=config_parent_identity,
         source_identity=source_identity,
         source_provenance=provenance,
         additions=tuple(additions),
@@ -764,22 +985,81 @@ def apply_results(
 ) -> None:
     """Atomically apply a still-current preview after complete domain validation."""
 
-    current_identity, current_bytes = _read_local_file(config, "tournament config")
-    if current_identity.path != preview.config_path:
+    _require_race_resistant_primitives()
+    canonical, _ = _resolved_regular_path(config, "tournament config")
+    if canonical != preview.config_path:
         raise _error("preview belongs to a different tournament config path")
-    if current_identity != preview.config_identity:
-        raise _error("tournament config identity or content changed since preview")
-    if preview.unmatched:
-        detail = "conflict and unmatched rows" if preview.conflicts else "unmatched rows"
-        raise _error(f"cannot apply preview with {detail}")
-    if preview.conflicts and not replace_conflicts:
-        raise _error("cannot apply preview with conflicts without explicit replacement")
-    if not preview.additions and not (replace_conflicts and preview.conflicts):
-        return
-    root = _candidate_document(
-        current_bytes,
-        preview.additions,
-        preview.conflicts,
-        replace_conflicts=replace_conflicts,
+    if canonical.parent != preview.config_parent_identity.path:
+        raise _error("preview belongs to a different tournament config parent")
+
+    parent_descriptor, _ = _open_parent_directory(
+        preview.config_parent_identity.path,
+        expected=preview.config_parent_identity,
     )
-    atomic_write_json(preview.config_path, root)
+    temporary_name: str | None = None
+    try:
+        current_identity, current_bytes = _read_file_at(
+            parent_descriptor,
+            canonical.name,
+            canonical,
+            "tournament config",
+        )
+        if (
+            current_identity != preview.config_identity
+            or current_identity.digest != preview.config_digest
+        ):
+            raise _error("tournament config identity or content changed since preview")
+        if preview.unmatched:
+            detail = "conflict and unmatched rows" if preview.conflicts else "unmatched rows"
+            raise _error(f"cannot apply preview with {detail}")
+        if preview.conflicts and not replace_conflicts:
+            raise _error("cannot apply preview with conflicts without explicit replacement")
+        if not preview.additions and not (replace_conflicts and preview.conflicts):
+            return
+
+        root = _candidate_document(
+            current_bytes,
+            preview.additions,
+            preview.conflicts,
+            replace_conflicts=replace_conflicts,
+        )
+        try:
+            temporary_name = _write_temp_at(
+                parent_descriptor,
+                canonical.name,
+                _encode_json_document(root),
+            )
+        except OSError as error:
+            raise _error("could not prepare a race-resistant results update") from error
+
+        _verify_parent_identity(parent_descriptor, preview.config_parent_identity)
+        commit_identity, _ = _read_file_at(
+            parent_descriptor,
+            canonical.name,
+            canonical,
+            "tournament config",
+        )
+        if (
+            commit_identity != preview.config_identity
+            or commit_identity.digest != preview.config_digest
+        ):
+            raise _error("tournament config content changed before commit")
+        try:
+            os.replace(
+                temporary_name,
+                canonical.name,
+                src_dir_fd=parent_descriptor,
+                dst_dir_fd=parent_descriptor,
+            )
+        except (OSError, TypeError, NotImplementedError) as error:
+            raise _error("race-resistant atomic replace is unavailable") from error
+        temporary_name = None
+        try:
+            os.fsync(parent_descriptor)
+        except OSError as error:
+            raise _error("tournament config parent could not be fsynced") from error
+    finally:
+        try:
+            _remove_temp_at(parent_descriptor, temporary_name)
+        finally:
+            os.close(parent_descriptor)

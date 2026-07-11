@@ -15,23 +15,39 @@ _SENSITIVE_NAMES = frozenset(
     {
         "accesskey",
         "accesskeyid",
+        "accesstoken",
         "apikey",
-        "appid",
+        "apisecret",
+        "apitoken",
         "appkey",
+        "appsecret",
         "auth",
+        "authentication",
         "authorization",
+        "authtoken",
         "awsaccesskeyid",
-        "clientid",
+        "bearertoken",
+        "clientcredential",
+        "clientcredentials",
         "clientsecret",
         "credential",
+        "credentials",
+        "googleaccessid",
         "key",
         "password",
         "passwd",
+        "privatekey",
+        "proxyauthorization",
         "pwd",
+        "refreshtoken",
         "secret",
+        "secretkey",
         "securitytoken",
+        "sessiontoken",
+        "sharedsecret",
         "sig",
         "signature",
+        "signingkey",
         "subscriptionkey",
         "token",
         "xamzcredential",
@@ -41,27 +57,13 @@ _SENSITIVE_NAMES = frozenset(
         "xgoogsignature",
     }
 )
-_SENSITIVE_SUFFIXES = (
-    "accesskeyid",
-    "apikey",
-    "authorization",
-    "credential",
-    "password",
-    "secret",
-    "signature",
-    "token",
-)
 
 
 def credential_shaped_name(name: str) -> bool:
     """Return whether a metadata/query key conventionally carries a credential."""
 
     normalized = re.sub(r"[^a-z0-9]", "", name.casefold())
-    return (
-        normalized in _SENSITIVE_NAMES
-        or normalized.endswith(_SENSITIVE_SUFFIXES)
-        or normalized.endswith("key")
-    )
+    return normalized in _SENSITIVE_NAMES
 
 
 def redact_url(url: str) -> str:
