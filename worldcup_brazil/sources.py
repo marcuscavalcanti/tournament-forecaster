@@ -15,6 +15,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
+from tournament_forecaster.providers.odds import redact_url
 from worldcup_brazil.source_memory import SourceMemory
 
 
@@ -255,6 +256,15 @@ def _strip_text(payload: bytes, content_type: str) -> str:
     return text.strip()[:8000]
 
 
+def _redact_error_urls(message: str, request_url: str) -> str:
+    sanitized = message.replace(request_url, redact_url(request_url))
+    return re.sub(
+        r"https?://[^\s<>\"']+",
+        lambda match: redact_url(match.group(0)),
+        sanitized,
+    )
+
+
 def fetch_source(source: EvidenceSource, *, timeout: int = DEFAULT_TIMEOUT_SECONDS) -> EvidenceResult:
     if source.requires_env and not os.environ.get(source.requires_env):
         return EvidenceResult(
@@ -277,7 +287,12 @@ def fetch_source(source: EvidenceSource, *, timeout: int = DEFAULT_TIMEOUT_SECON
             text = _strip_text(response.read(2_000_000), content_type)
             return EvidenceResult(source=source, ok=True, text=text)
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        return EvidenceResult(source=source, ok=False, text="", error=str(exc))
+        return EvidenceResult(
+            source=source,
+            ok=False,
+            text="",
+            error=_redact_error_urls(str(exc), url),
+        )
 
 
 async def fetch_sources_concurrently(

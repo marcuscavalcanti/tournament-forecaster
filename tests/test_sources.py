@@ -171,3 +171,31 @@ def test_sources_retry_after_cap_mirrors_agents(monkeypatch) -> None:
 
     monkeypatch.setenv("RETRY_AFTER_MAX_SECONDS", "20")
     assert sources._retry_delay_seconds(1, exc) == 20.0
+
+
+def test_fetch_source_redacts_credentials_from_network_errors(monkeypatch) -> None:
+    from worldcup_brazil import sources
+
+    secret = "credential-value"
+    source = EvidenceSource(
+        name="Credential source",
+        category="statistical",
+        url="https://user:password@example.test/data?apiKey={SOURCE_API_KEY}&signature=second-secret",
+        confidence=0.8,
+        requires_env="SOURCE_API_KEY",
+    )
+    monkeypatch.setenv("SOURCE_API_KEY", secret)
+    monkeypatch.setenv("HTTP_MAX_ATTEMPTS", "1")
+
+    def fail(request, timeout):
+        raise urllib.error.URLError(f"request failed: {request.full_url}")
+
+    monkeypatch.setattr(sources.urllib.request, "urlopen", fail)
+
+    result = fetch_source(source, timeout=1)
+
+    assert result.ok is False
+    assert secret not in result.error
+    assert "password" not in result.error
+    assert "second-secret" not in result.error
+    assert result.error.count("REDACTED") == 2

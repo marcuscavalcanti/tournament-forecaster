@@ -2,7 +2,6 @@ import asyncio
 import http.client
 import io
 import json
-import subprocess
 import sys
 import threading
 import time
@@ -72,7 +71,8 @@ def test_load_agent_specs_accepts_single_deepseek_api_slot_and_gemini() -> None:
                     "max_output_tokens": 7000,
                 },
             ]
-        }
+        },
+        bridges_enabled=True,
     )
 
     by_slot = {spec.slot: spec for spec in specs}
@@ -184,7 +184,8 @@ def test_load_agent_specs_merges_operational_defaults_for_effort_and_local_cli(m
                     "endpoint": "https://api.openai.com/v1/responses",
                 },
             ]
-        }
+        },
+        bridges_enabled=True,
     )
 
     by_slot = {spec.slot: spec for spec in specs}

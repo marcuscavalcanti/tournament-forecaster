@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/tournament-forecaster/odds.import.schema.json",
+  "title": "Tournament Forecaster local odds import",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "provider", "retrieved_at", "odds"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "provider": {"type": "string", "minLength": 1},
+    "retrieved_at": {"type": "string", "format": "date-time"},
+    "odds": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["market", "selection_id", "decimal_odds"],
+        "properties": {
+          "market": {"type": "string", "minLength": 1},
+          "selection_id": {"type": "string", "minLength": 1},
+          "decimal_odds": {"type": "number", "exclusiveMinimum": 1},
+          "bookmaker": {"type": "string", "minLength": 1},
+          "source_url": {"type": "string", "pattern": "^https?://"},
+          "source_id": {"type": "string", "minLength": 1},
+          "metadata": {"type": "object"}
+        }
+      }
+    }
+  }
+}

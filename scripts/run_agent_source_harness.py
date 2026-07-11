@@ -13,15 +13,15 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from worldcup_brazil.agents import (
+from worldcup_brazil.agents import (  # noqa: E402 - repository path bootstrap above
     call_all_agents,
     load_agent_specs_from_config,
     preflight_exclusion_slots,
     preflight_warning_slots,
     run_agent_preflights,
 )
-from worldcup_brazil.cli import load_env_file
-from worldcup_brazil.pipeline import (
+from worldcup_brazil.cli import _bridges_enabled, load_env_file  # noqa: E402
+from worldcup_brazil.pipeline import (  # noqa: E402 - repository path bootstrap above
     _apply_runtime_env_overrides,
     _sanitize_source_planning_opinions,
     _specs_after_preflight_exclusion,
@@ -44,8 +44,12 @@ def build_parser() -> argparse.ArgumentParser:
         description="Diagnose agent source-planning quorum without rendering the full LinkedIn report."
     )
     parser.add_argument("--config", type=Path, default=Path("config/worldcup_brazil.json"))
-    parser.add_argument("--env-file", type=Path, default=Path(".env"))
-    parser.add_argument("--shell-env-file", type=Path, default=Path.home() / ".zshrc")
+    parser.add_argument("--env-file", type=Path, help="Trusted dotenv file loaded only when provided.")
+    parser.add_argument("--shell-env-file", type=Path, help="Trusted shell-style env file loaded only when provided.")
+    bridge_group = parser.add_mutually_exclusive_group()
+    bridge_group.add_argument("--bridges", dest="bridges", action="store_true")
+    bridge_group.add_argument("--no-bridges", dest="bridges", action="store_false")
+    parser.set_defaults(bridges=None)
     parser.add_argument("--output", type=Path, default=Path("outputs/agent_source_harness_latest.json"))
     parser.add_argument("--strict-agents", action="store_true")
     parser.add_argument("--no-model-preflight", action="store_true", help="Skip preflight exclusion in the harness.")
@@ -88,9 +92,16 @@ async def run_harness(args: argparse.Namespace) -> int:
     load_env_file(args.shell_env_file)
     generated_at = _parse_datetime(args.now)
     config = load_config(args.config)
+    config["_bridges_enabled"] = _bridges_enabled(
+        config,
+        cli_override=getattr(args, "bridges", None),
+    )
     _apply_runtime_env_overrides(config)
     baseline_title_pct = float(config.get("baseline_title_pct", 11.0))
-    agent_specs = load_agent_specs_from_config(config)
+    agent_specs = load_agent_specs_from_config(
+        config,
+        bridges_enabled=bool(config["_bridges_enabled"]),
+    )
     original_agent_slots = [spec.slot for spec in agent_specs]
     preflight_results = []
     preflight_failed_slots: list[str] = []

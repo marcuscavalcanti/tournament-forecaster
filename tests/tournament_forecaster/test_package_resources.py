@@ -146,7 +146,12 @@ def _schema_resources() -> dict[str, Any]:
     from tournament_forecaster.resources import resource_path
 
     schemas: dict[str, Any] = {}
-    for filename in ("tournament.schema.json", "forecast.schema.json"):
+    for filename in (
+        "tournament.schema.json",
+        "forecast.schema.json",
+        "results.import.schema.json",
+        "odds.import.schema.json",
+    ):
         with resource_path("schemas", filename) as path:
             schemas[filename] = json.loads(path.read_text(encoding="utf-8"))
     return schemas
@@ -472,6 +477,8 @@ def test_built_wheel_exposes_packages_scripts_and_schema_resources_in_isolation(
         members = set(archive.namelist())
     assert "tournament_forecaster/schemas/tournament.schema.json" in members
     assert "tournament_forecaster/schemas/forecast.schema.json" in members
+    assert "tournament_forecaster/schemas/results.import.schema.json" in members
+    assert "tournament_forecaster/schemas/odds.import.schema.json" in members
     assert "tournament_forecaster/data/presets/synthetic-cup/tournament.json" in members
     assert "tournament_forecaster/data/templates/group-knockout/tournament.json" in members
     assert "worldcup_brazil/cli.py" in members
@@ -505,10 +512,15 @@ from tournament_forecaster.resources import copy_template, load_bundled_preset, 
 source_root = Path({str(repository_root)!r}).resolve()
 assert source_root not in Path(tournament_forecaster.__file__).resolve().parents
 assert source_root not in Path(worldcup_brazil.__file__).resolve().parents
-for filename in ("tournament.schema.json", "forecast.schema.json"):
+for filename in (
+    "tournament.schema.json",
+    "forecast.schema.json",
+    "results.import.schema.json",
+    "odds.import.schema.json",
+):
     with resource_path("schemas", filename) as path:
         schema = json.loads(path.read_text(encoding="utf-8"))
-    assert schema["$defs"]
+    assert schema["type"] == "object"
 preset = load_bundled_preset("synthetic-cup")
 assert list_group_fixtures(preset, "group-stage")
 copied = copy_template("group-knockout", Path("copied-group-template"))

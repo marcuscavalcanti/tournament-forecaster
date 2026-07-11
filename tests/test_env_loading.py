@@ -1,8 +1,102 @@
 import os
 from pathlib import Path
 
-from worldcup_brazil.agents import default_agent_specs
-from worldcup_brazil.cli import load_env_file
+import pytest
+
+from scripts.run_agent_source_harness import build_parser as build_harness_parser
+from worldcup_brazil.agents import default_agent_specs, load_agent_specs_from_config
+from worldcup_brazil.cli import (
+    _bridges_enabled,
+    build_parser as build_legacy_parser,
+    load_env_file,
+)
+
+
+def test_local_executable_and_browser_bridges_are_disabled_by_default(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for binary in ("claude", "openai", "codex", "gemini"):
+        path = bin_dir / binary
+        path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        path.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+    monkeypatch.setenv("CLAUDE_BROWSER_COMMAND", "claude {prompt}")
+    monkeypatch.setenv("OPENAI_WEB_FETCH_URL", "https://bridge.example.test")
+
+    specs = default_agent_specs()
+
+    assert all(spec.browser_command is None for spec in specs)
+    assert all(
+        spec.browser_fallback_commands is None or spec.browser_fallback_commands == []
+        for spec in specs
+    )
+    assert all(spec.web_fetch_url is None for spec in specs)
+    assert all(spec.prefer_bridge is False for spec in specs)
+
+
+def test_configured_bridge_requires_enable_and_no_bridges_override_is_absolute(
+    monkeypatch,
+) -> None:
+    config = {
+        "bridges_enabled": True,
+        "agents": [
+            {
+                "slot": "Opus 4.8",
+                "provider": "anthropic",
+                "model": "claude-opus-4-8",
+                "env_api_key": "ANTHROPIC_API_KEY",
+                "endpoint": "https://api.anthropic.com/v1/messages",
+                "browser_command": ["claude", "--print", "{prompt}"],
+                "prefer_bridge": True,
+            }
+        ],
+    }
+    monkeypatch.setenv("WORLDCUP_ENABLE_BRIDGES", "1")
+
+    disabled = load_agent_specs_from_config(config, bridges_enabled=False)
+    enabled = load_agent_specs_from_config(config, bridges_enabled=True)
+
+    assert disabled[0].browser_command is None
+    assert disabled[0].prefer_bridge is False
+    assert enabled[0].browser_command == ["claude", "--print", "{prompt}"]
+    assert enabled[0].prefer_bridge is True
+    assert _bridges_enabled(config, cli_override=False) is False
+    assert _bridges_enabled(config, cli_override=None) is True
+    assert _bridges_enabled({"bridges_enabled": "false"}, cli_override=None) is False
+
+
+@pytest.mark.parametrize("command", ["claude --print {prompt}", [], [""]])
+def test_bridge_commands_in_config_must_be_nonempty_argument_arrays(
+    command: object,
+) -> None:
+    config = {
+        "agents": [
+            {
+                "slot": "Opus 4.8",
+                "provider": "anthropic",
+                "model": "claude-opus-4-8",
+                "env_api_key": "ANTHROPIC_API_KEY",
+                "endpoint": "https://api.anthropic.com/v1/messages",
+                "browser_command": command,
+            }
+        ]
+    }
+
+    with pytest.raises(TypeError, match="argument array"):
+        load_agent_specs_from_config(config, bridges_enabled=True)
+
+
+def test_legacy_cli_and_harness_never_default_to_a_shell_profile() -> None:
+    legacy = build_legacy_parser().parse_args([])
+    harness = build_harness_parser().parse_args([])
+
+    assert legacy.shell_env_file is None
+    assert harness.shell_env_file is None
+    assert legacy.bridges is None
+    assert harness.bridges is None
 
 
 def test_load_env_file_sets_missing_keys_without_overwriting_existing_values(tmp_path: Path, monkeypatch) -> None:
@@ -32,7 +126,7 @@ def test_default_agent_specs_read_browser_commands_after_env_file_load(tmp_path:
     monkeypatch.delenv("CLAUDE_CLI_COMMAND", raising=False)
 
     load_env_file(env_file)
-    specs = {spec.slot: spec for spec in default_agent_specs()}
+    specs = {spec.slot: spec for spec in default_agent_specs(bridges_enabled=True)}
 
     assert "DeepSeek Latest Free" not in specs
     assert specs["DeepSeek V4 Pro"].env_api_key == "DEEPSEEK_API_KEY"
@@ -43,7 +137,7 @@ def test_default_agent_specs_include_deepseek_v4_pro_from_base_url(monkeypatch) 
     monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
     monkeypatch.setenv("DEEPSEEK_V4_PRO_MODEL", "deepseek-v4-pro")
 
-    specs = {spec.slot: spec for spec in default_agent_specs()}
+    specs = {spec.slot: spec for spec in default_agent_specs(bridges_enabled=True)}
 
     assert specs["DeepSeek V4 Pro"].provider == "openai-compatible"
     assert specs["DeepSeek V4 Pro"].model == "deepseek-v4-pro"
@@ -66,7 +160,7 @@ def test_default_agent_specs_use_local_claude_cli_when_anthropic_api_key_is_miss
     monkeypatch.delenv("CLAUDE_CLI_MODEL", raising=False)
     monkeypatch.delenv("CLAUDE_CLI_ALLOWED_TOOLS", raising=False)
 
-    specs = {spec.slot: spec for spec in default_agent_specs()}
+    specs = {spec.slot: spec for spec in default_agent_specs(bridges_enabled=True)}
 
     assert specs["Opus 4.8"].browser_command == [
         str(claude),
@@ -97,7 +191,7 @@ def test_default_agent_specs_prefers_claude_cli_even_when_anthropic_key_exists(t
     monkeypatch.delenv("CLAUDE_PREFER_BRIDGE", raising=False)
     monkeypatch.delenv("CLAUDE_PREFER_CLI", raising=False)
 
-    specs = {spec.slot: spec for spec in default_agent_specs()}
+    specs = {spec.slot: spec for spec in default_agent_specs(bridges_enabled=True)}
 
     assert specs["Opus 4.8"].browser_command[0] == str(claude)
     assert specs["Opus 4.8"].prefer_bridge is True
@@ -116,7 +210,7 @@ def test_default_agent_specs_can_explicitly_disable_claude_cli_preference(tmp_pa
     monkeypatch.delenv("CLAUDE_CLI_COMMAND", raising=False)
     monkeypatch.delenv("CLAUDE_PREFER_CLI", raising=False)
 
-    specs = {spec.slot: spec for spec in default_agent_specs()}
+    specs = {spec.slot: spec for spec in default_agent_specs(bridges_enabled=True)}
 
     assert specs["Opus 4.8"].browser_command[0] == str(claude)
     assert specs["Opus 4.8"].prefer_bridge is False
@@ -134,7 +228,7 @@ def test_default_agent_specs_allow_claude_cli_fast_mode_overrides(tmp_path: Path
     monkeypatch.delenv("CLAUDE_BROWSER_COMMAND", raising=False)
     monkeypatch.delenv("CLAUDE_CLI_COMMAND", raising=False)
 
-    specs = {spec.slot: spec for spec in default_agent_specs()}
+    specs = {spec.slot: spec for spec in default_agent_specs(bridges_enabled=True)}
 
     assert "--model" in specs["Opus 4.8"].browser_command
     assert "sonnet" in specs["Opus 4.8"].browser_command
@@ -148,12 +242,12 @@ def test_default_agent_specs_allow_claude_cli_fast_mode_overrides(tmp_path: Path
 def test_default_agent_specs_use_openai_fast_reasoning_by_default_with_override(monkeypatch) -> None:
     monkeypatch.delenv("OPENAI_REASONING_EFFORT", raising=False)
 
-    specs = {spec.slot: spec for spec in default_agent_specs()}
+    specs = {spec.slot: spec for spec in default_agent_specs(bridges_enabled=True)}
 
     assert specs["GPT 5.5"].reasoning_effort == "high"
 
     monkeypatch.setenv("OPENAI_REASONING_EFFORT", "medium")
-    specs = {spec.slot: spec for spec in default_agent_specs()}
+    specs = {spec.slot: spec for spec in default_agent_specs(bridges_enabled=True)}
 
     assert specs["GPT 5.5"].reasoning_effort == "medium"
 
@@ -174,7 +268,7 @@ def test_default_agent_specs_use_openai_cli_for_gpt_with_codex_fallback(tmp_path
     monkeypatch.delenv("CHATGPT_CLI_COMMAND", raising=False)
     monkeypatch.delenv("GPT_CLI_COMMAND", raising=False)
 
-    specs = {spec.slot: spec for spec in default_agent_specs()}
+    specs = {spec.slot: spec for spec in default_agent_specs(bridges_enabled=True)}
 
     assert specs["GPT 5.5"].browser_command == [
         str(openai),
@@ -217,7 +311,7 @@ def test_default_agent_specs_use_local_codex_cli_for_gpt_when_openai_api_key_is_
     monkeypatch.delenv("CHATGPT_CLI_COMMAND", raising=False)
     monkeypatch.delenv("GPT_CLI_COMMAND", raising=False)
 
-    specs = {spec.slot: spec for spec in default_agent_specs()}
+    specs = {spec.slot: spec for spec in default_agent_specs(bridges_enabled=True)}
 
     assert specs["GPT 5.5"].browser_command == [
         str(codex),
@@ -246,7 +340,7 @@ def test_default_agent_specs_use_local_gemini_cli_as_preferred_bridge(tmp_path: 
     monkeypatch.delenv("GEMINI_PREFER_BRIDGE", raising=False)
     monkeypatch.delenv("GEMINI_PREFER_CLI", raising=False)
 
-    specs = {spec.slot: spec for spec in default_agent_specs()}
+    specs = {spec.slot: spec for spec in default_agent_specs(bridges_enabled=True)}
 
     assert specs["Gemini Pro"].browser_command == [
         str(gemini),
@@ -277,7 +371,7 @@ def test_default_agent_specs_prefers_explicit_chatgpt_cli_env_for_gpt(tmp_path: 
     monkeypatch.delenv("GPT_CLI_COMMAND", raising=False)
 
     load_env_file(env_file)
-    specs = {spec.slot: spec for spec in default_agent_specs()}
+    specs = {spec.slot: spec for spec in default_agent_specs(bridges_enabled=True)}
 
     assert specs["GPT 5.5"].browser_command == ["chatgpt", "--model", "gpt-5.5", "{prompt}"]
 
@@ -293,7 +387,7 @@ def test_load_env_file_accepts_export_lines_for_gemini_key(tmp_path: Path, monke
     monkeypatch.delenv("GEMINI_MODEL", raising=False)
 
     load_env_file(zshrc)
-    specs = {spec.slot: spec for spec in default_agent_specs()}
+    specs = {spec.slot: spec for spec in default_agent_specs(bridges_enabled=True)}
 
     assert os.environ["GEMINI_API_KEY"] == "from-zshrc"
     assert specs["Gemini Pro"].env_api_key == "GEMINI_API_KEY"

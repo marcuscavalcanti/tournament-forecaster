@@ -22,7 +22,7 @@ import urllib.request
 from dataclasses import dataclass, replace
 from typing import Any
 
-from worldcup_brazil.consensus import AgentOpinion, REQUIRED_AGENT_SLOTS
+from worldcup_brazil.consensus import AgentOpinion
 
 
 DEFAULT_MAX_OUTPUT_TOKENS = 6000
@@ -900,32 +900,54 @@ def agent_effort_profiles(specs: list[AgentSpec]) -> dict[str, dict[str, str]]:
     return {spec.slot: agent_effort_profile(spec) for spec in specs}
 
 
-def default_agent_specs() -> list[AgentSpec]:
-    claude_web_fetch = os.environ.get("CLAUDE_WEB_FETCH_URL")
+def default_agent_specs(*, bridges_enabled: bool = False) -> list[AgentSpec]:
+    claude_web_fetch = os.environ.get("CLAUDE_WEB_FETCH_URL") if bridges_enabled else None
     claude_browser_command = (
-        _env_command("CLAUDE_BROWSER_COMMAND")
-        or _env_command("CLAUDE_CLI_COMMAND")
-        or _local_claude_cli_command()
+        (
+            _env_command("CLAUDE_BROWSER_COMMAND")
+            or _env_command("CLAUDE_CLI_COMMAND")
+            or _local_claude_cli_command()
+        )
+        if bridges_enabled
+        else None
     )
-    claude_prefer_bridge = _env_bool(
-        "CLAUDE_PREFER_BRIDGE",
-        _env_bool("CLAUDE_PREFER_CLI", bool(claude_web_fetch or claude_browser_command)),
+    claude_prefer_bridge = (
+        _env_bool(
+            "CLAUDE_PREFER_BRIDGE",
+            _env_bool("CLAUDE_PREFER_CLI", bool(claude_web_fetch or claude_browser_command)),
+        )
+        if bridges_enabled
+        else False
     )
-    openai_web_fetch = os.environ.get("OPENAI_WEB_FETCH_URL") or os.environ.get("CHATGPT_WEB_FETCH_URL")
+    openai_web_fetch = (
+        os.environ.get("OPENAI_WEB_FETCH_URL") or os.environ.get("CHATGPT_WEB_FETCH_URL")
+        if bridges_enabled
+        else None
+    )
     openai_model = os.environ.get("OPENAI_GPT_MODEL", "gpt-5.5")
-    openai_browser_command = _openai_cli_command(openai_model)
-    openai_browser_fallback_commands = _openai_cli_fallback_commands(openai_browser_command)
-    openai_prefer_bridge = _env_bool(
-        "OPENAI_PREFER_BRIDGE",
-        _env_bool("OPENAI_PREFER_CLI", bool(openai_web_fetch or openai_browser_command)),
+    openai_browser_command = _openai_cli_command(openai_model) if bridges_enabled else None
+    openai_browser_fallback_commands = (
+        _openai_cli_fallback_commands(openai_browser_command) if bridges_enabled else []
     )
-    gemini_web_fetch = os.environ.get("GEMINI_WEB_FETCH_URL")
+    openai_prefer_bridge = (
+        _env_bool(
+            "OPENAI_PREFER_BRIDGE",
+            _env_bool("OPENAI_PREFER_CLI", bool(openai_web_fetch or openai_browser_command)),
+        )
+        if bridges_enabled
+        else False
+    )
+    gemini_web_fetch = os.environ.get("GEMINI_WEB_FETCH_URL") if bridges_enabled else None
     gemini_model = os.environ.get("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
-    gemini_browser_command = _gemini_cli_command()
+    gemini_browser_command = _gemini_cli_command() if bridges_enabled else None
     gemini_model_fallbacks = _gemini_model_fallbacks(gemini_model)
-    gemini_prefer_bridge = _env_bool(
-        "GEMINI_PREFER_BRIDGE",
-        _env_bool("GEMINI_PREFER_CLI", bool(gemini_web_fetch or gemini_browser_command)),
+    gemini_prefer_bridge = (
+        _env_bool(
+            "GEMINI_PREFER_BRIDGE",
+            _env_bool("GEMINI_PREFER_CLI", bool(gemini_web_fetch or gemini_browser_command)),
+        )
+        if bridges_enabled
+        else False
     )
     return [
         AgentSpec(
@@ -1699,8 +1721,11 @@ def _preflight_contract_error(payload: dict[str, Any]) -> str:
     ]
     if not source_urls and not source_queries:
         return "contrato mínimo incompleto: sem source_urls/source_queries não-Opta"
+    title_pct = payload.get("title_pct")
+    if title_pct is None:
+        return "contrato mínimo incompleto: title_pct ausente ou não numérico"
     try:
-        float(payload.get("title_pct"))
+        float(title_pct)
     except (TypeError, ValueError):
         return "contrato mínimo incompleto: title_pct ausente ou não numérico"
     summary = str(payload.get("summary") or payload.get("answer") or payload.get("message") or "").strip()
@@ -1859,12 +1884,12 @@ def _coerce_team_context_signals(payload: dict[str, Any]) -> list[dict[str, Any]
     )
     if isinstance(raw, dict):
         expanded = []
-        for team, signals in raw.items():
-            if isinstance(signals, dict):
-                signals = signals.get("signals", [signals])
-            if not isinstance(signals, list):
+        for team, team_signals in raw.items():
+            if isinstance(team_signals, dict):
+                team_signals = team_signals.get("signals", [team_signals])
+            if not isinstance(team_signals, list):
                 continue
-            for signal in signals:
+            for signal in team_signals:
                 if isinstance(signal, dict):
                     expanded.append({"team": team, **signal})
         raw = expanded
@@ -2065,8 +2090,8 @@ async def call_agent(
                         timeout=timeout,
                         cancel_event=cancel_event,
                     )
-                except TypeError as exc:
-                    if "cancel_event" not in str(exc):
+                except TypeError as type_error:
+                    if "cancel_event" not in str(type_error):
                         raise
                     text = await _call_text_with_hard_timeout_async(
                         "bridge",
@@ -2206,25 +2231,40 @@ async def call_all_agents(
     return opinions
 
 
-def load_agent_specs_from_config(config: dict[str, Any]) -> list[AgentSpec]:
+def load_agent_specs_from_config(
+    config: dict[str, Any],
+    *,
+    bridges_enabled: bool | None = None,
+) -> list[AgentSpec]:
+    if bridges_enabled is None:
+        bridge_setting = config.get(
+            "_bridges_enabled",
+            config.get("bridges_enabled", False),
+        )
+        bridges_enabled = bridge_setting is True
     configured = config.get("agents")
     if not configured:
-        return default_agent_specs()
+        return default_agent_specs(bridges_enabled=bridges_enabled)
 
-    defaults_by_slot = {spec.slot: spec for spec in default_agent_specs()}
+    defaults_by_slot = {
+        spec.slot: spec for spec in default_agent_specs(bridges_enabled=bridges_enabled)
+    }
     specs = []
     for item in configured:
         default = defaults_by_slot.get(item["slot"])
-        browser_command = (
-            _coerce_browser_command(item["browser_command"])
-            if item.get("browser_command") is not None
-            else (default.browser_command if default else None)
-        )
-        browser_fallback_commands = (
-            _coerce_browser_fallback_commands(item["browser_fallback_commands"])
-            if item.get("browser_fallback_commands") is not None
-            else (default.browser_fallback_commands if default else None)
-        )
+        browser_command = None
+        browser_fallback_commands = None
+        if bridges_enabled:
+            browser_command = (
+                _coerce_browser_command(item["browser_command"])
+                if item.get("browser_command") is not None
+                else (default.browser_command if default else None)
+            )
+            browser_fallback_commands = (
+                _coerce_browser_fallback_commands(item["browser_fallback_commands"])
+                if item.get("browser_fallback_commands") is not None
+                else (default.browser_fallback_commands if default else None)
+            )
         thinking_budget_tokens = (
             int(item["thinking_budget_tokens"])
             if item.get("thinking_budget_tokens") is not None
@@ -2249,7 +2289,11 @@ def load_agent_specs_from_config(config: dict[str, Any]) -> list[AgentSpec]:
                     item, "reasoning_effort", default.reasoning_effort if default else None
                 ),
                 thinking_budget_tokens=thinking_budget_tokens,
-                web_fetch_url=_configured_value(item, "web_fetch_url", default.web_fetch_url if default else None),
+                web_fetch_url=(
+                    _configured_value(item, "web_fetch_url", default.web_fetch_url if default else None)
+                    if bridges_enabled
+                    else None
+                ),
                 browser_command=browser_command,
                 browser_fallback_commands=browser_fallback_commands,
                 model_fallbacks=_configured_value(
@@ -2264,7 +2308,11 @@ def load_agent_specs_from_config(config: dict[str, Any]) -> list[AgentSpec]:
                 model_rate_limits=_configured_value(
                     item, "model_rate_limits", default.model_rate_limits if default else None
                 ),
-                prefer_bridge=bool(_configured_value(item, "prefer_bridge", default.prefer_bridge if default else False)),
+                prefer_bridge=(
+                    bool(_configured_value(item, "prefer_bridge", default.prefer_bridge if default else False))
+                    if bridges_enabled
+                    else False
+                ),
             )
         )
     return specs
@@ -2278,30 +2326,32 @@ def _configured_value(item: dict[str, Any], key: str, default: Any) -> Any:
 def _coerce_browser_command(value: Any) -> list[str] | None:
     if value is None:
         return None
-    if isinstance(value, str):
-        return shlex.split(value)
-    if isinstance(value, list):
-        return [str(item) for item in value]
-    raise TypeError("browser_command must be a string, list, or null")
+    if (
+        isinstance(value, list)
+        and value
+        and all(isinstance(item, str) and item for item in value)
+    ):
+        return list(value)
+    raise TypeError("browser_command must be an argument array or null")
 
 
 def _coerce_browser_fallback_commands(value: Any) -> list[list[str]] | None:
     if value is None:
         return None
-    if isinstance(value, str):
-        return [shlex.split(value)]
     if isinstance(value, list):
         if not value:
             return []
-        if all(isinstance(item, str) for item in value):
-            return [[str(item) for item in value]]
+        if all(isinstance(item, str) and item for item in value):
+            return [list(value)]
         commands = []
         for command in value:
-            if isinstance(command, str):
-                commands.append(shlex.split(command))
-            elif isinstance(command, list):
-                commands.append([str(item) for item in command])
+            if (
+                isinstance(command, list)
+                and command
+                and all(isinstance(item, str) and item for item in command)
+            ):
+                commands.append(list(command))
             else:
-                raise TypeError("browser_fallback_commands entries must be strings or lists")
+                raise TypeError("browser_fallback_commands entries must be argument arrays")
         return commands
-    raise TypeError("browser_fallback_commands must be a string, list, or null")
+    raise TypeError("browser_fallback_commands must be an array of argument arrays or null")

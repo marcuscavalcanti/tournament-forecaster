@@ -14,6 +14,8 @@ from .domain import Forecast, SimulationOptions, Tournament
 from .errors import TournamentValidationError
 from .reports import write_rendered_reports, write_report_bundle
 from .reports.json_report import load_forecast
+from .providers.odds import preview_odds
+from .providers.results import apply_results, preview_results
 from .resources import (
     copy_template,
     list_bundled_presets,
@@ -196,6 +198,42 @@ def _run_presets_list(_arguments: argparse.Namespace) -> int:
     return 0
 
 
+def _run_update_results(arguments: argparse.Namespace) -> int:
+    source_format = arguments.format
+    if source_format == "auto":
+        source_format = arguments.source.suffix.casefold().removeprefix(".")
+    preview = preview_results(arguments.config, arguments.source, format=source_format)
+    print("Results import preview")
+    print(f"  additions: {len(preview.additions)}")
+    print(f"  idempotent: {len(preview.idempotent)}")
+    print(f"  conflicts: {len(preview.conflicts)}")
+    print(f"  unmatched: {len(preview.unmatched)}")
+    for issue in preview.unmatched:
+        print(f"  unmatched row {issue.row_number}: {issue.reason}")
+    if not arguments.apply:
+        print("Preview only; pass --apply to mutate the tournament config.")
+        return 0
+    apply_results(
+        arguments.config,
+        preview,
+        replace_conflicts=arguments.replace_conflicts,
+    )
+    print(
+        f"Applied results: {len(preview.additions)} addition(s), "
+        f"{len(preview.conflicts) if arguments.replace_conflicts else 0} replacement(s)."
+    )
+    return 0
+
+
+def _run_update_odds(arguments: argparse.Namespace) -> int:
+    preview = preview_odds(arguments.source)
+    print("Odds preview (provenance only; deterministic probabilities are unchanged)")
+    print(f"  provider: {preview.provenance.provider}")
+    print(f"  retrieved_at: {preview.provenance.retrieved_at}")
+    print(f"  records: {len(preview.records)}")
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tournament-forecast",
@@ -264,6 +302,28 @@ def _build_parser() -> argparse.ArgumentParser:
     preset_commands = presets.add_subparsers(dest="presets_command", required=True)
     preset_list = preset_commands.add_parser("list", help="list bundled preset names")
     preset_list.set_defaults(handler=_run_presets_list)
+
+    update_results = commands.add_parser(
+        "update-results",
+        help="preview or apply a local JSON/CSV results import",
+    )
+    update_results.add_argument("--config", type=Path, required=True)
+    update_results.add_argument("--source", type=Path, required=True)
+    update_results.add_argument("--format", choices=("auto", "json", "csv"), default="auto")
+    update_results.add_argument("--apply", action="store_true")
+    update_results.add_argument(
+        "--replace-conflicts",
+        action="store_true",
+        help="explicitly replace conflict-visible completed facts during apply",
+    )
+    update_results.set_defaults(handler=_run_update_results)
+
+    update_odds = commands.add_parser(
+        "update-odds",
+        help="validate and inspect local odds provenance without mutating core state",
+    )
+    update_odds.add_argument("--source", type=Path, required=True)
+    update_odds.set_defaults(handler=_run_update_odds)
     return parser
 
 
