@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import IO, Iterator
 from xml.etree import ElementTree
 
-from ..atomic_io import atomic_write_text
 from ..domain import Forecast
 from ..errors import TournamentValidationError
 from .bracket_svg import render_bracket_svg
@@ -39,6 +38,7 @@ _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _ATOMIC_TEMP_NAME = re.compile(
     r"\.(?P<target>.+)\.(?P<token>[0-9a-f]{32})\.tmp\Z"
 )
+_UUID_TOKEN = re.compile(r"[0-9a-f]{32}\Z")
 _STAGING_MARKER_TARGET = re.compile(r"[0-9a-f]{32}\.json\Z")
 _USE_DIR_FD = os.name != "nt" and hasattr(os, "O_NOFOLLOW") and all(
     function in os.supports_dir_fd
@@ -120,10 +120,17 @@ class _StagingOrphan:
 
 
 @dataclass(frozen=True, slots=True)
+class _InitCandidate:
+    path: Path
+    resumable: bool
+
+
+@dataclass(frozen=True, slots=True)
 class _Recovery:
     staging: tuple[_StagingOrphan, ...] = ()
     pointers: tuple[Path, ...] = ()
     temporary_files: tuple[Path, ...] = ()
+    orphan_directories: tuple[Path, ...] = ()
 
 
 def _json_text(value: dict[str, object]) -> str:
@@ -311,11 +318,22 @@ def _opened_directory(path: Path) -> Iterator[int | None]:
 
 
 def _atomic_write_owned_text(path: Path, text: str) -> None:
+    temporary_name = f".{path.name}.{uuid.uuid4().hex}.tmp"
     if not _USE_DIR_FD:
-        atomic_write_text(path, text)
+        temporary_path = path.parent / temporary_name
+        descriptor = os.open(
+            temporary_path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+        with os.fdopen(descriptor, "w", encoding="utf-8") as fallback_handle:
+            _record_mutation("write-temp", temporary_path)
+            fallback_handle.write(text)
+            fallback_handle.flush()
+            os.fsync(fallback_handle.fileno())
+        os.replace(temporary_path, path)
         _record_mutation("write", path)
         return
-    temporary_name = f".{path.name}.{uuid.uuid4().hex}.tmp"
     with _opened_directory(path.parent) as directory_descriptor:
         assert directory_descriptor is not None
         descriptor = os.open(
@@ -434,7 +452,8 @@ def _remove_owned_tree(path: Path) -> None:
                 raise ValueError(f"stale or unowned report state: {path}")
             shutil.rmtree(path.name, dir_fd=descriptor)
     else:
-        if path.is_symlink() or not path.is_dir():
+        info = os.lstat(path)
+        if _is_symlink_or_junction(info) or not stat.S_ISDIR(info.st_mode):
             raise ValueError(f"stale or unowned report state: {path}")
         shutil.rmtree(path)
     _record_mutation("rmtree", path)
@@ -442,11 +461,13 @@ def _remove_owned_tree(path: Path) -> None:
 
 def _atomic_temp_target(path: Path) -> str | None:
     match = _ATOMIC_TEMP_NAME.fullmatch(path.name)
-    if (
-        match is None
-        or path.is_symlink()
-        or not path.is_file()
-    ):
+    if match is None:
+        return None
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    if _is_symlink_or_junction(info) or not stat.S_ISREG(info.st_mode):
         return None
     return match.group("target")
 
@@ -562,19 +583,31 @@ def _validate_generation(
 
 def _scan_staging(
     layout: _Layout,
-) -> tuple[tuple[_StagingOrphan, ...], tuple[Path, ...]]:
+) -> tuple[tuple[_StagingOrphan, ...], tuple[Path, ...], tuple[Path, ...]]:
     directories: dict[str, Path] = {}
+    init_directories: set[str] = set()
     markers: dict[str, Path] = {}
     temporary_files: list[Path] = []
     for path in layout.staging.iterdir():
-        if path.is_symlink():
+        info = os.lstat(path)
+        if _is_symlink_or_junction(info):
             raise ValueError(f"stale or unowned report state: {path}")
-        if path.is_dir():
+        if stat.S_ISDIR(info.st_mode):
+            if path.name.startswith(_STAGE_INIT_PREFIX):
+                token = path.name.removeprefix(_STAGE_INIT_PREFIX)
+                if _UUID_TOKEN.fullmatch(token) is None:
+                    raise ValueError(f"stale or unowned report state: {path}")
+                init_directories.add(path.name)
+            elif _UUID_TOKEN.fullmatch(path.name) is None:
+                raise ValueError(f"stale or unowned report state: {path}")
             directories[path.name] = path
-        elif path.is_file() and path.suffix == ".json":
+        elif stat.S_ISREG(info.st_mode) and path.suffix == ".json":
+            if _UUID_TOKEN.fullmatch(path.stem) is None:
+                raise ValueError(f"stale or unowned report state: {path}")
             markers[path.stem] = path
         elif (
-            (target := _atomic_temp_target(path)) is not None
+            stat.S_ISREG(info.st_mode)
+            and (target := _atomic_temp_target(path)) is not None
             and _STAGING_MARKER_TARGET.fullmatch(target) is not None
         ):
             temporary_files.append(path)
@@ -582,15 +615,23 @@ def _scan_staging(
             raise ValueError(f"stale or unowned report state: {path}")
 
     orphans: list[_StagingOrphan] = []
+    init_orphans: list[Path] = []
     handled_markers: set[str] = set()
     for name, directory in directories.items():
         internal_marker = directory / _STAGE_OWNER_NAME
         sidecar = markers.get(name)
-        if name.startswith(_STAGE_INIT_PREFIX) and not internal_marker.exists():
-            continue
+        if name in init_directories and not _lexists(internal_marker):
+            entries = list(directory.iterdir())
+            if not entries or (
+                len(entries) == 1
+                and _atomic_temp_target(entries[0]) == _STAGE_OWNER_NAME
+            ):
+                init_orphans.append(directory)
+                continue
+            raise ValueError(f"stale or unowned report state: {directory}")
         internal_document = (
             _read_metadata(internal_marker, state="staging")
-            if internal_marker.exists()
+            if _lexists(internal_marker)
             else None
         )
         sidecar_document = (
@@ -610,12 +651,15 @@ def _scan_staging(
         assert document is not None
         allowed_entries = {*_ARTIFACT_NAMES, _STAGE_OWNER_NAME}
         for entry in directory.iterdir():
+            entry_info = os.lstat(entry)
+            if _is_symlink_or_junction(entry_info) or not stat.S_ISREG(
+                entry_info.st_mode
+            ):
+                raise ValueError(f"stale or unowned report state: {directory}")
             if entry.name not in allowed_entries:
                 target = _atomic_temp_target(entry)
                 if target not in allowed_entries:
                     raise ValueError(f"stale or unowned report state: {directory}")
-            elif entry.is_symlink() or not entry.is_file():
-                raise ValueError(f"stale or unowned report state: {directory}")
         if sidecar is not None:
             handled_markers.add(name)
         orphans.append(
@@ -637,7 +681,7 @@ def _scan_staging(
                 generation=str(document["generation"]),
             )
         )
-    return tuple(orphans), tuple(temporary_files)
+    return tuple(orphans), tuple(temporary_files), tuple(init_orphans)
 
 
 def _scan_pointers(layout: _Layout, known_generations: set[str]) -> tuple[Path, ...]:
@@ -691,13 +735,15 @@ def _validate_public_pointer(layout: _Layout, known_generations: set[str]) -> No
 
 def _preflight(layout: _Layout) -> _Recovery:
     _validate_parent(layout)
+    control_candidates = _scan_control_init_candidates(layout)
+    init_orphans = [candidate.path for candidate in control_candidates]
     control_exists = _lexists(layout.control)
     if not control_exists:
         if _lexists(layout.destination):
             raise ValueError(
                 f"report destination is not owned by Tournament Forecaster: {layout.destination}"
             )
-        return _Recovery()
+        return _Recovery(orphan_directories=tuple(init_orphans))
     if layout.control.is_symlink() or not layout.control.is_dir():
         raise ValueError(f"stale or unowned report state: {layout.control}")
     _read_owned_json(
@@ -705,6 +751,8 @@ def _preflight(layout: _Layout) -> _Recovery:
         _control_owner(),
         "stale or unowned report state",
     )
+    focus_candidates = _scan_focus_init_candidates(layout)
+    init_orphans.extend(candidate.path for candidate in focus_candidates)
     for entry in layout.control.iterdir():
         if entry.name == _OWNER_NAME:
             continue
@@ -715,7 +763,7 @@ def _preflight(layout: _Layout) -> _Recovery:
             raise ValueError(
                 f"report destination is not owned by Tournament Forecaster: {layout.destination}"
             )
-        return _Recovery()
+        return _Recovery(orphan_directories=tuple(init_orphans))
     if layout.focus.is_symlink() or not layout.focus.is_dir():
         raise ValueError(f"stale or unowned report state: {layout.focus}")
     _read_owned_json(
@@ -730,7 +778,8 @@ def _preflight(layout: _Layout) -> _Recovery:
         if directory.is_symlink() or not directory.is_dir():
             raise ValueError(f"stale or unowned report state: {directory}")
 
-    staging, staging_temporary_files = _scan_staging(layout)
+    staging, staging_temporary_files, staging_init_orphans = _scan_staging(layout)
+    init_orphans.extend(staging_init_orphans)
     staged_generations = {orphan.generation for orphan in staging}
     generation_names: set[str] = set()
     for generation in layout.generations.iterdir():
@@ -775,6 +824,7 @@ def _preflight(layout: _Layout) -> _Recovery:
             *staging_temporary_files,
             *metadata_temporary_files,
         ),
+        orphan_directories=tuple(init_orphans),
     )
 
 
@@ -796,7 +846,11 @@ def _fsync_directory(path: Path) -> None:
 
 
 def _owned_json_matches(path: Path, expected: dict[str, object]) -> bool:
-    if path.is_symlink() or not path.is_file():
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return False
+    if _is_symlink_or_junction(info) or not stat.S_ISREG(info.st_mode):
         return False
     try:
         return json.loads(path.read_text(encoding="utf-8")) == expected
@@ -804,20 +858,116 @@ def _owned_json_matches(path: Path, expected: dict[str, object]) -> bool:
         return False
 
 
+def _classify_init_candidate(
+    entry: Path,
+    *,
+    parent: Path,
+    prefix: str,
+    expected_owner: dict[str, object],
+    expected_directories: tuple[str, ...],
+) -> _InitCandidate:
+    token = entry.name.removeprefix(prefix)
+    if entry.parent != parent or _UUID_TOKEN.fullmatch(token) is None:
+        raise ValueError(f"stale or unowned report state: {entry}")
+    try:
+        info = os.lstat(entry)
+    except FileNotFoundError as error:
+        raise ValueError(f"stale or unowned report state: {entry}") from error
+    if _is_symlink_or_junction(info) or not stat.S_ISDIR(info.st_mode):
+        raise ValueError(f"stale or unowned report state: {entry}")
+
+    children = sorted(entry.iterdir(), key=lambda path: path.name)
+    if not children:
+        return _InitCandidate(entry, resumable=False)
+    for child in children:
+        child_info = os.lstat(child)
+        if _is_symlink_or_junction(child_info):
+            raise ValueError(f"stale or unowned report state: {child}")
+    if len(children) == 1 and _atomic_temp_target(children[0]) == _OWNER_NAME:
+        return _InitCandidate(entry, resumable=False)
+
+    allowed = {_OWNER_NAME, *expected_directories}
+    if {child.name for child in children} - allowed:
+        raise ValueError(f"stale or unowned report state: {entry}")
+    owner = entry / _OWNER_NAME
+    if not _owned_json_matches(owner, expected_owner):
+        raise ValueError(f"stale or unowned report state: {owner}")
+    for name in expected_directories:
+        child = entry / name
+        if not _lexists(child):
+            continue
+        child_info = os.lstat(child)
+        if (
+            _is_symlink_or_junction(child_info)
+            or not stat.S_ISDIR(child_info.st_mode)
+            or any(child.iterdir())
+        ):
+            raise ValueError(f"stale or unowned report state: {child}")
+    return _InitCandidate(entry, resumable=True)
+
+
+def _scan_init_candidates(
+    parent: Path,
+    *,
+    prefix: str,
+    expected_owner: dict[str, object],
+    expected_directories: tuple[str, ...] = (),
+) -> tuple[_InitCandidate, ...]:
+    if not _lexists(parent):
+        return ()
+    candidates: list[_InitCandidate] = []
+    for entry in sorted(parent.iterdir(), key=lambda path: path.name):
+        if not entry.name.startswith(prefix):
+            continue
+        candidates.append(
+            _classify_init_candidate(
+                entry,
+                parent=parent,
+                prefix=prefix,
+                expected_owner=expected_owner,
+                expected_directories=expected_directories,
+            )
+        )
+    return tuple(candidates)
+
+
+def _scan_control_init_candidates(layout: _Layout) -> tuple[_InitCandidate, ...]:
+    return _scan_init_candidates(
+        layout.parent,
+        prefix=_CONTROL_INIT_PREFIX,
+        expected_owner=_control_owner(),
+    )
+
+
+def _scan_focus_init_candidates(layout: _Layout) -> tuple[_InitCandidate, ...]:
+    return _scan_init_candidates(
+        layout.control,
+        prefix=_focus_init_prefix(layout),
+        expected_owner=_focus_owner(layout.destination.name),
+        expected_directories=("generations", "metadata", "staging", "pointers"),
+    )
+
+
+def _select_init_candidate(
+    candidates: tuple[_InitCandidate, ...],
+    parent: Path,
+) -> Path | None:
+    selected = next((candidate for candidate in candidates if candidate.resumable), None)
+    removed = False
+    for candidate in candidates:
+        if candidate != selected:
+            _remove_owned_tree(candidate.path)
+            removed = True
+    if removed:
+        _fsync_directory(parent)
+    return selected.path if selected is not None else None
+
+
 def _control_init_candidate(layout: _Layout) -> Path | None:
-    if not layout.parent.exists():
-        return None
-    for entry in sorted(layout.parent.iterdir(), key=lambda path: path.name):
-        if not entry.name.startswith(_CONTROL_INIT_PREFIX):
-            continue
-        if entry.is_symlink() or not entry.is_dir():
-            raise ValueError(f"stale or unowned report state: {entry}")
-        if not _owned_json_matches(entry / _OWNER_NAME, _control_owner()):
-            continue
-        if {child.name for child in entry.iterdir()} != {_OWNER_NAME}:
-            raise ValueError(f"stale or unowned report state: {entry}")
-        return entry
-    return None
+    return _select_init_candidate(
+        _scan_control_init_candidates(layout),
+        layout.parent,
+    )
 
 
 def _install_control(layout: _Layout) -> None:
@@ -841,18 +991,10 @@ def _focus_init_prefix(layout: _Layout) -> str:
 
 
 def _focus_init_candidate(layout: _Layout) -> Path | None:
-    prefix = _focus_init_prefix(layout)
-    for entry in sorted(layout.control.iterdir(), key=lambda path: path.name):
-        if not entry.name.startswith(prefix):
-            continue
-        if entry.is_symlink() or not entry.is_dir():
-            raise ValueError(f"stale or unowned report state: {entry}")
-        if _owned_json_matches(
-            entry / _OWNER_NAME,
-            _focus_owner(layout.destination.name),
-        ):
-            return entry
-    return None
+    return _select_init_candidate(
+        _scan_focus_init_candidates(layout),
+        layout.control,
+    )
 
 
 def _complete_focus_candidate(layout: _Layout, candidate: Path) -> None:
@@ -906,6 +1048,10 @@ def _initialize_layout(layout: _Layout) -> None:
 def _recover(layout: _Layout, recovery: _Recovery) -> None:
     for temporary_file in recovery.temporary_files:
         _unlink_owned(temporary_file)
+    orphan_parents: set[Path] = set()
+    for orphan_directory in recovery.orphan_directories:
+        orphan_parents.add(orphan_directory.parent)
+        _remove_owned_tree(orphan_directory)
     for orphan in recovery.staging:
         generation = layout.generations / orphan.generation
         if not generation.exists():
@@ -921,6 +1067,9 @@ def _recover(layout: _Layout, recovery: _Recovery) -> None:
         _fsync_directory(layout.metadata)
     if recovery.pointers:
         _fsync_directory(layout.pointers)
+    for parent in sorted(orphan_parents, key=os.fspath):
+        if _lexists(parent):
+            _fsync_directory(parent)
 
 
 def _generation_name(forecast: Forecast, digest: str) -> str:
@@ -1075,6 +1224,7 @@ def _publish_generation(forecast: Forecast, destination: Path) -> Path:
         if not recovery.staging
         and not recovery.pointers
         and not recovery.temporary_files
+        and not recovery.orphan_directories
         else recovery
     )
     _recover(layout, recovery)
@@ -1083,6 +1233,7 @@ def _publish_generation(forecast: Forecast, destination: Path) -> Path:
         clean_recovery.staging
         or clean_recovery.pointers
         or clean_recovery.temporary_files
+        or clean_recovery.orphan_directories
     ):
         raise ValueError(f"stale or unowned report state: {layout.focus}")
     generation = _stage_generation(

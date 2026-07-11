@@ -422,6 +422,210 @@ def test_every_update_mutation_preserves_a_coherent_pointer_and_is_retryable(
         assert _assert_visible_generation_is_coherent(destination) == "run-report-0002"
 
 
+def test_every_fallback_first_publish_temp_creation_is_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import tournament_forecaster.reports.publication as publication
+
+    monkeypatch.setattr(publication, "_USE_DIR_FD", False)
+    observed: list[Path] = []
+    probe = _destination(tmp_path / "probe-fallback-first")
+    with monkeypatch.context() as patcher:
+        patcher.setattr(
+            publication,
+            "_after_filesystem_mutation",
+            lambda operation, path: observed.append(path)
+            if operation == "write-temp"
+            else None,
+        )
+        publication.write_report_bundle(_forecast(), probe)
+
+    assert len(observed) == 8
+    assert all(publication._ATOMIC_TEMP_NAME.fullmatch(path.name) for path in observed)
+
+    for failure_index in range(len(observed)):
+        destination = _destination(tmp_path / f"fallback-first-{failure_index}")
+        temporary_paths: list[Path] = []
+
+        def fail_after_temp_creation(operation: str, path: Path) -> None:
+            if operation != "write-temp":
+                return
+            temporary_paths.append(path)
+            if len(temporary_paths) == failure_index + 1:
+                raise _InjectedMutationFailure(f"fallback temp {len(temporary_paths)}")
+
+        with monkeypatch.context() as patcher:
+            patcher.setattr(
+                publication,
+                "_after_filesystem_mutation",
+                fail_after_temp_creation,
+            )
+            with pytest.raises(_InjectedMutationFailure, match="fallback temp"):
+                publication.write_report_bundle(_forecast(), destination)
+
+        interrupted_temp = temporary_paths[-1]
+        assert interrupted_temp.exists()
+        assert _assert_visible_generation_is_coherent(destination) is None
+
+        publication.write_report_bundle(_forecast(), destination)
+
+        assert not interrupted_temp.exists()
+        assert _assert_visible_generation_is_coherent(destination) == "run-report-0001"
+
+
+def test_every_fallback_update_temp_creation_preserves_old_pointer_and_retries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import tournament_forecaster.reports.publication as publication
+
+    monkeypatch.setattr(publication, "_USE_DIR_FD", False)
+    replacement = replace(
+        _forecast(),
+        run_id="run-report-0002",
+        generated_at="2026-07-11T13:00:00+00:00",
+    )
+    probe = _destination(tmp_path / "probe-fallback-update")
+    publication.write_report_bundle(_forecast(), probe)
+    observed: list[Path] = []
+    with monkeypatch.context() as patcher:
+        patcher.setattr(
+            publication,
+            "_after_filesystem_mutation",
+            lambda operation, path: observed.append(path)
+            if operation == "write-temp"
+            else None,
+        )
+        publication.write_report_bundle(replacement, probe)
+
+    assert len(observed) == 6
+    assert all(publication._ATOMIC_TEMP_NAME.fullmatch(path.name) for path in observed)
+
+    for failure_index in range(len(observed)):
+        destination = _destination(tmp_path / f"fallback-update-{failure_index}")
+        publication.write_report_bundle(_forecast(), destination)
+        old_pointer = os.readlink(destination)
+        temporary_paths: list[Path] = []
+
+        def fail_after_temp_creation(operation: str, path: Path) -> None:
+            if operation != "write-temp":
+                return
+            temporary_paths.append(path)
+            if len(temporary_paths) == failure_index + 1:
+                raise _InjectedMutationFailure(f"fallback temp {len(temporary_paths)}")
+
+        with monkeypatch.context() as patcher:
+            patcher.setattr(
+                publication,
+                "_after_filesystem_mutation",
+                fail_after_temp_creation,
+            )
+            with pytest.raises(_InjectedMutationFailure, match="fallback temp"):
+                publication.write_report_bundle(replacement, destination)
+
+        interrupted_temp = temporary_paths[-1]
+        assert interrupted_temp.exists()
+        assert os.readlink(destination) == old_pointer
+        assert _assert_visible_generation_is_coherent(destination) == "run-report-0001"
+
+        publication.write_report_bundle(replacement, destination)
+
+        assert not interrupted_temp.exists()
+        assert _assert_visible_generation_is_coherent(destination) == "run-report-0002"
+
+
+def _init_orphan_path(
+    publication: object,
+    destination: Path,
+    kind: str,
+    token: str,
+) -> Path:
+    layout = publication._layout(destination)  # type: ignore[attr-defined]
+    if kind == "control":
+        return layout.parent / f".tournament-forecast.init-{token}"
+    if kind == "focus":
+        return layout.control / f".{destination.name}.focus-init-{token}"
+    return layout.staging / f".stage-init-{token}"
+
+
+@pytest.mark.parametrize("kind", ["control", "focus", "stage"])
+@pytest.mark.parametrize("shape", ["empty", "owned-layout"])
+def test_retry_reclaims_strictly_recognized_init_orphans(
+    tmp_path: Path,
+    kind: str,
+    shape: str,
+) -> None:
+    import tournament_forecaster.reports.publication as publication
+
+    destination = _destination(tmp_path)
+    publication.write_report_bundle(_forecast(), destination)
+    orphan = _init_orphan_path(publication, destination, kind, "c" * 32)
+    orphan.mkdir()
+
+    if shape == "owned-layout" and kind == "control":
+        (orphan / "owner.json").write_text(
+            publication._json_text(publication._control_owner()),
+            encoding="utf-8",
+        )
+    elif shape == "owned-layout" and kind == "focus":
+        (orphan / "owner.json").write_text(
+            publication._json_text(publication._focus_owner(destination.name)),
+            encoding="utf-8",
+        )
+        for name in ("generations", "metadata", "staging", "pointers"):
+            (orphan / name).mkdir()
+    elif shape == "owned-layout":
+        (orphan / ".stage-owner.json").write_text(
+            publication._json_text(
+                publication._staging_metadata(
+                    "v2-orphan-0123456789abcdef",
+                    "0" * 64,
+                )
+            ),
+            encoding="utf-8",
+        )
+
+    publication.write_report_bundle(_forecast(), destination)
+
+    assert not os.path.lexists(orphan)
+    assert _assert_visible_generation_is_coherent(destination) == "run-report-0001"
+
+
+@pytest.mark.parametrize("kind", ["control", "focus", "stage"])
+@pytest.mark.parametrize("hostile_shape", ["bad-uuid", "symlink", "ambiguous"])
+def test_retry_preserves_hostile_init_lookalikes(
+    tmp_path: Path,
+    kind: str,
+    hostile_shape: str,
+) -> None:
+    import tournament_forecaster.reports.publication as publication
+
+    destination = _destination(tmp_path)
+    publication.write_report_bundle(_forecast(), destination)
+    old_pointer = os.readlink(destination)
+    token = "not-a-uuid" if hostile_shape == "bad-uuid" else "d" * 32
+    hostile = _init_orphan_path(publication, destination, kind, token)
+    sentinel_root = tmp_path / f"{kind}-{hostile_shape}-sentinel"
+
+    if hostile_shape == "symlink":
+        sentinel_root.mkdir()
+        sentinel = sentinel_root / "keep.txt"
+        sentinel.write_text("keep\n", encoding="utf-8")
+        hostile.symlink_to(sentinel_root, target_is_directory=True)
+    else:
+        hostile.mkdir()
+        sentinel = hostile / "keep.txt"
+        sentinel.write_text("keep\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="stale or unowned report state"):
+        publication.write_report_bundle(_forecast(), destination)
+
+    assert os.path.lexists(hostile)
+    assert sentinel.read_text(encoding="utf-8") == "keep\n"
+    assert os.readlink(destination) == old_pointer
+
+
 @pytest.mark.parametrize(
     "residue_location",
     ["marked-stage", "staging", "metadata"],
