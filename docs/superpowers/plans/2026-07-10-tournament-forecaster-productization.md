@@ -144,11 +144,11 @@ simulate_tournament(
 - `load_bundled_preset(name: str) -> Tournament`
 - `copy_template(name: str, destination: Path) -> Path`
 
-- [ ] Write failing parity and acceptance tests for four packaged presets and three templates.
-- [ ] Add an eight-team synthetic quickstart cup, a groups-to-one-leg contract, a league-table-to-seeded-knockout contract, and a groups-to-two-leg-knockout contract with a one-leg final.
-- [ ] Use only synthetic team names and document every file as redistributable project-authored test data.
-- [ ] Verify every preset validates and produces coherent stage/title probabilities offline.
-- [ ] Commit `feat: add packaged tournament format contracts`.
+- [x] Write failing parity and acceptance tests for four packaged presets and three templates.
+- [x] Add an eight-team synthetic quickstart cup, a groups-to-one-leg contract, a league-table-to-seeded-knockout contract, and a groups-to-two-leg-knockout contract with a one-leg final.
+- [x] Use only synthetic team names and document every file as redistributable project-authored test data.
+- [x] Verify every preset validates and produces coherent stage/title probabilities offline.
+- [x] Commit `feat: add packaged tournament format contracts` plus the adversarial qualification-contract fixes.
 
 ### Task 4: Reports, CLI, and Clone-to-First-Output
 
