@@ -19,7 +19,7 @@
 - Odds and models may challenge bounded context but never rewrite locked results or tournament topology.
 - No runtime dependency is required for the deterministic core.
 - Canonical package resources live under `src/tournament_forecaster/data`; root `presets/` copies are parity-tested for repository users.
-- Bundled competition contracts use synthetic teams and redistributable data. No FIFA, UEFA, CONMEBOL, bookmaker, or provider raw payload is committed.
+- Bundled package presets use synthetic teams and redistributable data. A repository-level real-world example may contain normalized fixture/result facts with retrieval timestamps and source citations, but no provider raw payload or trademarked visual asset is committed.
 - Existing `worldcup-brazil-report` behavior and the 534-test baseline remain green.
 
 ---
@@ -226,6 +226,60 @@ redact_url(url: str) -> str
 - [ ] Implement provider protocols and compatibility translation without importing legacy code into the generic core.
 - [ ] Verify focused security/provider tests and the full baseline.
 - [ ] Commit `feat: add safe provider and legacy boundaries`.
+
+### Task 5A: Real 2026 Snapshot, Honest Backtest, and Mid-Tournament Starts
+
+**Files:**
+- Modify: `src/tournament_forecaster/domain.py`
+- Modify: `src/tournament_forecaster/probabilities.py`
+- Modify: `src/tournament_forecaster/simulation.py`
+- Modify: `src/tournament_forecaster/cli.py`
+- Modify: `src/tournament_forecaster/schemas/tournament.schema.json`
+- Create: `src/tournament_forecaster/backtest.py`
+- Create: `src/tournament_forecaster/schemas/backtest.schema.json`
+- Create: `scripts/build_world_cup_2026_example.py`
+- Create: `examples/world-cup-2026-live/tournament.json`
+- Create: `examples/world-cup-2026-live/backtest.json`
+- Create: `examples/world-cup-2026-live/backtest-report.json`
+- Create: `examples/world-cup-2026-live/backtest-report.md`
+- Create: `examples/world-cup-2026-live/README.md`
+- Create: `examples/world-cup-2026-live/DATA_SOURCES.md`
+- Create: `tests/tournament_forecaster/test_backtest.py`
+- Create: `tests/examples/test_world_cup_2026_live.py`
+- Modify relevant stage and provider tests when required by the contracts below.
+
+**Interfaces:**
+
+```python
+predict_match_outcomes(
+    home_rating: float,
+    away_rating: float,
+    *,
+    home_advantage_points: float = 0.0,
+) -> OutcomeProbabilities
+
+evaluate_backtest(document: Mapping[str, object]) -> BacktestReport
+```
+
+```text
+tournament-forecast backtest --input PATH [--output PATH] [--min-resolved INT]
+```
+
+- A typed `team` entrant source supports a locked, mid-tournament bracket without reconstructing already-decided group-rank allocation rules.
+- Stage metadata may set `home_advantage_rating_points`; the World Cup example uses `0` for neutral-site forecasts rather than inheriting a hidden home boost.
+- The checked-in real-world example is a normalized snapshot retrieved from the official FIFA calendar API. It contains facts and source IDs only, never the raw provider payload.
+- The snapshot includes the complete 48-team topology, completed group/knockout facts available at its declared `retrieved_at`, and the remaining championship bracket. It defaults to a still-active focus team and can be rerun for any configured team without editing the file.
+- The backtest uses the project-authored rating seed frozen in commit `a7b6e694` on 2026-06-09, before the first tournament match. That provenance is explicit; it is not represented as an official FIFA rating or proof of universal calibration.
+- Backtest targets are 1X2 group-match outcomes evaluated out of sample against the frozen pre-tournament ratings. The report includes sample size, RPS, unscaled multiclass Brier, natural-log loss, top-pick accuracy, a uniform baseline, exclusions, model version, rating hash, and honest `ok`/`insufficient`/`no_resolved` status.
+- Backtest data requires `captured_at < kickoff_at`, a stable ratings hash, immutable result source IDs, and no target result inside the prediction snapshot. Metrics never return an apparent perfect zero for an empty sample.
+- The example builder must reject non-final provider rows, unknown teams, duplicate/conflicting scores, unsupported stages, and future results. It must map the FIFA singular `Quarter-final` label correctly and be deterministic for a saved normalized fixture.
+
+- [ ] Write red-first tests for exact 1X2 normalization, neutral equal-rating symmetry, explicit-team entrants, stage home-advantage behavior, leakage rejection, metric boundaries, and a full current-snapshot simulation.
+- [ ] Implement the exact outcome scorer, backtest evaluator/CLI, explicit mid-tournament entrants, and configurable home advantage.
+- [ ] Build the normalized World Cup 2026 snapshot from the official FIFA endpoint and document retrieval time, endpoint parameters, source IDs, rating provenance, and update procedure.
+- [ ] Run the real snapshot simulation and the 72-match group-stage backtest; commit reproducible backtest reports and record the generated forecast summary without tracking runtime output directories.
+- [ ] Verify the example from a clean wheel with network disabled after installation and prove `--focus-team` works without editing config.
+- [ ] Commit `feat: add live World Cup example and backtest` plus any adversarial fixes.
 
 ### Task 6: English Public Surface, Governance, and CI
 
