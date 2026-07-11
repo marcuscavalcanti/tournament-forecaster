@@ -11,6 +11,7 @@ from .domain import (
     Tournament,
     validate_tournament,
 )
+from .group_fixtures import list_group_fixtures
 from .simulation import simulate_tournament
 
 __all__ = [
@@ -23,6 +24,7 @@ __all__ = [
     "Tournament",
     "load_tournament",
     "load_tournament_document",
+    "list_group_fixtures",
     "simulate_tournament",
     "validate_tournament",
 ]

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
+from collections.abc import Callable
 from dataclasses import FrozenInstanceError
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -155,6 +157,9 @@ def _rank_fed_completed_tie_document(
                     "away_team_id": "south-city",
                 }
             ],
+            "qualification_bands": [
+                {"ranks": [1, 2], "destination": "final"},
+            ],
         }
         entrants = [
             {"type": "league_rank", "stage_id": "source-league", "rank": 1},
@@ -178,12 +183,18 @@ def _rank_fed_completed_tie_document(
         }
         if source_kind == "best_additional":
             source_stage["qualification"] = {
-                "direct_per_group": 0,
-                "best_additional": 2,
+                "direct_per_group": 1,
+                "best_additional": 1,
+                "additional_rank": 2,
             }
             entrants = [
                 {"type": "best_additional", "stage_id": "source-groups", "rank": 1},
-                {"type": "best_additional", "stage_id": "source-groups", "rank": 2},
+                {
+                    "type": "group_rank",
+                    "stage_id": "source-groups",
+                    "group": "A",
+                    "rank": 1,
+                },
             ]
         else:
             entrants = [
@@ -265,11 +276,16 @@ def _resolved_rank_lock_document(
                 {"match_id": "league-b-c", "home_team_id": "b", "away_team_id": "c"},
             ],
             "tiebreakers": ["points", "goal_difference", "goals_for", "team_id"],
+            "qualification_bands": [
+                {"ranks": [1, 2], "destination": "final"},
+                {"ranks": [3, 3], "destination": "eliminated"},
+            ],
         }
         entrants = [
             {"type": "league_rank", "stage_id": "source-league", "rank": 1},
             {"type": "league_rank", "stage_id": "source-league", "rank": 2},
         ]
+        source_fixtures = cast(list[dict[str, object]], source_stage["fixtures"])
         source_matches = [
             {
                 "match_id": fixture["match_id"],
@@ -278,7 +294,7 @@ def _resolved_rank_lock_document(
                 "away_team_id": fixture["away_team_id"],
                 "score": {"home": 1, "away": 0},
             }
-            for fixture in source_stage["fixtures"]  # type: ignore[union-attr]
+            for fixture in source_fixtures
         ]
     else:
         source_stage = {
@@ -290,12 +306,18 @@ def _resolved_rank_lock_document(
         }
         if source_kind == "best_additional":
             source_stage["qualification"] = {
-                "direct_per_group": 0,
-                "best_additional": 3,
+                "direct_per_group": 1,
+                "best_additional": 1,
+                "additional_rank": 2,
             }
             entrants = [
                 {"type": "best_additional", "stage_id": "source-groups", "rank": 1},
-                {"type": "best_additional", "stage_id": "source-groups", "rank": 2},
+                {
+                    "type": "group_rank",
+                    "stage_id": "source-groups",
+                    "group": "A",
+                    "rank": 1,
+                },
             ]
         else:
             entrants = [
@@ -354,6 +376,55 @@ def _resolved_rank_lock_document(
                 "score": {"home": 1, "away": 0},
             },
         ],
+    }
+
+
+def _league_band_document() -> dict[str, object]:
+    return {
+        "schema_version": 2,
+        "tournament": {"id": "league-band-cup", "display_name": "League Band Cup"},
+        "focus_team_id": "north-city",
+        "teams": [
+            {"id": "north-city", "display_name": "North City"},
+            {"id": "south-city", "display_name": "South City"},
+        ],
+        "stages": [
+            {
+                "id": "league-stage",
+                "type": "league_table",
+                "fixtures": [
+                    {
+                        "match_id": "league-1",
+                        "home_team_id": "north-city",
+                        "away_team_id": "south-city",
+                    }
+                ],
+                "qualification_bands": [
+                    {"ranks": [1, 2], "destination": "final"},
+                ],
+            },
+            {
+                "id": "final",
+                "type": "knockout",
+                "pairing": {
+                    "mode": "fixed",
+                    "ties": [
+                        {
+                            "id": "final-1",
+                            "entrants": [
+                                {"type": "league_rank", "stage_id": "league-stage", "rank": 1},
+                                {"type": "league_rank", "stage_id": "league-stage", "rank": 2},
+                            ],
+                        }
+                    ],
+                },
+                "legs": 1,
+                "home_away_order": "listed_team_first_leg_home",
+                "terminal": "championship",
+            },
+        ],
+        "ratings": {"north-city": 1600, "south-city": 1500},
+        "completed_matches": [],
     }
 
 
@@ -549,9 +620,10 @@ def test_completed_group_facts_require_exact_generated_match_ids() -> None:
         "group_rank",
         source_completed=True,
     )
+    completed_matches = cast(list[dict[str, object]], document["completed_matches"])
     group_fact = next(
         match
-        for match in document["completed_matches"]  # type: ignore[union-attr]
+        for match in completed_matches
         if match["stage_id"] == "source-groups"
     )
     group_fact["match_id"] = "fabricated-source-match"
@@ -657,12 +729,13 @@ def test_loader_rejects_invalid_knockout_format_knobs(
 
 
 @pytest.mark.parametrize(
-    ("direct_per_group", "best_additional"),
-    [(3, 0), (2, 1)],
+    ("direct_per_group", "best_additional", "message"),
+    [(3, 0, "attainable"), (2, 1, "every group")],
 )
 def test_loader_rejects_unattainable_group_qualification_counts(
     direct_per_group: int,
     best_additional: int,
+    message: str,
 ) -> None:
     _require_package()
     from tournament_forecaster.config import load_tournament_document
@@ -673,9 +746,57 @@ def test_loader_rejects_unattainable_group_qualification_counts(
     group_stage["qualification"] = {  # type: ignore[index]
         "direct_per_group": direct_per_group,
         "best_additional": best_additional,
+        **({"additional_rank": direct_per_group + 1} if best_additional else {}),
     }
 
-    with pytest.raises(TournamentValidationError, match="attainable"):
+    with pytest.raises(TournamentValidationError, match=message):
+        load_tournament_document(document)
+
+
+@pytest.mark.parametrize(
+    ("qualification", "message"),
+    [
+        ({"direct_per_group": 1, "best_additional": 1}, "additional rank"),
+        (
+            {"direct_per_group": 2, "best_additional": 1, "additional_rank": 2},
+            "overlap",
+        ),
+        (
+            {"direct_per_group": 1, "best_additional": 1, "additional_rank": 5},
+            "every group",
+        ),
+        (
+            {"direct_per_group": 1, "best_additional": 2, "additional_rank": 2},
+            "number of groups",
+        ),
+    ],
+)
+def test_loader_rejects_invalid_additional_qualification_contract(
+    qualification: dict[str, int],
+    message: str,
+) -> None:
+    _require_package()
+    from tournament_forecaster.config import load_tournament_document
+    from tournament_forecaster.errors import TournamentValidationError
+
+    document = _document()
+    teams = document["teams"]
+    ratings = document["ratings"]
+    group_stage = document["stages"][0]  # type: ignore[index]
+    assert isinstance(teams, list) and isinstance(ratings, dict)
+    teams.extend(
+        [
+            {"id": "east-city", "display_name": "East City"},
+            {"id": "west-city", "display_name": "West City"},
+        ]
+    )
+    ratings.update({"east-city": 1400, "west-city": 1300})
+    group_stage["groups"] = {  # type: ignore[index]
+        "A": ["north-city", "south-city", "east-city", "west-city"]
+    }
+    group_stage["qualification"] = qualification  # type: ignore[index]
+
+    with pytest.raises(TournamentValidationError, match=message):
         load_tournament_document(document)
 
 
@@ -689,6 +810,7 @@ def test_best_additional_source_rank_must_be_attainable() -> None:
     group_stage["qualification"] = {  # type: ignore[index]
         "direct_per_group": 1,
         "best_additional": 1,
+        "additional_rank": 2,
     }
     final = document["stages"][1]  # type: ignore[index]
     final["pairing"]["ties"] = [  # type: ignore[index]
@@ -703,6 +825,41 @@ def test_best_additional_source_rank_must_be_attainable() -> None:
 
     with pytest.raises(TournamentValidationError, match="does not resolve"):
         load_tournament_document(document)
+
+
+def test_league_band_destination_must_reference_an_existing_stage() -> None:
+    _require_package()
+    from tournament_forecaster.config import load_tournament_document
+    from tournament_forecaster.errors import TournamentValidationError
+
+    document = _league_band_document()
+    band = document["stages"][0]["qualification_bands"][0]  # type: ignore[index]
+    band["destination"] = "seeded-final"  # type: ignore[index]
+
+    with pytest.raises(TournamentValidationError, match="destination references an unknown stage"):
+        load_tournament_document(document)
+
+
+def test_league_rank_sources_must_exactly_match_destination_band_ranks() -> None:
+    _require_package()
+    from tournament_forecaster.config import load_tournament_document
+    from tournament_forecaster.errors import TournamentValidationError
+
+    document = _league_band_document()
+    band = document["stages"][0]["qualification_bands"][0]  # type: ignore[index]
+    band["ranks"] = [1, 1]  # type: ignore[index]
+
+    with pytest.raises(TournamentValidationError, match="bands do not align"):
+        load_tournament_document(document)
+
+
+def test_league_rank_sources_accept_exact_destination_band_ranks() -> None:
+    _require_package()
+    from tournament_forecaster.config import load_tournament_document
+
+    tournament = load_tournament_document(_league_band_document())
+
+    assert [stage["id"] for stage in tournament.stages] == ["league-stage", "final"]
 
 
 def test_loader_rejects_non_ascii_stable_identifier() -> None:
@@ -1287,6 +1444,9 @@ def test_completed_league_match_must_reference_configured_fixture() -> None:
                     "away_team_id": "south-city",
                 }
             ],
+            "qualification_bands": [
+                {"ranks": [1, 2], "destination": "final"},
+            ],
         },
         _terminal_stage(
             entrants=[
@@ -1367,17 +1527,14 @@ def test_json_loader_rejects_exponent_overflow_in_nested_metadata(tmp_path: Path
 )
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
 def test_loader_rejects_nested_non_finite_numbers_from_mapping(
-    mutate: object,
+    mutate: Callable[[dict[str, object], float], None],
     value: float,
 ) -> None:
     _require_package()
-    from collections.abc import Callable
-
     from tournament_forecaster.config import load_tournament_document
     from tournament_forecaster.errors import TournamentValidationError
 
     document = _document()
-    assert isinstance(mutate, Callable)
     mutate(document, value)
 
     with pytest.raises(TournamentValidationError, match="finite"):

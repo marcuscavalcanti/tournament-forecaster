@@ -15,7 +15,7 @@
       "rounds_per_pair": 1,
       "points": {"win": 3, "draw": 1, "loss": 0},
       "tiebreakers": ["points", "goal_difference", "goals_for", "wins", "rating", "team_id"],
-      "qualification": {"direct_per_group": 2, "best_additional": 0}
+      "qualification": {"direct_per_group": 2, "best_additional": 0, "additional_rank": 3}
     },
     {
       "id": "semi-finals", "type": "knockout",

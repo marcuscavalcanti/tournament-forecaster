@@ -19,7 +19,7 @@
       ],
       "points": {"win": 3, "draw": 1, "loss": 0},
       "tiebreakers": ["points", "goal_difference", "goals_for", "wins", "rating", "team_id"],
-      "qualification_bands": [{"ranks": [1, 4], "destination": "seeded-quarter-finals"}, {"ranks": [5, 8], "destination": "unseeded-quarter-finals"}]
+      "qualification_bands": [{"ranks": [1, 8], "destination": "quarter-finals"}]
     },
     {
       "id": "quarter-finals", "type": "knockout",

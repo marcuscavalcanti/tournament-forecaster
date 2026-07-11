@@ -5,8 +5,12 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import combinations
+from typing import TYPE_CHECKING
 
 from .errors import TournamentValidationError
+
+if TYPE_CHECKING:
+    from .domain import Tournament
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +89,25 @@ def generate_group_fixture_specs(
                     )
                 )
     return tuple(fixtures)
+
+
+def list_group_fixtures(
+    tournament: Tournament,
+    stage_id: str,
+) -> tuple[GroupFixtureSpec, ...]:
+    """List stable fixture identities for one configured group stage."""
+
+    from .domain import Tournament
+
+    if not isinstance(tournament, Tournament):
+        raise TournamentValidationError("tournament must be a Tournament")
+    matching_stages = [stage for stage in tournament.stages if stage.get("id") == stage_id]
+    if not matching_stages:
+        raise TournamentValidationError("group fixture stage id does not exist")
+    stage = matching_stages[0]
+    if stage.get("type") != "round_robin_groups":
+        raise TournamentValidationError("group fixture stage must be a round-robin group stage")
+    return generate_group_fixture_specs(stage)
 
 
 def group_fixture_contract(

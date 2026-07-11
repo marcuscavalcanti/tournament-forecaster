@@ -192,10 +192,19 @@ def calculate_group_tables(
         for group_id in sorted(rankings)
         for row in rankings[group_id][:direct_per_group]
     )
+    additional_rank_value = qualification.get("additional_rank")
+    if (additional_count > 0 or additional_rank_value is not None) and (
+        isinstance(additional_rank_value, bool)
+        or not isinstance(additional_rank_value, int)
+        or additional_rank_value < 1
+    ):
+        raise TournamentValidationError(
+            "group qualification additional rank must be a positive integer"
+        )
+    additional_rank = int(additional_rank_value or 1)
     additional_candidates = tuple(
-        row
+        rankings[group_id][additional_rank - 1]
         for group_id in sorted(rankings)
-        for row in rankings[group_id][direct_per_group:]
     )
     best_additional = tuple(
         row.team_id

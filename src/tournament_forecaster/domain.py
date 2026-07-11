@@ -476,7 +476,7 @@ def _validate_group_stage(
         qualification = _mapping(stage["qualification"], f"{label} qualification")
         _reject_unknown_properties(
             qualification,
-            frozenset({"direct_per_group", "best_additional"}),
+            frozenset({"direct_per_group", "best_additional", "additional_rank"}),
             f"{label} qualification",
         )
         direct_per_group = _integer(
@@ -491,20 +491,32 @@ def _validate_group_stage(
             raise TournamentValidationError(
                 f"{label} qualification counts must be attainable from every group roster"
             )
-        additional_candidates = sum(
-            roster_size - direct_per_group for roster_size in roster_sizes
-        )
-        if best_additional > additional_candidates:
+        if best_additional > len(roster_sizes):
             raise TournamentValidationError(
-                f"{label} qualification counts must be attainable from group rosters"
+                f"{label} additional qualification count cannot exceed the number of groups"
             )
+        additional_rank_value = qualification.get("additional_rank")
+        if best_additional > 0 or additional_rank_value is not None:
+            additional_rank = _integer(
+                additional_rank_value,
+                f"{label} additional rank",
+                minimum=1,
+            )
+            if additional_rank <= direct_per_group:
+                raise TournamentValidationError(
+                    f"{label} additional rank cannot overlap direct qualification ranks"
+                )
+            if any(additional_rank > roster_size for roster_size in roster_sizes):
+                raise TournamentValidationError(
+                    f"{label} additional rank must exist in every group roster"
+                )
     return memberships
 
 
 def _validate_league_stage(
     stage: Mapping[str, object],
     team_ids: set[str],
-) -> dict[str, frozenset[str]]:
+) -> tuple[dict[str, frozenset[str]], dict[str, frozenset[int]]]:
     stage_id = str(stage["id"])
     label = f"league stage {stage_id}"
     _reject_unknown_properties(stage, _LEAGUE_STAGE_PROPERTIES, label)
@@ -534,6 +546,8 @@ def _validate_league_stage(
         _validate_points(stage["points"], f"{label} points")
     if "tiebreakers" in stage:
         _validate_tiebreakers(stage["tiebreakers"], f"{label} tiebreakers")
+    band_ranks: dict[str, set[int]] = {}
+    used_ranks: set[int] = set()
     if "qualification_bands" in stage:
         bands = _sequence(stage["qualification_bands"], f"{label} qualification bands")
         for band_value in bands:
@@ -548,13 +562,42 @@ def _validate_league_stage(
                 raise TournamentValidationError(
                     f"{label} qualification band ranks must contain two values"
                 )
-            _integer(ranks[0], f"{label} qualification band first rank", minimum=1)
-            _integer(ranks[1], f"{label} qualification band last rank", minimum=1)
-            _stable_id(
+            first_rank = _integer(
+                ranks[0],
+                f"{label} qualification band first rank",
+                minimum=1,
+            )
+            last_rank = _integer(
+                ranks[1],
+                f"{label} qualification band last rank",
+                minimum=1,
+            )
+            if first_rank > last_rank:
+                raise TournamentValidationError(
+                    f"{label} qualification band ranks must be ordered"
+                )
+            fixture_team_ids = {
+                team_id for teams in fixture_teams.values() for team_id in teams
+            }
+            if last_rank > len(fixture_team_ids):
+                raise TournamentValidationError(
+                    f"{label} qualification band ranks must be attainable"
+                )
+            destination = _stable_id(
                 band.get("destination"),
                 f"{label} qualification band destination",
             )
-    return fixture_teams
+            covered_ranks = set(range(first_rank, last_rank + 1))
+            if covered_ranks & used_ranks:
+                raise TournamentValidationError(
+                    f"{label} qualification bands cannot overlap"
+                )
+            used_ranks.update(covered_ranks)
+            band_ranks.setdefault(destination, set()).update(covered_ranks)
+    return fixture_teams, {
+        destination: frozenset(ranks)
+        for destination, ranks in band_ranks.items()
+    }
 
 
 def _validate_entrant(source_value: object) -> Mapping[str, object]:
@@ -766,6 +809,7 @@ def validate_tournament(tournament: Tournament) -> None:
         dict[str, tuple[frozenset[str], int]],
     ] = {}
     league_fixtures: dict[str, dict[str, frozenset[str]]] = {}
+    league_qualification_bands: dict[str, dict[str, frozenset[int]]] = {}
     stage_leg_limits: dict[str, int] = {}
     knockout_sources: dict[str, tuple[Mapping[str, object], ...]] = {}
     tie_owners: dict[str, str] = {}
@@ -782,7 +826,9 @@ def validate_tournament(tournament: Tournament) -> None:
             group_fixture_contracts[stable_stage_id] = group_fixture_contract(stage)
             stage_leg_limits[stable_stage_id] = 1
         elif stage_type == "league_table":
-            league_fixtures[stable_stage_id] = _validate_league_stage(stage, team_ids)
+            fixtures, bands = _validate_league_stage(stage, team_ids)
+            league_fixtures[stable_stage_id] = fixtures
+            league_qualification_bands[stable_stage_id] = bands
             stage_leg_limits[stable_stage_id] = 1
         else:
             legs, tie_ids, sources = _validate_knockout_stage(stage)
@@ -804,7 +850,21 @@ def validate_tournament(tournament: Tournament) -> None:
             "tournament must define exactly one knockout championship terminal"
         )
     championship_stage_id = championship_terminals[0]
+    for bands in league_qualification_bands.values():
+        for destination in bands:
+            if destination == "eliminated":
+                continue
+            destination_stage = stages_by_id.get(destination)
+            if destination_stage is None:
+                raise TournamentValidationError(
+                    "league qualification band destination references an unknown stage"
+                )
+            if destination_stage.get("type") != "knockout":
+                raise TournamentValidationError(
+                    "league qualification band destination must reference a knockout stage"
+                )
     dependencies: dict[str, set[str]] = {stage_id: set() for stage_id in stage_ids}
+    league_source_ranks: dict[tuple[str, str], set[int]] = {}
     for target_stage_id, sources in knockout_sources.items():
         for source in sources:
             source_type = source["type"]
@@ -847,12 +907,29 @@ def validate_tournament(tournament: Tournament) -> None:
                     source_rank = _integer(source["rank"], "league_rank entrant rank", minimum=1)
                     if source_rank > len(fixture_teams):
                         raise TournamentValidationError("league_rank entrant does not resolve")
+                    league_source_ranks.setdefault(
+                        (source_stage_id, target_stage_id),
+                        set(),
+                    ).add(source_rank)
             else:
                 match_id = str(source["match_id"])
                 owner_stage_id = tie_owners.get(match_id)
                 if owner_stage_id is None:
                     raise TournamentValidationError("match_winner entrant references an unknown tie")
                 dependencies[target_stage_id].add(owner_stage_id)
+    band_contracts = {
+        (league_stage_id, destination): set(ranks)
+        for league_stage_id, bands in league_qualification_bands.items()
+        for destination, ranks in bands.items()
+        if destination != "eliminated"
+    }
+    if set(band_contracts) != set(league_source_ranks) or any(
+        band_contracts[key] != league_source_ranks[key]
+        for key in band_contracts.keys() & league_source_ranks.keys()
+    ):
+        raise TournamentValidationError(
+            "league qualification bands do not align with league_rank pairing sources"
+        )
     if any(
         championship_stage_id in required_stages
         for required_stages in dependencies.values()

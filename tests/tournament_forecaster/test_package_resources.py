@@ -61,8 +61,7 @@ def _representative_tournament_document() -> dict[str, object]:
                 "points": {"win": 3, "draw": 1, "loss": 0},
                 "tiebreakers": ["points", "goal_difference", "goals_for", "wins"],
                 "qualification_bands": [
-                    {"ranks": [1, 2], "destination": "final"},
-                    {"ranks": [3, 4], "destination": "eliminated"},
+                    {"ranks": [1, 2], "destination": "eliminated"},
                 ],
             },
             {
@@ -141,11 +140,11 @@ def _representative_forecast_document() -> dict[str, object]:
     ).to_dict()
 
 
-def _schema_resources() -> dict[str, dict[str, object]]:
+def _schema_resources() -> dict[str, Any]:
     _require_package()
     from tournament_forecaster.resources import resource_path
 
-    schemas: dict[str, dict[str, object]] = {}
+    schemas: dict[str, Any] = {}
     for filename in ("tournament.schema.json", "forecast.schema.json"):
         with resource_path("schemas", filename) as path:
             schemas[filename] = json.loads(path.read_text(encoding="utf-8"))
@@ -187,6 +186,19 @@ def test_schema_resources_validate_representative_domain_documents() -> None:
     )
     assert tournament_errors == []
     assert forecast_errors == []
+
+
+def test_schema_and_loader_accept_explicit_additional_rank() -> None:
+    from tournament_forecaster.config import load_tournament_document
+
+    document = _representative_tournament_document()
+    qualification = document["stages"][0]["qualification"]  # type: ignore[index]
+    assert isinstance(qualification, dict)
+    qualification["additional_rank"] = 2
+
+    load_tournament_document(document)
+    validator = _draft_2020_validator()(_schema_resources()["tournament.schema.json"])
+    assert list(validator.iter_errors(document)) == []
 
 
 @pytest.mark.parametrize(
@@ -459,6 +471,8 @@ def test_built_wheel_exposes_packages_scripts_and_schema_resources_in_isolation(
         members = set(archive.namelist())
     assert "tournament_forecaster/schemas/tournament.schema.json" in members
     assert "tournament_forecaster/schemas/forecast.schema.json" in members
+    assert "tournament_forecaster/data/presets/synthetic-cup/tournament.json" in members
+    assert "tournament_forecaster/data/templates/group-knockout/tournament.json" in members
     assert "worldcup_brazil/cli.py" in members
 
     venv = tmp_path / "venv"
@@ -484,7 +498,8 @@ from importlib.metadata import entry_points
 from pathlib import Path
 import tournament_forecaster
 import worldcup_brazil
-from tournament_forecaster.resources import resource_path
+from tournament_forecaster import list_group_fixtures
+from tournament_forecaster.resources import copy_template, load_bundled_preset, resource_path
 
 source_root = Path({str(repository_root)!r}).resolve()
 assert source_root not in Path(tournament_forecaster.__file__).resolve().parents
@@ -493,6 +508,10 @@ for filename in ("tournament.schema.json", "forecast.schema.json"):
     with resource_path("schemas", filename) as path:
         schema = json.loads(path.read_text(encoding="utf-8"))
     assert schema["$defs"]
+preset = load_bundled_preset("synthetic-cup")
+assert list_group_fixtures(preset, "group-stage")
+copied = copy_template("group-knockout", Path("copied-group-template"))
+assert tournament_forecaster.load_tournament(copied).id == "group-knockout-template"
 commands = {{entry.name for entry in entry_points(group="console_scripts")}}
 assert {{"tournament-forecast", "worldcup-brazil-report"}} <= commands
 print("isolated wheel resources verified")

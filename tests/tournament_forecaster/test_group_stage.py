@@ -93,7 +93,11 @@ def test_group_qualification_exposes_direct_and_best_additional_entrants() -> No
         },
         "points": {"win": 3, "draw": 1, "loss": 0},
         "tiebreakers": ["points", "goal_difference", "goals_for", "rating"],
-        "qualification": {"direct_per_group": 1, "best_additional": 1},
+        "qualification": {
+            "direct_per_group": 1,
+            "best_additional": 1,
+            "additional_rank": 2,
+        },
     }
     ratings = {
         "a1": 1900.0,
@@ -120,3 +124,82 @@ def test_group_qualification_exposes_direct_and_best_additional_entrants() -> No
     assert [row.team_id for row in result.rankings["B"]] == ["b1", "b2", "b3"]
     assert result.best_additional_team_ids == ("a2",)
     assert result.qualified_team_ids == ("a1", "b1", "a2")
+
+
+def test_additional_rank_uses_one_locked_candidate_per_group_at_seed_11() -> None:
+    stage = {
+        "id": "groups",
+        "type": "round_robin_groups",
+        "groups": {
+            "A": ["a1", "a2", "a3", "a4"],
+            "B": ["b1", "b2", "b3", "b4"],
+        },
+        "points": {"win": 3, "draw": 1, "loss": 0},
+        "tiebreakers": ["points", "goal_difference", "goals_for", "wins", "rating"],
+        "qualification": {
+            "direct_per_group": 2,
+            "best_additional": 2,
+            "additional_rank": 3,
+        },
+    }
+    winners = {
+        frozenset(("a1", "a2")): "a1",
+        frozenset(("a1", "a3")): "a1",
+        frozenset(("a1", "a4")): "a1",
+        frozenset(("a2", "a3")): "a2",
+        frozenset(("a2", "a4")): "a4",
+        frozenset(("a3", "a4")): "a3",
+        frozenset(("b1", "b2")): "b1",
+        frozenset(("b1", "b3")): "b1",
+        frozenset(("b1", "b4")): "b1",
+        frozenset(("b2", "b3")): "b2",
+        frozenset(("b2", "b4")): "b2",
+        frozenset(("b3", "b4")): None,
+    }
+    completed = []
+    for fixture in generate_group_fixtures(stage):
+        winner = winners[frozenset((fixture.home_team_id, fixture.away_team_id))]
+        score = (
+            Score(0, 0)
+            if winner is None
+            else Score(1, 0)
+            if winner == fixture.home_team_id
+            else Score(0, 1)
+        )
+        completed.append(
+            CompletedMatch(
+                match_id=fixture.match_id,
+                stage_id="groups",
+                home_team_id=fixture.home_team_id,
+                away_team_id=fixture.away_team_id,
+                score=score,
+            )
+        )
+
+    def forbidden_score(*args: object) -> Score:
+        raise AssertionError("a locked group match was resimulated")
+
+    result = simulate_group_stage(
+        stage,
+        ratings={
+            "a1": 1800.0,
+            "a2": 1700.0,
+            "a3": 1600.0,
+            "a4": 1500.0,
+            "b1": 1400.0,
+            "b2": 1300.0,
+            "b3": 1200.0,
+            "b4": 1100.0,
+        },
+        completed_matches=tuple(completed),
+        rng=random.Random(11),
+        score_simulator=forbidden_score,
+    )
+
+    assert [row.team_id for row in result.rankings["A"]] == ["a1", "a2", "a3", "a4"]
+    assert [row.team_id for row in result.rankings["B"]] == ["b1", "b2", "b3", "b4"]
+    assert result.best_additional_team_ids == ("a3", "b3")
+    assert result.qualified_team_ids == ("a1", "a2", "b1", "b2", "a3", "b3")
+    assert "a4" not in result.qualified_team_ids
+    assert len(result.qualified_team_ids) == len(set(result.qualified_team_ids)) == 6
+    assert len({team_id[0] for team_id in result.best_additional_team_ids}) == 2

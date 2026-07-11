@@ -5,9 +5,9 @@
     "display_name": "League and Knockout Style Contract",
     "season": "2026"
   },
-  "focus_team_id": "atlas-fc",
+  "focus_team_id": "aster-vale-orbitals",
   "teams": [
-    {"id": "atlas-fc", "display_name": "Atlas FC"},
+    {"id": "aster-vale-orbitals", "display_name": "Aster Vale Orbitals"},
     {"id": "beacon-town", "display_name": "Beacon Town"},
     {"id": "comet-city", "display_name": "Comet City"},
     {"id": "drift-united", "display_name": "Drift United"},
@@ -21,15 +21,15 @@
       "id": "league-stage",
       "type": "league_table",
       "fixtures": [
-        {"match_id": "league-1", "home_team_id": "atlas-fc", "away_team_id": "beacon-town"},
+        {"match_id": "league-1", "home_team_id": "aster-vale-orbitals", "away_team_id": "beacon-town"},
         {"match_id": "league-2", "home_team_id": "comet-city", "away_team_id": "drift-united"},
         {"match_id": "league-3", "home_team_id": "ember-athletic", "away_team_id": "forge-club"},
         {"match_id": "league-4", "home_team_id": "grove-rangers", "away_team_id": "horizon-fc"},
-        {"match_id": "league-5", "home_team_id": "atlas-fc", "away_team_id": "comet-city"},
+        {"match_id": "league-5", "home_team_id": "aster-vale-orbitals", "away_team_id": "comet-city"},
         {"match_id": "league-6", "home_team_id": "beacon-town", "away_team_id": "drift-united"},
         {"match_id": "league-7", "home_team_id": "ember-athletic", "away_team_id": "grove-rangers"},
         {"match_id": "league-8", "home_team_id": "forge-club", "away_team_id": "horizon-fc"},
-        {"match_id": "league-9", "home_team_id": "atlas-fc", "away_team_id": "drift-united"},
+        {"match_id": "league-9", "home_team_id": "aster-vale-orbitals", "away_team_id": "drift-united"},
         {"match_id": "league-10", "home_team_id": "beacon-town", "away_team_id": "comet-city"},
         {"match_id": "league-11", "home_team_id": "ember-athletic", "away_team_id": "horizon-fc"},
         {"match_id": "league-12", "home_team_id": "forge-club", "away_team_id": "grove-rangers"}
@@ -37,8 +37,7 @@
       "points": {"win": 3, "draw": 1, "loss": 0},
       "tiebreakers": ["points", "goal_difference", "goals_for", "wins", "rating", "team_id"],
       "qualification_bands": [
-        {"ranks": [1, 4], "destination": "seeded-quarter-finals"},
-        {"ranks": [5, 8], "destination": "unseeded-quarter-finals"}
+        {"ranks": [1, 8], "destination": "quarter-finals"}
       ]
     },
     {
@@ -90,7 +89,7 @@
     }
   ],
   "ratings": {
-    "atlas-fc": 1660,
+    "aster-vale-orbitals": 1660,
     "beacon-town": 1620,
     "comet-city": 1590,
     "drift-united": 1560,
