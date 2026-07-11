@@ -20,7 +20,7 @@
           "selection_id": {"type": "string", "minLength": 1},
           "decimal_odds": {"type": "number", "exclusiveMinimum": 1},
           "bookmaker": {"type": "string", "minLength": 1},
-          "source_url": {"type": "string", "pattern": "^https?://"},
+          "source_url": {"type": "string", "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://"},
           "source_id": {"type": "string", "minLength": 1},
           "metadata": {"type": "object"}
         }

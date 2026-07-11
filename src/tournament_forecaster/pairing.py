@@ -82,7 +82,7 @@ def validate_locked_pairs(
     if mode == "fixed":
         for tie_id, locked_pair in locked_pairs.items():
             resolved_pair = resolved_by_id.get(tie_id)
-            if resolved_pair is None or set(locked_pair) != set(resolved_pair):
+            if resolved_pair is None or locked_pair != resolved_pair:
                 raise TournamentValidationError(
                     "completed tie contradicts fixed pairing sources"
                 )
@@ -90,10 +90,7 @@ def validate_locked_pairs(
         seeded = {first_team_id for _, first_team_id, _ in resolved_ties}
         unseeded = {second_team_id for _, _, second_team_id in resolved_ties}
         for locked_pair in locked_pairs.values():
-            if (
-                sum(team_id in seeded for team_id in locked_pair) != 1
-                or sum(team_id in unseeded for team_id in locked_pair) != 1
-            ):
+            if locked_pair[0] not in seeded or locked_pair[1] not in unseeded:
                 raise TournamentValidationError(
                     "completed seeded tie contradicts configured seed pots"
                 )

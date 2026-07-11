@@ -112,12 +112,13 @@ def list_group_fixtures(
 
 def group_fixture_contract(
     stage: Mapping[str, object],
-) -> dict[str, tuple[frozenset[str], int]]:
+) -> dict[str, tuple[str, str, int]]:
     """Return exact completed-fact identity keyed by canonical match ID."""
 
     return {
         fixture.match_id: (
-            frozenset((fixture.home_team_id, fixture.away_team_id)),
+            fixture.home_team_id,
+            fixture.away_team_id,
             fixture.leg,
         )
         for fixture in generate_group_fixture_specs(stage)

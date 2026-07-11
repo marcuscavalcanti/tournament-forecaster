@@ -65,13 +65,34 @@ def _legacy_interval(value: object, label: str) -> list[float]:
     return [_percentage(bounds[0], label), _percentage(bounds[1], label)]
 
 
+def _leaf_paths(value: object, path: str) -> tuple[str, ...]:
+    if isinstance(value, Mapping):
+        if not value:
+            return (path,)
+        return tuple(
+            leaf
+            for key, item in value.items()
+            for leaf in _leaf_paths(item, f"{path}.{key}" if path else str(key))
+        )
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        if not value:
+            return (path,)
+        return tuple(
+            leaf
+            for index, item in enumerate(value)
+            for leaf in _leaf_paths(item, f"{path}[{index}]")
+        )
+    return (path,)
+
+
 def legacy_to_generic(document: Mapping[str, object]) -> CompatibilityConversion:
     """Convert one legacy LinkedIn bundle into a validated v2 forecast document."""
 
     root = _mapping(document, "legacy artifact")
     bundle = _mapping(root.get("bundle"), "legacy artifact bundle")
-    mapped: dict[str, str] = {"bundle": "forecast"}
+    mapped: dict[str, str] = {}
     defaulted: dict[str, object] = {
+        "schema_version": 2,
         "run_id": "legacy-worldcup-brazil",
         "tournament_id": "world-cup-2026",
         "focus_team_id": "brazil",
@@ -104,6 +125,7 @@ def legacy_to_generic(document: Mapping[str, object]) -> CompatibilityConversion
         raise TournamentValidationError("legacy stage probabilities must contain titulo")
 
     intervals: dict[str, list[float]] = {}
+    intervals_present = "stage_confidence_intervals" in bundle
     raw_intervals = bundle.get("stage_confidence_intervals", {})
     for legacy_stage, value in _mapping(raw_intervals, "legacy confidence intervals").items():
         source_path = f"bundle.stage_confidence_intervals.{legacy_stage}"
@@ -112,16 +134,29 @@ def legacy_to_generic(document: Mapping[str, object]) -> CompatibilityConversion
         elif legacy_stage in _LEGACY_TO_GENERIC_STAGE:
             target = _LEGACY_TO_GENERIC_STAGE[legacy_stage]
         else:
-            dropped.add(source_path)
+            dropped.update(_leaf_paths(value, source_path))
             continue
         intervals[target] = _legacy_interval(value, source_path)
-        mapped[source_path] = f"confidence_intervals.{target}"
+        mapped[f"{source_path}[0]"] = f"confidence_intervals.{target}[0]"
+        mapped[f"{source_path}[1]"] = f"confidence_intervals.{target}[1]"
+    if not intervals:
+        if intervals_present and not raw_intervals:
+            mapped["bundle.stage_confidence_intervals"] = "confidence_intervals"
+        else:
+            defaulted["confidence_intervals"] = {}
 
+    warnings_present = "warnings" in bundle
     raw_warnings = bundle.get("warnings", [])
     warnings = list(_sequence(raw_warnings, "legacy warnings"))
     if not all(isinstance(warning, str) and warning for warning in warnings):
         raise TournamentValidationError("legacy warnings must contain non-empty text")
-    mapped["bundle.warnings"] = "warnings"
+    if warnings:
+        for index in range(len(warnings)):
+            mapped[f"bundle.warnings[{index}]"] = f"warnings[{index}]"
+    elif warnings_present:
+        mapped["bundle.warnings"] = "warnings"
+    else:
+        defaulted["warnings"] = []
 
     consumed_bundle = {
         "generated_at_iso",
@@ -129,8 +164,19 @@ def legacy_to_generic(document: Mapping[str, object]) -> CompatibilityConversion
         "stage_confidence_intervals",
         "warnings",
     }
-    dropped.update(f"bundle.{key}" for key in bundle if key not in consumed_bundle)
-    dropped.update(key for key in root if key != "bundle")
+    for key, value in bundle.items():
+        if key not in consumed_bundle:
+            dropped.update(_leaf_paths(value, f"bundle.{key}"))
+    for key, value in root.items():
+        if key != "bundle":
+            dropped.update(_leaf_paths(value, key))
+
+    if generic_stages:
+        for index, stage_id in enumerate(generic_stages):
+            defaulted[f"stage_order[{index}]"] = stage_id
+    else:
+        defaulted["stage_probabilities"] = {}
+        defaulted["stage_order"] = []
 
     generic: dict[str, object] = {
         "schema_version": 2,
@@ -148,8 +194,6 @@ def legacy_to_generic(document: Mapping[str, object]) -> CompatibilityConversion
         "council": defaulted["council"],
     }
     forecast_from_document(generic)
-    defaulted["schema_version"] = 2
-    defaulted["stage_order"] = list(generic_stages)
     return CompatibilityConversion(
         document=generic,
         report=CompatibilityReport(mapped, defaulted, tuple(sorted(dropped))),
@@ -163,24 +207,24 @@ def generic_to_legacy(document: Mapping[str, object]) -> CompatibilityConversion
     forecast = forecast_from_document(root)
     mapped: dict[str, str] = {
         "generated_at": "bundle.generated_at_iso",
-        "warnings": "bundle.warnings",
         "championship_probability": "bundle.stage_probabilities.titulo",
     }
     defaulted: dict[str, object] = {"evidence": []}
-    dropped = {
-        key
-        for key in root
-        if key
-        not in {
-            "generated_at",
-            "stage_probabilities",
-            "championship_probability",
-            "confidence_intervals",
-            "warnings",
-        }
+    dropped: set[str] = set()
+    consumed = {
+        "generated_at",
+        "stage_probabilities",
+        "championship_probability",
+        "confidence_intervals",
+        "warnings",
     }
+    for key, value in root.items():
+        if key not in consumed:
+            dropped.update(_leaf_paths(value, key))
 
     legacy_stages: dict[str, float] = {}
+    if not forecast.stage_probabilities:
+        dropped.add("stage_probabilities")
     for stage_id, probability in forecast.stage_probabilities.items():
         source_path = f"stage_probabilities.{stage_id}"
         legacy_stage = _GENERIC_TO_LEGACY_STAGE.get(stage_id)
@@ -192,6 +236,8 @@ def generic_to_legacy(document: Mapping[str, object]) -> CompatibilityConversion
     legacy_stages["titulo"] = round(forecast.championship_probability * 100.0, 1)
 
     legacy_intervals: dict[str, list[float]] = {}
+    if not forecast.confidence_intervals:
+        mapped["confidence_intervals"] = "bundle.stage_confidence_intervals"
     for interval_id, bounds in forecast.confidence_intervals.items():
         source_path = f"confidence_intervals.{interval_id}"
         if interval_id == "championship":
@@ -199,10 +245,23 @@ def generic_to_legacy(document: Mapping[str, object]) -> CompatibilityConversion
         else:
             legacy_stage = _GENERIC_TO_LEGACY_STAGE.get(interval_id)
         if legacy_stage is None:
-            dropped.add(source_path)
+            dropped.update(_leaf_paths(bounds, source_path))
             continue
         legacy_intervals[legacy_stage] = [round(bounds[0] * 100.0, 1), round(bounds[1] * 100.0, 1)]
-        mapped[source_path] = f"bundle.stage_confidence_intervals.{legacy_stage}"
+        mapped[f"{source_path}[0]"] = (
+            f"bundle.stage_confidence_intervals.{legacy_stage}[0]"
+        )
+        mapped[f"{source_path}[1]"] = (
+            f"bundle.stage_confidence_intervals.{legacy_stage}[1]"
+        )
+    if forecast.confidence_intervals and not legacy_intervals:
+        defaulted["bundle.stage_confidence_intervals"] = {}
+
+    if forecast.warnings:
+        for index in range(len(forecast.warnings)):
+            mapped[f"warnings[{index}]"] = f"bundle.warnings[{index}]"
+    else:
+        mapped["warnings"] = "bundle.warnings"
 
     legacy: dict[str, object] = {
         "bundle": {

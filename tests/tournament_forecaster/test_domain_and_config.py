@@ -224,12 +224,17 @@ def _rank_fed_completed_tie_document(
             }
         ]
     completed_matches = source_matches if source_completed else []
+    final_home, final_away = (
+        ("south-city", "north-city")
+        if source_kind == "best_additional"
+        else ("north-city", "south-city")
+    )
     completed_matches.append(
         {
             "match_id": "final-1",
             "stage_id": "final",
-            "home_team_id": "north-city",
-            "away_team_id": "south-city",
+            "home_team_id": final_home,
+            "away_team_id": final_away,
             "score": {"home": 2, "away": 0},
         }
     )
@@ -672,12 +677,13 @@ def test_completed_rank_fed_tie_accepts_lock_matching_resolved_ranks(
     _require_package()
     from tournament_forecaster.config import load_tournament_document
 
+    expected_pair = ("b", "a") if source_kind == "best_additional" else ("a", "b")
     tournament = load_tournament_document(
-        _resolved_rank_lock_document(pairing_mode, source_kind, ("a", "b"))
+        _resolved_rank_lock_document(pairing_mode, source_kind, expected_pair)
     )
 
     final = next(match for match in tournament.completed_matches if match.match_id == "final-1")
-    assert {final.home_team_id, final.away_team_id} == {"a", "b"}
+    assert (final.home_team_id, final.away_team_id) == expected_pair
 
 
 def test_loader_accepts_one_championship_and_any_number_of_placement_terminals() -> None:
@@ -1300,6 +1306,30 @@ def test_completed_match_allows_reversed_home_away_order_across_legs() -> None:
     tournament = load_tournament_document(document)
 
     assert len(tournament.completed_matches) == 3
+
+
+def test_completed_group_match_rejects_reversed_fixture_orientation() -> None:
+    _require_package()
+    from tournament_forecaster.config import load_tournament_document
+    from tournament_forecaster.errors import TournamentValidationError
+    from tournament_forecaster.stages.group_stage import generate_group_fixtures
+
+    document = _document()
+    stage = document["stages"][0]
+    fixture = generate_group_fixtures(stage)[0]
+    document["completed_matches"] = [
+        {
+            "match_id": fixture.match_id,
+            "stage_id": str(stage["id"]),
+            "home_team_id": fixture.away_team_id,
+            "away_team_id": fixture.home_team_id,
+            "score": {"home": 1, "away": 0},
+            "leg": 1,
+        }
+    ]
+
+    with pytest.raises(TournamentValidationError, match="fixture contract"):
+        load_tournament_document(document)
 
 
 def test_completed_match_rejects_winner_contradicted_by_score() -> None:

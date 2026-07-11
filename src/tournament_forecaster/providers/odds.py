@@ -4,40 +4,20 @@ from __future__ import annotations
 
 import json
 import math
-import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import urlsplit
 
 from ..errors import TournamentValidationError
+from .security import redact_url, sanitize_metadata, serializable_value
 
 
 _ROOT_FIELDS = frozenset({"schema_version", "provider", "retrieved_at", "odds"})
 _ODDS_FIELDS = frozenset(
     {"market", "selection_id", "decimal_odds", "bookmaker", "source_url", "source_id", "metadata"}
 )
-_SENSITIVE_QUERY_NAMES = frozenset(
-    {
-        "apikey",
-        "appid",
-        "appkey",
-        "accesskey",
-        "clientid",
-        "clientsecret",
-        "credential",
-        "key",
-        "password",
-        "secret",
-        "sig",
-        "signature",
-        "subscriptionkey",
-        "token",
-    }
-)
-
-
 @dataclass(frozen=True, slots=True)
 class OddsProvenance:
     provider: str
@@ -63,7 +43,7 @@ class OddsRecord:
             **({"bookmaker": self.bookmaker} if self.bookmaker else {}),
             **({"source_url": self.source_url} if self.source_url else {}),
             **({"source_id": self.source_id} if self.source_id else {}),
-            **({"metadata": dict(self.metadata)} if self.metadata else {}),
+            **({"metadata": serializable_value(self.metadata)} if self.metadata else {}),
         }
 
 
@@ -112,31 +92,12 @@ def _timestamp(value: object) -> str:
     return parsed.isoformat()
 
 
-def _sensitive_query_name(name: str) -> bool:
-    normalized = re.sub(r"[^a-z0-9]", "", name.casefold())
-    return normalized in _SENSITIVE_QUERY_NAMES or normalized.endswith(
-        ("key", "token", "secret", "signature")
-    )
-
-
-def redact_url(url: str) -> str:
-    """Remove URL userinfo and redact every sensitive query value."""
-
-    parsed = urlsplit(url)
-    netloc = parsed.netloc.rsplit("@", 1)[-1]
-    query = urlencode(
-        [
-            (name, "REDACTED" if _sensitive_query_name(name) else value)
-            for name, value in parse_qsl(parsed.query, keep_blank_values=True)
-        ],
-        doseq=True,
-    )
-    return urlunsplit((parsed.scheme, netloc, parsed.path, query, parsed.fragment))
-
-
 def _source_url(value: object, label: str) -> str:
     url = _text(value, label)
-    parsed = urlsplit(url)
+    try:
+        parsed = urlsplit(url)
+    except ValueError as error:
+        raise _error(f"{label} must be a valid HTTP(S) URL") from error
     if parsed.scheme.casefold() not in {"http", "https"} or not parsed.netloc:
         raise _error(f"{label} must be an HTTP(S) URL")
     return redact_url(url)
@@ -146,7 +107,13 @@ def preview_odds(source: Path) -> OddsPreview:
     """Validate one local odds file without accepting any core-state mutation fields."""
 
     try:
-        document = json.loads(source.read_text(encoding="utf-8"))
+        source_text = source.read_text(encoding="utf-8")
+    except UnicodeDecodeError as error:
+        raise _error("odds source must be valid UTF-8") from error
+    except OSError as error:
+        raise _error(f"odds source could not be read: {source}") from error
+    try:
+        document = json.loads(source_text)
     except json.JSONDecodeError as error:
         raise _error(f"invalid odds JSON: {error.msg}") from error
     root = _mapping(document, "odds import")
@@ -182,7 +149,11 @@ def preview_odds(source: Path) -> OddsPreview:
             source_url = _source_url(record["source_url"], f"odds[{index}] source_url")
         metadata = record.get("metadata")
         if metadata is not None:
-            metadata = _mapping(metadata, f"odds[{index}] metadata")
+            metadata = sanitize_metadata(
+                _mapping(metadata, f"odds[{index}] metadata"),
+                label=f"odds[{index}] metadata",
+            )
+            assert isinstance(metadata, Mapping)
         records.append(
             OddsRecord(
                 market=_text(record.get("market"), f"odds[{index}] market"),

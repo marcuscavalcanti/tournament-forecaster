@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import io
 import json
+import os
+import stat
 import unicodedata
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -13,10 +17,11 @@ from pathlib import Path
 from types import MappingProxyType
 
 from ..atomic_io import atomic_write_json
-from ..config import load_tournament, load_tournament_document
+from ..config import load_tournament_document
 from ..domain import CompletedMatch, Score, Tournament
 from ..errors import TournamentValidationError
 from ..group_fixtures import generate_group_fixture_specs
+from .security import sanitize_metadata, serializable_value
 
 
 _JSON_ROOT_FIELDS = frozenset({"schema_version", "provider", "retrieved_at", "results"})
@@ -35,6 +40,40 @@ _RESULT_FIELDS = frozenset(
         "metadata",
     }
 )
+_CSV_PROVENANCE_FIELDS = frozenset({"provider", "retrieved_at"})
+_CSV_REQUIRED_FIELDS = frozenset(
+    {
+        "status",
+        "stage_id",
+        "home_team",
+        "away_team",
+        "home_score",
+        "away_score",
+        "provider",
+        "retrieved_at",
+    }
+)
+_CSV_SUPPORTED_FIELDS = _RESULT_FIELDS | _CSV_PROVENANCE_FIELDS
+
+
+@dataclass(frozen=True, slots=True)
+class LocalFileIdentity:
+    path: Path
+    device: int
+    inode: int
+    size: int
+    mtime_ns: int
+    digest: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "path": str(self.path),
+            "device": self.device,
+            "inode": self.inode,
+            "size": self.size,
+            "mtime_ns": self.mtime_ns,
+            "digest": self.digest,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,7 +134,7 @@ class ResultFact:
             "away_team_id": match.away_team_id,
             "score": {"home": match.score.home, "away": match.score.away},
             "leg": match.leg,
-            "metadata": dict(match.metadata),
+            "metadata": serializable_value(match.metadata),
         }
         if match.winner_team_id is not None:
             value["winner_team_id"] = match.winner_team_id
@@ -122,6 +161,8 @@ class ImportPreview:
     source_path: Path
     source_format: str
     config_digest: str
+    config_identity: LocalFileIdentity
+    source_identity: LocalFileIdentity
     source_provenance: SourceProvenance
     additions: tuple[ResultFact, ...] = ()
     idempotent: tuple[ResultFact, ...] = ()
@@ -133,9 +174,115 @@ class ImportPreview:
     def has_blockers(self) -> bool:
         return bool(self.conflicts or self.unmatched)
 
+    def to_dict(self) -> dict[str, object]:
+        provenance = {
+            "provider": self.source_provenance.provider,
+            "retrieved_at": self.source_provenance.retrieved_at,
+            "source": self.source_provenance.source,
+        }
+        return {
+            "config": self.config_identity.to_dict(),
+            "source": self.source_identity.to_dict(),
+            "source_format": self.source_format,
+            "source_provenance": provenance,
+            "additions": [fact.to_document() for fact in self.additions],
+            "idempotent": [fact.to_document() for fact in self.idempotent],
+            "conflicts": [
+                {
+                    "existing": conflict.existing.to_document(),
+                    "incoming": conflict.incoming.to_document(),
+                    "reason": conflict.reason,
+                }
+                for conflict in self.conflicts
+            ],
+            "unmatched": [
+                {
+                    "row_number": issue.row_number,
+                    "reason": issue.reason,
+                    "row": serializable_value(issue.row),
+                }
+                for issue in self.unmatched
+            ],
+            "warnings": list(self.warnings),
+        }
+
 
 def _error(message: str) -> TournamentValidationError:
     return TournamentValidationError(message)
+
+
+def _stat_signature(value: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_mode,
+        value.st_size,
+        value.st_mtime_ns,
+    )
+
+
+def _checked_regular_path(path: Path, label: str) -> tuple[Path, os.stat_result]:
+    supplied = Path(path)
+    current = Path(supplied.anchor) if supplied.is_absolute() else Path.cwd()
+    components = supplied.parts[1:] if supplied.is_absolute() else supplied.parts
+    try:
+        for component in components:
+            if component in {"", "."}:
+                continue
+            if component == "..":
+                current = current.parent
+                continue
+            current /= component
+            component_stat = current.lstat()
+            if stat.S_ISLNK(component_stat.st_mode):
+                raise _error(f"{label} path must not contain symlinks: {current}")
+        canonical = current.absolute()
+        final_stat = canonical.lstat()
+    except TournamentValidationError:
+        raise
+    except OSError as error:
+        raise _error(f"{label} file could not be accessed: {supplied}") from error
+    if stat.S_ISLNK(final_stat.st_mode):
+        raise _error(f"{label} path must not contain symlinks: {canonical}")
+    if not stat.S_ISREG(final_stat.st_mode):
+        raise _error(f"{label} must be a regular file: {canonical}")
+    return canonical, final_stat
+
+
+def _read_local_file(path: Path, label: str) -> tuple[LocalFileIdentity, bytes]:
+    canonical, path_stat = _checked_regular_path(path, label)
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = -1
+    try:
+        descriptor = os.open(canonical, flags)
+        opened_stat = os.fstat(descriptor)
+        if _stat_signature(opened_stat) != _stat_signature(path_stat):
+            raise _error(f"{label} identity changed while opening")
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = -1
+            content = handle.read()
+            read_stat = os.fstat(handle.fileno())
+        current_path, current_stat = _checked_regular_path(canonical, label)
+    except TournamentValidationError:
+        raise
+    except OSError as error:
+        raise _error(f"{label} file could not be read: {canonical}") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    if current_path != canonical or _stat_signature(read_stat) != _stat_signature(current_stat):
+        raise _error(f"{label} identity changed while reading")
+    return (
+        LocalFileIdentity(
+            path=canonical,
+            device=read_stat.st_dev,
+            inode=read_stat.st_ino,
+            size=read_stat.st_size,
+            mtime_ns=read_stat.st_mtime_ns,
+            digest=_digest(content),
+        ),
+        content,
+    )
 
 
 def _mapping(value: object, label: str) -> Mapping[str, object]:
@@ -201,45 +348,44 @@ def _resolve_team(value: object, aliases: Mapping[str, str | None]) -> tuple[str
 
 
 def _configured_fixtures(tournament: Tournament) -> tuple[
-    dict[tuple[str, frozenset[str], int], tuple[str, ...]],
-    dict[tuple[str, str], frozenset[str] | None],
+    dict[tuple[str, str, str, int], tuple[str, ...]],
+    dict[tuple[str, str, int], tuple[str, str] | None],
 ]:
-    by_identity: dict[tuple[str, frozenset[str], int], list[str]] = {}
-    configured: dict[tuple[str, str], frozenset[str] | None] = {}
+    by_identity: dict[tuple[str, str, str, int], list[str]] = {}
+    configured: dict[tuple[str, str, int], tuple[str, str] | None] = {}
     for stage in tournament.stages:
         stage_id = str(stage["id"])
         stage_type = stage["type"]
         if stage_type == "round_robin_groups":
             for group_fixture in generate_group_fixture_specs(stage):
-                pair = frozenset(
-                    (group_fixture.home_team_id, group_fixture.away_team_id)
-                )
+                pair = (group_fixture.home_team_id, group_fixture.away_team_id)
                 by_identity.setdefault(
-                    (stage_id, pair, group_fixture.leg),
+                    (stage_id, *pair, group_fixture.leg),
                     [],
                 ).append(group_fixture.match_id)
-                configured[(stage_id, group_fixture.match_id)] = pair
+                configured[(stage_id, group_fixture.match_id, group_fixture.leg)] = pair
         elif stage_type == "league_table":
             fixtures = stage.get("fixtures", ())
             assert isinstance(fixtures, Sequence)
             for raw_fixture in fixtures:
                 league_fixture = _mapping(raw_fixture, "league fixture")
-                match_id = str(league_fixture["id"])
-                pair = frozenset(
-                    (
-                        str(league_fixture["home_team_id"]),
-                        str(league_fixture["away_team_id"]),
-                    )
+                match_id = str(league_fixture["match_id"])
+                pair = (
+                    str(league_fixture["home_team_id"]),
+                    str(league_fixture["away_team_id"]),
                 )
-                by_identity.setdefault((stage_id, pair, 1), []).append(match_id)
-                configured[(stage_id, match_id)] = pair
+                by_identity.setdefault((stage_id, *pair, 1), []).append(match_id)
+                configured[(stage_id, match_id, 1)] = pair
         else:
             pairing = _mapping(stage["pairing"], "knockout pairing")
             ties = pairing.get("ties", ())
+            legs = stage["legs"]
+            assert isinstance(legs, int) and not isinstance(legs, bool)
             assert isinstance(ties, Sequence)
             for raw_tie in ties:
                 tie = _mapping(raw_tie, "knockout tie")
-                configured[(stage_id, str(tie["id"]))] = None
+                for leg in range(1, legs + 1):
+                    configured[(stage_id, str(tie["id"]), leg)] = None
     return (
         {key: tuple(value) for key, value in by_identity.items()},
         configured,
@@ -247,6 +393,8 @@ def _configured_fixtures(tournament: Tournament) -> tuple[
 
 
 def _existing_fact(match: CompletedMatch) -> ResultFact:
+    metadata = sanitize_metadata(match.metadata, label="completed match metadata")
+    assert isinstance(metadata, Mapping)
     return ResultFact(
         match_id=match.match_id,
         stage_id=match.stage_id,
@@ -256,7 +404,7 @@ def _existing_fact(match: CompletedMatch) -> ResultFact:
         away_score=match.score.away,
         leg=match.leg,
         winner_team_id=match.winner_team_id,
-        metadata=match.metadata,
+        metadata=metadata,
     )
 
 
@@ -282,11 +430,17 @@ def _same_fact(first: ResultFact, second: ResultFact) -> bool:
     )
 
 
-def _load_json_rows(source: Path) -> tuple[SourceProvenance, list[Mapping[str, object]]]:
+def _load_json_rows(
+    content: bytes,
+    source: Path,
+) -> tuple[SourceProvenance, list[Mapping[str, object]]]:
     try:
-        document = json.loads(source.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as error:
-        raise _error(f"invalid results JSON: {error.msg}") from error
+        document = json.loads(content)
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        message = error.msg if isinstance(error, json.JSONDecodeError) else "invalid UTF-8"
+        raise _error(f"invalid results JSON: {message}") from error
+    except ValueError as error:
+        raise _error(f"invalid results JSON: {error}") from error
     root = _mapping(document, "results import")
     unknown = sorted(set(root) - _JSON_ROOT_FIELDS)
     if unknown:
@@ -304,13 +458,58 @@ def _load_json_rows(source: Path) -> tuple[SourceProvenance, list[Mapping[str, o
     return provenance, [_mapping(row, f"results[{index}]") for index, row in enumerate(raw_results)]
 
 
-def _load_csv_rows(source: Path) -> tuple[SourceProvenance, list[dict[str, object]]]:
+def _load_csv_rows(
+    content: bytes,
+    source: Path,
+) -> tuple[SourceProvenance, list[dict[str, object]]]:
     try:
-        with source.open("r", encoding="utf-8", newline="") as handle:
-            rows: list[dict[str, object]] = [
-                {key: value for key, value in row.items()}
-                for row in csv.DictReader(handle)
-            ]
+        text = content.decode("utf-8")
+        reader = csv.DictReader(io.StringIO(text, newline=""), strict=True)
+        headers = reader.fieldnames
+        if not headers:
+            raise _error("results CSV must contain a header row")
+        duplicates = sorted(
+            name for name, count in Counter(headers).items() if count > 1
+        )
+        if duplicates:
+            raise _error(
+                f"results CSV header contains duplicates: {', '.join(duplicates)}"
+            )
+        unknown = sorted(set(headers) - _CSV_SUPPORTED_FIELDS)
+        if unknown:
+            raise _error(
+                f"results CSV header contains unsupported columns: {', '.join(unknown)}"
+            )
+        missing = sorted(_CSV_REQUIRED_FIELDS - set(headers))
+        if missing:
+            raise _error(
+                f"results CSV header is missing required columns: {', '.join(missing)}"
+            )
+        rows = []
+        for line_number, raw_row in enumerate(reader, start=2):
+            if None in raw_row:
+                raise _error(f"results CSV row {line_number} contains surplus columns")
+            if any(value is None for value in raw_row.values()):
+                raise _error(f"results CSV row {line_number} has missing columns")
+            row: dict[str, object] = {
+                str(key): value for key, value in raw_row.items()
+            }
+            raw_metadata = row.get("metadata")
+            if raw_metadata in {None, ""}:
+                row["metadata"] = {}
+            else:
+                try:
+                    row["metadata"] = _mapping(
+                        json.loads(str(raw_metadata)),
+                        f"CSV row {line_number} metadata",
+                    )
+                except (json.JSONDecodeError, UnicodeDecodeError) as error:
+                    raise _error(
+                        f"results CSV row {line_number} metadata must be valid JSON"
+                    ) from error
+            rows.append(row)
+    except UnicodeDecodeError as error:
+        raise _error("invalid results CSV: input must be UTF-8") from error
     except csv.Error as error:
         raise _error(f"invalid results CSV: {error}") from error
     if not rows:
@@ -344,9 +543,20 @@ def _resolve_row(
     tournament: Tournament,
     provenance: SourceProvenance,
     aliases: Mapping[str, str | None],
-    fixtures_by_identity: Mapping[tuple[str, frozenset[str], int], tuple[str, ...]],
-    configured_fixtures: Mapping[tuple[str, str], frozenset[str] | None],
+    fixtures_by_identity: Mapping[tuple[str, str, str, int], tuple[str, ...]],
+    configured_fixtures: Mapping[tuple[str, str, int], tuple[str, str] | None],
 ) -> tuple[ResultFact | None, UnmatchedResult | None]:
+    raw_metadata = row.get("metadata", {})
+    if raw_metadata is None or raw_metadata == "":
+        raw_metadata = {}
+    metadata = sanitize_metadata(
+        _mapping(raw_metadata, f"result row {row_number} metadata"),
+        label=f"result row {row_number} metadata",
+    )
+    assert isinstance(metadata, Mapping)
+    sanitized_row = dict(row)
+    sanitized_row["metadata"] = metadata
+    row = MappingProxyType(sanitized_row)
     _validate_row_fields(row, row_number)
     stage_id = _text(row.get("stage_id"), f"result row {row_number} stage_id")
     if stage_id not in {str(stage["id"]) for stage in tournament.stages}:
@@ -364,14 +574,30 @@ def _resolve_row(
     raw_match_id = row.get("match_id")
     if raw_match_id not in {None, ""}:
         match_id = _text(raw_match_id, f"result row {row_number} match_id")
-        configured_pair = configured_fixtures.get((stage_id, match_id), "missing")
+        configured_pair = configured_fixtures.get((stage_id, match_id, leg), "missing")
         if configured_pair == "missing":
             raise _error(f"result row {row_number} match_id is not configured for its stage")
-        if configured_pair is not None and configured_pair != pair:
-            raise _error(f"result row {row_number} teams contradict the configured match_id")
+        if configured_pair is not None and configured_pair != (
+            home_team_id,
+            away_team_id,
+        ):
+            raise _error(
+                f"result row {row_number} home-away order contradicts the configured match_id"
+            )
     else:
-        candidates = fixtures_by_identity.get((stage_id, pair, leg), ())
+        candidates = fixtures_by_identity.get(
+            (stage_id, home_team_id, away_team_id, leg),
+            (),
+        )
         if len(candidates) != 1:
+            reversed_candidates = fixtures_by_identity.get(
+                (stage_id, away_team_id, home_team_id, leg),
+                (),
+            )
+            if reversed_candidates:
+                raise _error(
+                    f"result row {row_number} home-away order contradicts the configured fixture"
+                )
             reason = "no unique configured fixture matches stage, teams, and leg"
             return None, UnmatchedResult(row_number, reason, MappingProxyType(dict(row)))
         match_id = candidates[0]
@@ -384,11 +610,17 @@ def _resolve_row(
             return None, UnmatchedResult(row_number, winner_error, MappingProxyType(dict(row)))
         if winner_team_id not in pair:
             raise _error(f"result row {row_number} winner must be one of its teams")
-        score_winner = home_team_id if home_score > away_score else away_team_id if away_score > home_score else None
-        if score_winner is not None and winner_team_id != score_winner:
-            raise _error(f"result row {row_number} winner contradicts score")
-    metadata_value = row.get("metadata", {})
-    metadata = _mapping(metadata_value, f"result row {row_number} metadata")
+        stage = next(stage for stage in tournament.stages if stage["id"] == stage_id)
+        if stage["type"] != "knockout":
+            if home_score == away_score:
+                raise _error(
+                    f"result row {row_number} draw cannot declare a winner"
+                )
+            score_winner = (
+                home_team_id if home_score > away_score else away_team_id
+            )
+            if winner_team_id != score_winner:
+                raise _error(f"result row {row_number} winner contradicts score")
     source_id = None
     if row.get("source_id") not in {None, ""}:
         source_id = _text(row["source_id"], f"result row {row_number} source_id")
@@ -403,12 +635,21 @@ def _resolve_row(
         winner_team_id=winner_team_id,
         source_id=source_id,
         provenance=provenance,
-        metadata=MappingProxyType(dict(metadata)),
+        metadata=metadata,
     ), None
 
 
 def _digest(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
+
+
+def _load_tournament_bytes(content: bytes) -> Tournament:
+    try:
+        document = json.loads(content)
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        message = error.msg if isinstance(error, json.JSONDecodeError) else "invalid UTF-8"
+        raise _error(f"invalid tournament JSON: {message}") from error
+    return load_tournament_document(_mapping(document, "tournament document"))
 
 
 def _candidate_document(
@@ -420,8 +661,9 @@ def _candidate_document(
 ) -> dict[str, object]:
     try:
         document = json.loads(config_bytes)
-    except json.JSONDecodeError as error:
-        raise _error(f"invalid tournament JSON: {error.msg}") from error
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        message = error.msg if isinstance(error, json.JSONDecodeError) else "invalid UTF-8"
+        raise _error(f"invalid tournament JSON: {message}") from error
     root = dict(_mapping(document, "tournament document"))
     raw_completed = root.get("completed_matches")
     if not isinstance(raw_completed, list):
@@ -449,10 +691,13 @@ def preview_results(config: Path, source: Path, *, format: str) -> ImportPreview
     normalized_format = format.casefold()
     if normalized_format not in {"json", "csv"}:
         raise _error("results format must be json or csv")
-    config_bytes = config.read_bytes()
-    tournament = load_tournament(config)
+    config_identity, config_bytes = _read_local_file(config, "tournament config")
+    tournament = _load_tournament_bytes(config_bytes)
+    source_identity, source_bytes = _read_local_file(source, "results source")
     provenance, rows = (
-        _load_json_rows(source) if normalized_format == "json" else _load_csv_rows(source)
+        _load_json_rows(source_bytes, source_identity.path)
+        if normalized_format == "json"
+        else _load_csv_rows(source_bytes, source_identity.path)
     )
     aliases = _alias_index(tournament)
     fixtures_by_identity, configured_fixtures = _configured_fixtures(tournament)
@@ -497,10 +742,12 @@ def preview_results(config: Path, source: Path, *, format: str) -> ImportPreview
         replace_conflicts=bool(conflicts),
     )
     return ImportPreview(
-        config_path=config,
-        source_path=source,
+        config_path=config_identity.path,
+        source_path=source_identity.path,
         source_format=normalized_format,
         config_digest=_digest(config_bytes),
+        config_identity=config_identity,
+        source_identity=source_identity,
         source_provenance=provenance,
         additions=tuple(additions),
         idempotent=tuple(idempotent),
@@ -517,11 +764,11 @@ def apply_results(
 ) -> None:
     """Atomically apply a still-current preview after complete domain validation."""
 
-    if config != preview.config_path:
-        raise _error("preview belongs to a different tournament config")
-    current_bytes = config.read_bytes()
-    if _digest(current_bytes) != preview.config_digest:
-        raise _error("tournament config changed since preview")
+    current_identity, current_bytes = _read_local_file(config, "tournament config")
+    if current_identity.path != preview.config_path:
+        raise _error("preview belongs to a different tournament config path")
+    if current_identity != preview.config_identity:
+        raise _error("tournament config identity or content changed since preview")
     if preview.unmatched:
         detail = "conflict and unmatched rows" if preview.conflicts else "unmatched rows"
         raise _error(f"cannot apply preview with {detail}")
@@ -535,4 +782,4 @@ def apply_results(
         preview.conflicts,
         replace_conflicts=replace_conflicts,
     )
-    atomic_write_json(config, root)
+    atomic_write_json(preview.config_path, root)

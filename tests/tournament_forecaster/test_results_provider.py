@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -14,8 +15,12 @@ from tournament_forecaster.resources import resource_path
 
 
 def _config(tmp_path: Path) -> Path:
+    return _template_config(tmp_path, "group-knockout")
+
+
+def _template_config(tmp_path: Path, template: str) -> Path:
     destination = tmp_path / "tournament.json"
-    with resource_path("data", "templates", "group-knockout", "tournament.json") as source:
+    with resource_path("data", "templates", template, "tournament.json") as source:
         destination.write_bytes(Path(source).read_bytes())
     return destination
 
@@ -58,6 +63,24 @@ def _configured_match_id(config: Path) -> str:
         for fixture in fixtures
         if {fixture.home_team_id, fixture.away_team_id} == {"alpha-club", "bravo-town"}
     )
+
+
+def _complete_group_stage(config: Path) -> None:
+    document = json.loads(config.read_text(encoding="utf-8"))
+    tournament = load_tournament(config)
+    fixtures = list_group_fixtures(tournament, "group-stage")
+    document["completed_matches"] = [
+        {
+            "match_id": fixture.match_id,
+            "stage_id": "group-stage",
+            "home_team_id": fixture.home_team_id,
+            "away_team_id": fixture.away_team_id,
+            "score": {"home": 0, "away": 0},
+            "leg": fixture.leg,
+        }
+        for fixture in fixtures
+    ]
+    config.write_text(json.dumps(document), encoding="utf-8")
 
 
 def test_preview_apply_and_repreview_classify_addition_then_idempotent(
@@ -113,6 +136,295 @@ def test_csv_preview_resolves_unique_aliases_and_infers_configured_fixture_id(
     assert preview.additions[0].match_id == _configured_match_id(config)
 
 
+@pytest.mark.parametrize("path_kind", ["config", "source", "parent"])
+def test_preview_rejects_symlinked_files_and_path_components(
+    tmp_path: Path,
+    path_kind: str,
+) -> None:
+    config = _config(tmp_path)
+    source = _json_source(tmp_path, [_result()])
+    if path_kind == "parent":
+        linked_parent = tmp_path / "linked"
+        linked_parent.symlink_to(tmp_path, target_is_directory=True)
+        config = linked_parent / config.name
+    else:
+        original = config if path_kind == "config" else source
+        link = tmp_path / f"linked-{original.name}"
+        link.symlink_to(original)
+        if path_kind == "config":
+            config = link
+        else:
+            source = link
+
+    with pytest.raises(TournamentValidationError, match="symlink"):
+        preview_results(config, source, format="json")
+
+
+def test_preview_records_canonical_regular_file_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    source = _json_source(tmp_path, [_result()])
+    monkeypatch.chdir(tmp_path)
+
+    preview = preview_results(config.relative_to(tmp_path), source.relative_to(tmp_path), format="json")
+
+    assert preview.config_path == config.resolve(strict=True)
+    assert preview.source_path == source.resolve(strict=True)
+    assert preview.config_identity.device == config.stat().st_dev
+    assert preview.config_identity.inode == config.stat().st_ino
+    assert preview.config_identity.size == config.stat().st_size
+    assert preview.source_identity.inode == source.stat().st_ino
+
+
+def test_apply_rejects_same_bytes_at_a_different_inode_before_mutation(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    source = _json_source(tmp_path, [_result()])
+    preview = preview_results(config, source, format="json")
+    original_bytes = config.read_bytes()
+    old_path = tmp_path / "old-tournament.json"
+    config.replace(old_path)
+    config.write_bytes(original_bytes)
+
+    with pytest.raises(TournamentValidationError, match="identity|changed"):
+        apply_results(config, preview)
+
+    assert config.read_bytes() == original_bytes
+
+
+def test_apply_rejects_symlink_swap_before_mutation(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    preview = preview_results(config, _json_source(tmp_path, [_result()]), format="json")
+    original = tmp_path / "original-tournament.json"
+    config.replace(original)
+    before = original.read_bytes()
+    config.symlink_to(original)
+
+    with pytest.raises(TournamentValidationError, match="symlink"):
+        apply_results(config, preview)
+
+    assert config.is_symlink()
+    assert original.read_bytes() == before
+
+
+def test_relative_apply_rejects_changed_working_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    source = _json_source(tmp_path, [_result()])
+    monkeypatch.chdir(tmp_path)
+    relative_config = Path(config.name)
+    preview = preview_results(relative_config, Path(source.name), format="json")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    with pytest.raises(TournamentValidationError, match="different|path|file"):
+        apply_results(relative_config, preview)
+
+    assert json.loads(config.read_text(encoding="utf-8"))["completed_matches"] == []
+
+
+def test_preview_rejects_non_regular_input_as_validation_error(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    source_directory = tmp_path / "results-directory"
+    source_directory.mkdir()
+
+    with pytest.raises(TournamentValidationError, match="regular file"):
+        preview_results(config, source_directory, format="json")
+
+
+@pytest.mark.parametrize(
+    "csv_text",
+    [
+        (
+            "status,status,stage_id,home_team,away_team,home_score,away_score,"
+            "provider,retrieved_at\n"
+            "final,final,group-stage,Alpha Club,Bravo Town,1,0,offline,"
+            "2026-07-11T12:00:00Z\n"
+        ),
+        (
+            "status,stage_id,home_team,away_team,home_score,provider,retrieved_at\n"
+            "final,group-stage,Alpha Club,Bravo Town,1,offline,"
+            "2026-07-11T12:00:00Z\n"
+        ),
+        (
+            "status,stage_id,home_team,away_team,home_score,away_score,"
+            "provider,retrieved_at,unexpected\n"
+            "final,group-stage,Alpha Club,Bravo Town,1,0,offline,"
+            "2026-07-11T12:00:00Z,\n"
+        ),
+        (
+            "status,stage_id,home_team,away_team,home_score,away_score,"
+            "provider,retrieved_at\n"
+            "final,group-stage,Alpha Club,Bravo Town,1,0,offline,"
+            "2026-07-11T12:00:00Z,surplus\n"
+        ),
+        (
+            "status,stage_id,home_team,away_team,home_score,away_score,"
+            "provider,retrieved_at\n"
+            '"final,group-stage,Alpha Club,Bravo Town,1,0,offline,'
+            "2026-07-11T12:00:00Z\n"
+        ),
+    ],
+    ids=("duplicate-header", "missing-header", "unknown-header", "surplus", "quoting"),
+)
+def test_csv_rejects_malformed_headers_and_rows(
+    tmp_path: Path,
+    csv_text: str,
+) -> None:
+    config = _config(tmp_path)
+    source = tmp_path / "malformed.csv"
+    source.write_text(csv_text, encoding="utf-8")
+
+    with pytest.raises(TournamentValidationError, match="CSV|header|column"):
+        preview_results(config, source, format="csv")
+
+
+def test_cli_reports_invalid_input_as_exit_2_without_traceback(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = _config(tmp_path)
+    source = tmp_path / "invalid.csv"
+    source.write_bytes(b"status,provider,retrieved_at\n\xff,offline,now\n")
+
+    assert main(
+        [
+            "update-results",
+            "--config",
+            os.fspath(config),
+            "--source",
+            os.fspath(source),
+            "--format",
+            "csv",
+        ]
+    ) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith("error: ")
+    assert "Traceback" not in captured.err
+
+
+@pytest.mark.parametrize("explicit_match_id", [False, True])
+def test_group_result_rejects_reversed_configured_orientation(
+    tmp_path: Path,
+    explicit_match_id: bool,
+) -> None:
+    config = _config(tmp_path)
+    row = _result(home_team="Bravo Town", away_team="Alpha Club")
+    if explicit_match_id:
+        row["match_id"] = _configured_match_id(config)
+
+    with pytest.raises(TournamentValidationError, match="home-away order"):
+        preview_results(config, _json_source(tmp_path, [row]), format="json")
+
+
+@pytest.mark.parametrize("explicit_match_id", [False, True])
+def test_league_result_rejects_reversed_configured_orientation(
+    tmp_path: Path,
+    explicit_match_id: bool,
+) -> None:
+    config = _template_config(tmp_path, "league-knockout")
+    row = {
+        "status": "final",
+        "stage_id": "league-stage",
+        "home_team": "Beacon Town",
+        "away_team": "Alpha FC",
+        "home_score": 1,
+        "away_score": 0,
+        "leg": 1,
+    }
+    if explicit_match_id:
+        row["match_id"] = "league-1"
+
+    with pytest.raises(TournamentValidationError, match="home-away order"):
+        preview_results(config, _json_source(tmp_path, [row]), format="json")
+
+
+def test_knockout_result_rejects_reversed_configured_orientation(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    _complete_group_stage(config)
+    row = {
+        "status": "final",
+        "match_id": "semi-final-1",
+        "stage_id": "semi-finals",
+        "home_team": "Foxtrot Rovers",
+        "away_team": "Alpha Club",
+        "home_score": 0,
+        "away_score": 1,
+        "leg": 1,
+    }
+
+    with pytest.raises(TournamentValidationError, match="pairing|home-away order"):
+        preview_results(config, _json_source(tmp_path, [row]), format="json")
+
+
+@pytest.mark.parametrize("template", ["group-knockout", "league-knockout"])
+def test_table_result_rejects_declared_winner_on_draw(
+    tmp_path: Path,
+    template: str,
+) -> None:
+    config = _template_config(tmp_path, template)
+    if template == "group-knockout":
+        row = _result(home_score=1, away_score=1, winner_team="Alpha Club")
+    else:
+        row = {
+            "status": "final",
+            "match_id": "league-1",
+            "stage_id": "league-stage",
+            "home_team": "Alpha FC",
+            "away_team": "Beacon Town",
+            "home_score": 1,
+            "away_score": 1,
+            "winner_team": "Alpha FC",
+        }
+
+    with pytest.raises(TournamentValidationError, match="draw.*winner|winner.*draw"):
+        preview_results(config, _json_source(tmp_path, [row]), format="json")
+
+
+def test_two_leg_knockout_winner_uses_aggregate_not_final_leg_score(
+    tmp_path: Path,
+) -> None:
+    config = _template_config(tmp_path, "group-two-leg-knockout")
+    _complete_group_stage(config)
+    rows = [
+        {
+            "status": "final",
+            "match_id": "semi-final-1",
+            "stage_id": "semi-finals",
+            "home_team": "Alpha Club",
+            "away_team": "Foxtrot Rovers",
+            "home_score": 3,
+            "away_score": 0,
+            "leg": 1,
+        },
+        {
+            "status": "final",
+            "match_id": "semi-final-1",
+            "stage_id": "semi-finals",
+            "home_team": "Foxtrot Rovers",
+            "away_team": "Alpha Club",
+            "home_score": 1,
+            "away_score": 0,
+            "leg": 2,
+            "winner_team": "Alpha Club",
+        },
+    ]
+
+    preview = preview_results(config, _json_source(tmp_path, rows), format="json")
+
+    assert [(fact.leg, fact.winner_team_id) for fact in preview.additions] == [
+        (1, None),
+        (2, "alpha-club"),
+    ]
+
+
 def test_preview_separates_conflicts_and_unmatched_rows_and_apply_refuses_them(
     tmp_path: Path,
 ) -> None:
@@ -137,6 +449,82 @@ def test_preview_separates_conflicts_and_unmatched_rows_and_apply_refuses_them(
     assert "Unknown FC" in preview.unmatched[0].reason
     with pytest.raises(TournamentValidationError, match="conflict.*unmatched"):
         apply_results(config, preview)
+
+
+def test_result_metadata_is_recursively_sanitized_before_preview_and_apply(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    source = _json_source(
+        tmp_path,
+        [
+            _result(
+                metadata={
+                    "credential": "result-credential",
+                    "nested": [
+                        {
+                            "access_key_id": "AKIARESULTSECRET",
+                            "url": (
+                                "https://user:pass@example.test/result?"
+                                "X-Amz-Signature=signed-secret&region=br"
+                            ),
+                        }
+                    ],
+                }
+            )
+        ],
+    )
+
+    preview = preview_results(config, source, format="json")
+    serialized_preview = json.dumps(preview.to_dict(), sort_keys=True)
+
+    for secret in (
+        "result-credential",
+        "AKIARESULTSECRET",
+        "signed-secret",
+        "user",
+        "pass@",
+    ):
+        assert secret not in serialized_preview
+    assert serialized_preview.count("[REDACTED]") == 2
+    apply_results(config, preview)
+    serialized_config = config.read_text(encoding="utf-8")
+    assert "result-credential" not in serialized_config
+    assert "AKIARESULTSECRET" not in serialized_config
+    assert "signed-secret" not in serialized_config
+    assert "X-Amz-Signature=REDACTED" in serialized_config
+
+
+def test_unmatched_and_existing_conflict_metadata_cannot_leak_in_preview(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    initial = preview_results(config, _json_source(tmp_path, [_result()]), format="json")
+    apply_results(config, initial)
+    document = json.loads(config.read_text(encoding="utf-8"))
+    document["completed_matches"][0]["metadata"] = {
+        "password": "existing-password"
+    }
+    config.write_text(json.dumps(document), encoding="utf-8")
+    source = _json_source(
+        tmp_path,
+        [
+            _result(home_score=3, metadata={"auth_token": "incoming-token"}),
+            _result(
+                home_team="Unknown FC",
+                metadata={"client_secret": "unmatched-secret"},
+            ),
+        ],
+    )
+
+    preview = preview_results(config, source, format="json")
+    serialized = json.dumps(preview.to_dict(), sort_keys=True)
+
+    assert len(preview.conflicts) == 1
+    assert len(preview.unmatched) == 1
+    for secret in ("existing-password", "incoming-token", "unmatched-secret"):
+        assert secret not in serialized
+    assert serialized.count("[REDACTED]") == 3
 
 
 def test_apply_detects_stale_preview_and_explicit_replacement_remains_atomic(
@@ -201,3 +589,39 @@ def test_cli_results_import_previews_by_default_and_requires_apply_for_mutation(
     applied_output = capsys.readouterr().out
     assert "Applied results: 1 addition" in applied_output
     assert len(load_tournament(config).completed_matches) == 1
+
+
+def test_cli_prints_exact_conflict_diff_before_explicit_replacement(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = _config(tmp_path)
+    initial = preview_results(config, _json_source(tmp_path, [_result()]), format="json")
+    apply_results(config, initial)
+    source = _json_source(
+        tmp_path,
+        [_result(home_score=1, away_score=2, winner_team="Bravo Town")],
+    )
+    match_id = _configured_match_id(config)
+
+    assert main(
+        [
+            "update-results",
+            "--config",
+            str(config),
+            "--source",
+            str(source),
+            "--apply",
+            "--replace-conflicts",
+        ]
+    ) == 0
+    output = capsys.readouterr().out
+    expected_diff = (
+        f"  conflict {match_id} leg 1:\n"
+        "    existing: alpha-club 2-1 bravo-town; winner: none\n"
+        "    incoming: alpha-club 1-2 bravo-town; winner: bravo-town\n"
+        "    reason: incoming result differs from immutable completed fact\n"
+    )
+    assert expected_diff in output
+    assert output.index(expected_diff) < output.index("Applied results:")
+    assert load_tournament(config).completed_matches[0].score.away == 2

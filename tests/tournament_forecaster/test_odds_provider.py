@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,7 @@ import pytest
 from tournament_forecaster.cli import main
 from tournament_forecaster.errors import TournamentValidationError
 from tournament_forecaster.providers.odds import preview_odds, redact_url
+from tournament_forecaster.resources import resource_path
 
 
 def _odds_source(tmp_path: Path, **overrides: object) -> Path:
@@ -54,6 +56,15 @@ def test_preview_odds_validates_and_preserves_only_diagnostic_provenance(
         "https://example.test/path?ToKeN=encoded%20secret&x=1",
         "https://example.test/path?signature=one&signature=two&x=1",
         "https://example.test/path?x=1&client_secret=hunter2&apiKey=value",
+        (
+            "https://encoded%40user:p%40ss@example.test/path?"
+            "X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2Fscope&"
+            "AWSAccessKeyId=aws-key&X-Goog-Credential=goog%2Fscope&x=1"
+        ),
+        (
+            "https://example.test/path?X%2DAmz%2DCredential=encoded-credential&"
+            "PASSWORD=opensesame&Authorization=Bearer%20private&AUTH=basic&x=1"
+        ),
     ],
 )
 def test_redact_url_removes_userinfo_and_all_sensitive_duplicate_values(url: str) -> None:
@@ -66,8 +77,55 @@ def test_redact_url_removes_userinfo_and_all_sensitive_duplicate_values(url: str
     assert "secret" not in redacted.lower().replace("client_secret", "")
     assert "hunter2" not in redacted
     assert "value" not in redacted
+    assert "AKIAIOSFODNN7EXAMPLE" not in redacted
+    assert "aws-key" not in redacted
+    assert "goog" not in redacted
+    assert "encoded-credential" not in redacted
+    assert "opensesame" not in redacted
+    assert "private" not in redacted
+    assert "basic" not in redacted
     assert redacted.count("REDACTED") >= 1
     assert "x=1" in redacted
+
+
+def test_odds_metadata_is_recursively_sanitized_and_serializable(tmp_path: Path) -> None:
+    source = _odds_source(
+        tmp_path,
+        odds=[
+            {
+                "market": "champion",
+                "selection_id": "alpha-club",
+                "decimal_odds": 4.25,
+                "metadata": {
+                    "safe": "kept",
+                    "api_token": "top-secret-token",
+                    "nested": [
+                        {
+                            "Password": "nested-password",
+                            "feed": (
+                                "https://user:pass@example.test/feed?"
+                                "X-Goog-Credential=goog-secret&region=br"
+                            ),
+                        }
+                    ],
+                },
+            }
+        ],
+    )
+
+    serialized = json.dumps(preview_odds(source).to_dict(), sort_keys=True)
+
+    for secret in (
+        "top-secret-token",
+        "nested-password",
+        "goog-secret",
+        "user",
+        "pass@",
+    ):
+        assert secret not in serialized
+    assert serialized.count("[REDACTED]") == 2
+    assert "X-Goog-Credential=REDACTED" in serialized
+    assert '"safe": "kept"' in serialized
 
 
 @pytest.mark.parametrize(
@@ -85,6 +143,16 @@ def test_redact_url_removes_userinfo_and_all_sensitive_duplicate_values(url: str
                 }
             ]
         },
+        {
+            "odds": [
+                {
+                    "market": "champion",
+                    "selection_id": "alpha",
+                    "decimal_odds": 2.0,
+                    "source_url": "https://[malformed",
+                }
+            ]
+        },
         {"championship_probability": 0.5},
     ],
 )
@@ -94,6 +162,19 @@ def test_preview_odds_rejects_invalid_or_probability_mutating_documents(
 ) -> None:
     with pytest.raises(TournamentValidationError):
         preview_odds(_odds_source(tmp_path, **overrides))
+
+
+@pytest.mark.parametrize("input_kind", ["missing", "invalid-utf8"])
+def test_odds_input_failures_are_validation_errors(
+    tmp_path: Path,
+    input_kind: str,
+) -> None:
+    source = tmp_path / "odds.json"
+    if input_kind == "invalid-utf8":
+        source.write_bytes(b"\xff")
+
+    with pytest.raises(TournamentValidationError, match="odds.*(read|UTF-8)"):
+        preview_odds(source)
 
 
 def test_cli_odds_surface_is_preview_only(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -113,3 +194,28 @@ def test_cli_odds_surface_rejects_apply_because_odds_never_mutate_core_state(
         main(["update-odds", "--source", str(_odds_source(tmp_path)), "--apply"])
 
     assert error.value.code == 2
+
+
+def test_odds_schema_and_runtime_accept_case_insensitive_https(tmp_path: Path) -> None:
+    source = _odds_source(
+        tmp_path,
+        odds=[
+            {
+                "market": "champion",
+                "selection_id": "alpha-club",
+                "decimal_odds": 4.25,
+                "source_url": "HTTPS://odds.example.test/feed",
+            }
+        ],
+    )
+    assert preview_odds(source).records[0].source_url == (
+        "https://odds.example.test/feed"
+    )
+    with resource_path("schemas", "odds.import.schema.json") as schema_path:
+        schema = json.loads(Path(schema_path).read_text(encoding="utf-8"))
+    pattern = schema["properties"]["odds"]["items"]["properties"]["source_url"][
+        "pattern"
+    ]
+
+    assert pattern == "^[Hh][Tt][Tt][Pp][Ss]?://"
+    assert re.match(pattern, "HTTPS://odds.example.test/feed")

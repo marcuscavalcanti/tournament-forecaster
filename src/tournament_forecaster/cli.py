@@ -208,6 +208,21 @@ def _run_update_results(arguments: argparse.Namespace) -> int:
     print(f"  idempotent: {len(preview.idempotent)}")
     print(f"  conflicts: {len(preview.conflicts)}")
     print(f"  unmatched: {len(preview.unmatched)}")
+    for conflict in preview.conflicts:
+        existing = conflict.existing
+        incoming = conflict.incoming
+        print(f"  conflict {incoming.match_id} leg {incoming.leg}:")
+        print(
+            f"    existing: {existing.home_team_id} "
+            f"{existing.home_score}-{existing.away_score} {existing.away_team_id}; "
+            f"winner: {existing.winner_team_id or 'none'}"
+        )
+        print(
+            f"    incoming: {incoming.home_team_id} "
+            f"{incoming.home_score}-{incoming.away_score} {incoming.away_team_id}; "
+            f"winner: {incoming.winner_team_id or 'none'}"
+        )
+        print(f"    reason: {conflict.reason}")
     for issue in preview.unmatched:
         print(f"  unmatched row {issue.row_number}: {issue.reason}")
     if not arguments.apply:

@@ -602,13 +602,13 @@ def _validate_group_stage(
 def _validate_league_stage(
     stage: Mapping[str, object],
     team_ids: set[str],
-) -> tuple[dict[str, frozenset[str]], dict[str, frozenset[int]]]:
+) -> tuple[dict[str, tuple[str, str]], dict[str, frozenset[int]]]:
     stage_id = str(stage["id"])
     label = f"league stage {stage_id}"
     _reject_unknown_properties(stage, _LEAGUE_STAGE_PROPERTIES, label)
     _validate_stage_metadata(stage, label)
     fixtures = _sequence(stage.get("fixtures"), f"league stage {stage_id} fixtures")
-    fixture_teams: dict[str, frozenset[str]] = {}
+    fixture_teams: dict[str, tuple[str, str]] = {}
     for fixture_value in fixtures:
         fixture = _mapping(fixture_value, "league fixture")
         _reject_unknown_properties(
@@ -627,7 +627,7 @@ def _validate_league_stage(
             raise TournamentValidationError("league fixtures must reference configured teams")
         if match_id in fixture_teams:
             raise TournamentValidationError("league fixture match ids must be unique")
-        fixture_teams[match_id] = frozenset({home_team_id, away_team_id})
+        fixture_teams[match_id] = (home_team_id, away_team_id)
     if "points" in stage:
         _validate_points(stage["points"], f"{label} points")
     if "tiebreakers" in stage:
@@ -793,6 +793,11 @@ def _completed_knockout_winner(
 
     legs = stage.get("legs")
     assert isinstance(legs, int) and not isinstance(legs, bool)
+    canonical_pairs = {_knockout_fact_pair(stage, match) for match in matches}
+    if len(canonical_pairs) > 1:
+        raise TournamentValidationError(
+            "completed knockout leg home-away order contradicts its tie"
+        )
     facts_by_leg = {match.leg: match for match in matches}
     all_legs_present = all(leg in facts_by_leg for leg in range(1, legs + 1))
     if any(match.winner_team_id is not None for match in matches) and not all_legs_present:
@@ -863,6 +868,27 @@ def _completed_knockout_winner(
     return declared_winner
 
 
+def _knockout_fact_pair(
+    stage: Mapping[str, object],
+    match: CompletedMatch,
+) -> tuple[str, str]:
+    """Normalize one knockout leg to configured first/second entrant order."""
+
+    legs = stage.get("legs")
+    assert isinstance(legs, int) and not isinstance(legs, bool)
+    if legs == 1:
+        return match.home_team_id, match.away_team_id
+    home_away_order = str(stage.get("home_away_order"))
+    first_team_is_home = (
+        home_away_order == "listed_team_first_leg_home" and match.leg == 1
+    ) or (
+        home_away_order == "seeded_team_second_leg_home" and match.leg == 2
+    )
+    if first_team_is_home:
+        return match.home_team_id, match.away_team_id
+    return match.away_team_id, match.home_team_id
+
+
 def validate_tournament(tournament: Tournament) -> None:
     """Validate cross-object invariants after a tournament has been normalized."""
 
@@ -892,9 +918,9 @@ def validate_tournament(tournament: Tournament) -> None:
     group_memberships: dict[str, dict[str, str]] = {}
     group_fixture_contracts: dict[
         str,
-        dict[str, tuple[frozenset[str], int]],
+        dict[str, tuple[str, str, int]],
     ] = {}
-    league_fixtures: dict[str, dict[str, frozenset[str]]] = {}
+    league_fixtures: dict[str, dict[str, tuple[str, str]]] = {}
     league_qualification_bands: dict[str, dict[str, frozenset[int]]] = {}
     stage_leg_limits: dict[str, int] = {}
     knockout_sources: dict[str, tuple[Mapping[str, object], ...]] = {}
@@ -1080,7 +1106,11 @@ def validate_tournament(tournament: Tournament) -> None:
                 (match.stage_id, match.match_id),
                 [],
             ).append(match)
-        elif match.winner_team_id is not None and match.score.home != match.score.away:
+        elif match.winner_team_id is not None:
+            if match.score.home == match.score.away:
+                raise TournamentValidationError(
+                    "completed group or league draw cannot declare a winner"
+                )
             score_winner = (
                 match.home_team_id
                 if match.score.home > match.score.away
@@ -1097,13 +1127,17 @@ def validate_tournament(tournament: Tournament) -> None:
             ):
                 raise TournamentValidationError("completed group match teams must share the same configured group")
             expected_identity = group_fixture_contracts[match.stage_id].get(match.match_id)
-            if expected_identity != (identity[1], match.leg):
+            if expected_identity != (
+                match.home_team_id,
+                match.away_team_id,
+                match.leg,
+            ):
                 raise TournamentValidationError(
                     "completed group match does not match the generated group fixture contract"
                 )
         if match.stage_id in league_fixtures:
             configured_pair = league_fixtures[match.stage_id].get(match.match_id)
-            if configured_pair != identity[1]:
+            if configured_pair != (match.home_team_id, match.away_team_id):
                 raise TournamentValidationError("completed league match must reference a configured league fixture")
     completed_winners: dict[str, str] = {}
     locked_entrants_by_stage: dict[str, set[str]] = {}
@@ -1117,8 +1151,7 @@ def validate_tournament(tournament: Tournament) -> None:
             )
         locked_entrants.update(team_pair)
         locked_pairs_by_stage.setdefault(stage_id, {})[match_id] = (
-            matches[0].home_team_id,
-            matches[0].away_team_id,
+            _knockout_fact_pair(stages_by_id[stage_id], matches[0])
         )
         winner = _completed_knockout_winner(stages_by_id[stage_id], matches)
         if winner is not None:
@@ -1162,7 +1195,8 @@ def validate_tournament(tournament: Tournament) -> None:
             if rank_stage_type == "group":
                 completed_contract = {
                     match.match_id: (
-                        frozenset((match.home_team_id, match.away_team_id)),
+                        match.home_team_id,
+                        match.away_team_id,
                         match.leg,
                     )
                     for match in source_facts
@@ -1208,7 +1242,8 @@ def validate_tournament(tournament: Tournament) -> None:
         source_facts = completed_by_stage.get(stage_id, [])
         completed_contract = {
             match.match_id: (
-                frozenset((match.home_team_id, match.away_team_id)),
+                match.home_team_id,
+                match.away_team_id,
                 match.leg,
             )
             for match in source_facts
