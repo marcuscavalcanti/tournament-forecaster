@@ -1008,6 +1008,114 @@ def test_post_move_quarantine_failure_restores_original_from_actual_path(
     assert len(quarantined_document["completed_matches"]) == 1
 
 
+def test_post_rollback_observation_error_reports_only_current_recovery_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    preview = preview_results(config, _json_source(tmp_path, [_result()]), format="json")
+    original_bytes = config.read_bytes()
+    original_identity = (config.stat().st_dev, config.stat().st_ino)
+    native_move = results_provider._atomic_move_no_replace_at
+    native_fsync = os.fsync
+    native_snapshot = results_provider._snapshot_exchange_entries_between_at
+    quarantine_descriptor: int | None = None
+    provider_bytes: bytes | None = None
+    injected = False
+    removed_after_rollback = False
+
+    def arm_after_quarantine_move(
+        source_descriptor: int,
+        source_name: str,
+        destination_descriptor: int,
+        destination_name: str,
+    ) -> None:
+        nonlocal quarantine_descriptor
+        native_move(
+            source_descriptor,
+            source_name,
+            destination_descriptor,
+            destination_name,
+        )
+        if destination_name == "entry":
+            quarantine_descriptor = destination_descriptor
+
+    def fail_first_quarantine_fsync(descriptor: int) -> None:
+        nonlocal injected
+        if descriptor == quarantine_descriptor and not injected:
+            injected = True
+            raise OSError(errno.EIO, "injected post-move quarantine failure")
+        native_fsync(descriptor)
+
+    def remove_entry_before_rollback_observation(
+        source_descriptor: int,
+        source_name: str,
+        destination_descriptor: int,
+        destination_name: str,
+        phase: str,
+    ) -> results_provider._ExchangeSnapshot:
+        nonlocal provider_bytes, removed_after_rollback
+        if phase == "moved quarantine rolled-back" and not removed_after_rollback:
+            descriptor = os.open(
+                source_name,
+                os.O_RDONLY | os.O_NOFOLLOW,
+                dir_fd=source_descriptor,
+            )
+            with os.fdopen(descriptor, "rb") as handle:
+                provider_bytes = handle.read()
+            os.unlink(source_name, dir_fd=source_descriptor)
+            removed_after_rollback = True
+        return native_snapshot(
+            source_descriptor,
+            source_name,
+            destination_descriptor,
+            destination_name,
+            phase,
+        )
+
+    monkeypatch.setattr(
+        results_provider,
+        "_atomic_move_no_replace_at",
+        arm_after_quarantine_move,
+    )
+    monkeypatch.setattr(os, "fsync", fail_first_quarantine_fsync)
+    monkeypatch.setattr(
+        results_provider,
+        "_snapshot_exchange_entries_between_at",
+        remove_entry_before_rollback_observation,
+    )
+
+    with pytest.raises(TournamentValidationError) as captured:
+        apply_results(config, preview)
+
+    assert injected is True
+    assert removed_after_rollback is True
+    assert config.read_bytes() == original_bytes
+    assert (config.stat().st_dev, config.stat().st_ino) == original_identity
+    assert provider_bytes is not None
+    provider_witnesses = _regular_paths_with_bytes(tmp_path, provider_bytes)
+    assert provider_witnesses
+
+    structured_type = results_provider._QuarantineOperationError
+    current: BaseException | None = captured.value
+    structured_error: results_provider._QuarantineOperationError | None = None
+    while current is not None:
+        if isinstance(current, structured_type):
+            structured_error = current
+            break
+        current = current.__cause__
+    assert structured_error is not None
+    historical_entry = tmp_path / structured_error.state.relative_path
+    assert not historical_entry.exists()
+
+    message = str(captured.value)
+    assert str(historical_entry) not in message
+    reported_paths = _reported_paths_under(message, tmp_path)
+    assert reported_paths
+    assert all(path.exists() for path in reported_paths)
+    assert any(path in reported_paths for path in provider_witnesses)
+
+
 def test_post_move_rollback_rejection_reports_provider_canonical_truthfully(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

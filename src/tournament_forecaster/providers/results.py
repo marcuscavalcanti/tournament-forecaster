@@ -1943,8 +1943,7 @@ def _ensure_witness_recovery_for_moved_quarantine(
     state: _QuarantineFailureState,
     expected_identity: LocalFileIdentity,
     expected_bytes: bytes,
-    recovery_names: list[str],
-) -> None:
+) -> str | None:
     if _entry_is_exact_regular_file_at(
         parent_descriptor,
         target_name,
@@ -1958,15 +1957,32 @@ def _ensure_witness_recovery_for_moved_quarantine(
         expected_identity,
         expected_bytes,
     ):
-        return
-    recovery_names.append(
-        _write_recovery_file_at(
-            parent_descriptor,
-            target_name,
-            parent_path,
-            expected_bytes,
-        )
+        return None
+    recovery_name = _write_recovery_file_at(
+        parent_descriptor,
+        target_name,
+        parent_path,
+        expected_bytes,
     )
+    return recovery_name
+
+
+def _recovery_file_has_bytes_at(
+    parent_descriptor: int,
+    parent_path: Path,
+    recovery_name: str,
+    expected_bytes: bytes,
+) -> bool:
+    try:
+        _, recovery_bytes = _read_file_at(
+            parent_descriptor,
+            recovery_name,
+            parent_path / recovery_name,
+            "tournament config recovery witness",
+        )
+    except TournamentValidationError:
+        return False
+    return recovery_bytes == expected_bytes
 
 
 def _recover_moved_quarantine_at(
@@ -2044,7 +2060,7 @@ def _recover_moved_quarantine_at(
                 (original_identity, original_bytes),
                 (replacement_identity, replacement_bytes),
             ):
-                _ensure_witness_recovery_for_moved_quarantine(
+                recovery_name = _ensure_witness_recovery_for_moved_quarantine(
                     parent_descriptor,
                     quarantine_descriptor,
                     parent_path,
@@ -2053,8 +2069,9 @@ def _recover_moved_quarantine_at(
                     state,
                     identity,
                     content,
-                    recovery_names,
                 )
+                if recovery_name is not None:
+                    recovery_names.append(recovery_name)
             _raise_recovery_error(
                 reason,
                 "post-move entries changed before rollback; no exchange was attempted; "
@@ -2093,11 +2110,12 @@ def _recover_moved_quarantine_at(
             )
             transition = _classify_exchange_transition(before, after)
         except TournamentValidationError as error:
+            written_witnesses: list[tuple[str, bytes]] = []
             for identity, content in (
                 (original_identity, original_bytes),
                 (replacement_identity, replacement_bytes),
             ):
-                _ensure_witness_recovery_for_moved_quarantine(
+                recovery_name = _ensure_witness_recovery_for_moved_quarantine(
                     parent_descriptor,
                     quarantine_descriptor,
                     parent_path,
@@ -2106,20 +2124,31 @@ def _recover_moved_quarantine_at(
                     state,
                     identity,
                     content,
-                    recovery_names,
                 )
+                if recovery_name is not None:
+                    written_witnesses.append((recovery_name, content))
+            final_recovery_names = _quarantine_recovery_names_at(
+                parent_descriptor,
+                quarantine_descriptor,
+                state,
+            )
+            final_recovery_names.extend(
+                recovery_name
+                for recovery_name, content in written_witnesses
+                if _recovery_file_has_bytes_at(
+                    parent_descriptor,
+                    parent_path,
+                    recovery_name,
+                    content,
+                )
+            )
             _raise_recovery_error(
                 reason,
                 "post-move rollback could not be observed safely; "
                 f"{_canonical_recovery_state(parent_descriptor, target_name, canonical_path, original_identity, original_bytes, replacement_identity, replacement_bytes).value}; "
                 f"observation error: {error}",
                 parent_path,
-                _quarantine_recovery_names_at(
-                    parent_descriptor,
-                    quarantine_descriptor,
-                    state,
-                )
-                + recovery_names,
+                final_recovery_names,
             )
 
         recovery_names = _quarantine_recovery_names_at(
@@ -2131,7 +2160,7 @@ def _recover_moved_quarantine_at(
             (original_identity, original_bytes),
             (replacement_identity, replacement_bytes),
         ):
-            _ensure_witness_recovery_for_moved_quarantine(
+            recovery_name = _ensure_witness_recovery_for_moved_quarantine(
                 parent_descriptor,
                 quarantine_descriptor,
                 parent_path,
@@ -2140,8 +2169,9 @@ def _recover_moved_quarantine_at(
                 state,
                 identity,
                 content,
-                recovery_names,
             )
+            if recovery_name is not None:
+                recovery_names.append(recovery_name)
         canonical_state = _canonical_recovery_state(
             parent_descriptor,
             target_name,
