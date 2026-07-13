@@ -1,4 +1,4 @@
-SHELL := /bin/zsh
+SHELL := /bin/sh
 
 PYTHON ?= uv run --locked python
 PYTEST ?= uv run --locked --extra dev python -m pytest

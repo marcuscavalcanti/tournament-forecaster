@@ -954,6 +954,7 @@ def test_workflows_are_offline_scoped_and_do_not_publish() -> None:
     assert "workflow_call" in ci
     assert "workflow_call" in gitleaks
     assert "workflow_call" in gate
+    assert "pull-requests: read" in gitleaks
     assert '["3.11", "3.12", "3.13"]' in ci
     for check in (
         "ruff",
@@ -1209,6 +1210,13 @@ def test_makefile_help_is_english_and_scanned() -> None:
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.startswith("Main commands:\n")
     assert "make quickstart generates a complete synthetic offline forecast" in completed.stdout
+
+
+def test_makefile_uses_a_portable_posix_shell() -> None:
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+
+    assert "SHELL := /bin/sh" in makefile
+    assert "/bin/zsh" not in makefile
 
 
 def test_pristine_clone_make_validate_installs_declared_test_dependencies(
