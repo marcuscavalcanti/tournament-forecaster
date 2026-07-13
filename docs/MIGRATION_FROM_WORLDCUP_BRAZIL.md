@@ -47,7 +47,7 @@ When `bridges_enabled` is omitted from config, the inherited-environment alterna
 WORLDCUP_ENABLE_BRIDGES=1 worldcup-brazil-report
 ```
 
-The legacy Make targets expose the same choices intentionally through `LEGACY_ENV_FILE`, `LEGACY_SHELL_ENV_FILE`, and `LEGACY_BRIDGES`. An empty variable adds no flag; `LEGACY_BRIDGES` accepts only `0` or `1` when set:
+The legacy Make targets expose the same choices intentionally through `LEGACY_ENV_FILE`, `LEGACY_SHELL_ENV_FILE`, and `LEGACY_BRIDGES`. `daily` and `force` pass an explicit environment file to both the market-odds refresh and report process; `doctor` receives the environment-file and bridge choices. An empty variable adds no flag; `LEGACY_BRIDGES` accepts only `0` or `1` when set:
 
 ```bash
 make daily LEGACY_ENV_FILE=/path/to/operator.env

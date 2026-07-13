@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -149,3 +150,42 @@ def test_update_market_odds_without_api_key_is_optional_unless_required(tmp_path
     assert required_rc == 2
     updated = json.loads(config_path.read_text(encoding="utf-8"))
     assert updated["market_outright_odds"] == []
+
+
+@pytest.mark.parametrize(
+    ("option", "content"),
+    [
+        ("--env-file", "THE_ODDS_API_KEY=explicit-file-key\n"),
+        ("--shell-env-file", "export THE_ODDS_API_KEY=explicit-file-key\n"),
+    ],
+)
+def test_update_market_odds_loads_only_explicit_environment_files_before_fetch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    option: str,
+    content: str,
+) -> None:
+    config_path = _config_path(tmp_path)
+    env_file = tmp_path / "operator.env"
+    env_file.write_text(content, encoding="utf-8")
+    monkeypatch.delenv("THE_ODDS_API_KEY", raising=False)
+    observed: dict[str, str | None] = {}
+
+    def _observe_key(_url: str) -> None:
+        observed["key"] = os.environ.get("THE_ODDS_API_KEY")
+        return None
+
+    monkeypatch.setattr(market_odds, "_odds_api_text_from_url", _observe_key)
+
+    result = market_odds.main(
+        [
+            "--config",
+            str(config_path),
+            "--from-the-odds-api",
+            option,
+            str(env_file),
+        ]
+    )
+
+    assert result == 0
+    assert observed == {"key": "explicit-file-key"}

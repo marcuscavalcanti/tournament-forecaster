@@ -129,6 +129,17 @@ def test_redact_url_redacts_oauth_fragment_secrets_and_preserves_benign_fragment
     )
 
 
+def test_redact_url_preserves_fragment_routes_while_redacting_route_parameters() -> None:
+    benign = "https://example.test/#/scores?view=summary&round=semi-finals"
+    secret = "https://example.test/#/scores?access_token=fragment-secret&view=summary"
+
+    assert redact_url(benign) == benign
+    redacted = redact_url(secret)
+    assert redacted.startswith("https://example.test/#/scores?")
+    assert "fragment-secret" not in redacted
+    assert redacted.endswith("access_token=REDACTED&view=summary")
+
+
 def test_preview_odds_never_persists_oauth_fragment_secrets(tmp_path: Path) -> None:
     source = _odds_source(
         tmp_path,

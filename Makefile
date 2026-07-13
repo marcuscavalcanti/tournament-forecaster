@@ -24,20 +24,22 @@ LEGACY_ENV_FILE ?=
 LEGACY_SHELL_ENV_FILE ?=
 LEGACY_BRIDGES ?=
 
-LEGACY_RUN_ARGS :=
+LEGACY_ENV_ARGS :=
 ifneq ($(strip $(LEGACY_ENV_FILE)),)
-LEGACY_RUN_ARGS += --env-file "$(LEGACY_ENV_FILE)"
+LEGACY_ENV_ARGS += --env-file "$(LEGACY_ENV_FILE)"
 endif
 ifneq ($(strip $(LEGACY_SHELL_ENV_FILE)),)
-LEGACY_RUN_ARGS += --shell-env-file "$(LEGACY_SHELL_ENV_FILE)"
+LEGACY_ENV_ARGS += --shell-env-file "$(LEGACY_SHELL_ENV_FILE)"
 endif
+LEGACY_BRIDGE_ARGS :=
 ifeq ($(strip $(LEGACY_BRIDGES)),1)
-LEGACY_RUN_ARGS += --bridges
+LEGACY_BRIDGE_ARGS += --bridges
 else ifeq ($(strip $(LEGACY_BRIDGES)),0)
-LEGACY_RUN_ARGS += --no-bridges
+LEGACY_BRIDGE_ARGS += --no-bridges
 else ifneq ($(strip $(LEGACY_BRIDGES)),)
 $(error LEGACY_BRIDGES must be empty, 0, or 1)
 endif
+LEGACY_RUN_ARGS := $(LEGACY_ENV_ARGS) $(LEGACY_BRIDGE_ARGS)
 
 RUN_DAILY := $(PYTHON) scripts/run_daily_worldcup_brazil.py \
 	--config "$(CONFIG)" \
@@ -66,7 +68,7 @@ ifeq ($(APPLY),1)
 UPDATE_RESULTS_ARGS += --apply
 endif
 
-UPDATE_MARKET_ODDS_ARGS := --config "$(CONFIG)"
+UPDATE_MARKET_ODDS_ARGS := --config "$(CONFIG)" $(LEGACY_ENV_ARGS)
 ifneq ($(strip $(MARKET_ODDS_INPUT)),)
 UPDATE_MARKET_ODDS_ARGS += --odds-json "$(MARKET_ODDS_INPUT)"
 else ifeq ($(MARKET_ODDS_SOURCE),the-odds-api)
@@ -123,7 +125,7 @@ debate:
 
 doctor:
 	@mkdir -p "$(OUTPUT_DIR)"
-	$(PYTHON) scripts/run_agent_source_harness.py --config "$(CONFIG)"
+	$(PYTHON) scripts/run_agent_source_harness.py --config "$(CONFIG)" $(LEGACY_RUN_ARGS)
 
 diagrams:
 	@mkdir -p "$(OUTPUT_DIR)"

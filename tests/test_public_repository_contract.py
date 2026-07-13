@@ -702,7 +702,7 @@ def test_legacy_make_targets_require_intentional_environment_and_bridge_opt_ins(
         "LEGACY_BRIDGES=1",
     )
     assert daily.returncode == 0, daily.stdout + daily.stderr
-    assert '--env-file "/private/tmp/legacy.env"' in daily.stdout
+    assert daily.stdout.count('--env-file "/private/tmp/legacy.env"') == 2
     assert "--bridges" in daily.stdout
 
     force = _legacy_make_dry_run(
@@ -711,9 +711,20 @@ def test_legacy_make_targets_require_intentional_environment_and_bridge_opt_ins(
         "LEGACY_BRIDGES=0",
     )
     assert force.returncode == 0, force.stdout + force.stderr
-    assert '--shell-env-file "/private/tmp/legacy-profile.env"' in force.stdout
+    assert force.stdout.count(
+        '--shell-env-file "/private/tmp/legacy-profile.env"'
+    ) == 2
     assert "--no-bridges" in force.stdout
     assert "--force" in force.stdout
+
+    doctor = _legacy_make_dry_run(
+        "doctor",
+        "LEGACY_ENV_FILE=/private/tmp/legacy.env",
+        "LEGACY_BRIDGES=1",
+    )
+    assert doctor.returncode == 0, doctor.stdout + doctor.stderr
+    assert '--env-file "/private/tmp/legacy.env"' in doctor.stdout
+    assert "--bridges" in doctor.stdout
 
     invalid = _legacy_make_dry_run("daily", "LEGACY_BRIDGES=yes")
     assert invalid.returncode != 0

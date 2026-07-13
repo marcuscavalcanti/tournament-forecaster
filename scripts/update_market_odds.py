@@ -20,7 +20,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from worldcup_brazil.bracket import hydrate_canonical_configs
-from worldcup_brazil.cli import _effective_config_path
+from worldcup_brazil.cli import _effective_config_path, load_env_file
 from worldcup_brazil.pipeline import _devig_outright_title_probabilities
 
 
@@ -267,10 +267,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--odds-json", type=Path, help="read a saved The Odds API JSON snapshot")
     parser.add_argument("--from-the-odds-api", action="store_true", help="fetch outright odds from The Odds API")
     parser.add_argument("--odds-url", default=THE_ODDS_API_URL, help="The Odds API URL")
+    parser.add_argument("--env-file", type=Path, help="trusted dotenv file loaded only when provided")
+    parser.add_argument(
+        "--shell-env-file",
+        type=Path,
+        help="trusted shell-style env file loaded only when provided",
+    )
     parser.add_argument("--apply", action="store_true", help="write market_outright_odds to the effective config")
     parser.add_argument("--require", action="store_true", help="fail if no valid de-vigged odds can be ingested")
     args = parser.parse_args(argv)
 
+    load_env_file(args.env_file)
+    load_env_file(args.shell_env_file)
     config_path = _effective_config_path(args.config)
     if not config_path.exists():
         print(f"config não encontrado: {args.config}", file=sys.stderr)

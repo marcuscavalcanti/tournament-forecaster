@@ -128,6 +128,18 @@ def _redact_parameters(parameters: str) -> str:
     )
 
 
+def _redact_fragment(fragment: str) -> str:
+    if "=" not in fragment:
+        return fragment
+    query_marker = fragment.find("?")
+    first_assignment = fragment.find("=")
+    if 0 <= query_marker < first_assignment:
+        return fragment[: query_marker + 1] + _redact_parameters(
+            fragment[query_marker + 1 :]
+        )
+    return _redact_parameters(fragment)
+
+
 def redact_url(url: str) -> str:
     """Remove userinfo and redact credential-shaped query and fragment values."""
 
@@ -137,11 +149,7 @@ def redact_url(url: str) -> str:
         return REDACTED
     netloc = parsed.netloc.rsplit("@", 1)[-1]
     query = _redact_parameters(parsed.query)
-    fragment = (
-        _redact_parameters(parsed.fragment)
-        if "=" in parsed.fragment
-        else parsed.fragment
-    )
+    fragment = _redact_fragment(parsed.fragment)
     return urlunsplit((parsed.scheme, netloc, parsed.path, query, fragment))
 
 
