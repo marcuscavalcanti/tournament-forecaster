@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -37,6 +38,8 @@ def test_saved_fifa_fixture_is_deterministic_and_handles_extra_time_and_quarter_
     ]
     assert [row["result_type"] for row in first.completed[:2]] == [3, 3]
     assert first.completed[2]["stage_id"] == "quarter-finals"
+    assert first.completed[2]["fifa_home_team_id"] == "43946"
+    assert first.completed[2]["fifa_away_team_id"] == "43872"
     assert [row["source_id"] for row in first.pending] == ["400021539"]
 
 
@@ -60,6 +63,44 @@ def test_saved_fifa_fixture_fails_closed_on_unknown_conflicting_and_unsupported_
     unsupported["Results"][0]["StageName"] = [{"Description": "Mystery round"}]
     with pytest.raises(TournamentValidationError, match="unsupported FIFA stage"):
         normalize_fifa_fixture(unsupported, known_codes=codes)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("HomeTeamScore", 2.9, "score must be a non-negative integer"),
+        ("HomeTeamScore", True, "score must be a non-negative integer"),
+        ("ResultType", 1.9, "result type must be an integer"),
+        ("ResultType", True, "result type must be an integer"),
+        ("MatchNumber", 97.5, "match number must be a positive integer"),
+        ("MatchNumber", True, "match number must be a positive integer"),
+    ],
+)
+def test_fifa_fixture_rejects_non_integer_numeric_fields(
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    payload = json.loads(EDGE_FIXTURE.read_text(encoding="utf-8"))
+    payload["Results"][2][field] = value
+
+    with pytest.raises(TournamentValidationError, match=message):
+        normalize_fifa_fixture(
+            payload,
+            known_codes={"BEL", "SEN", "ARG", "CPV", "FRA", "MAR", "NOR", "ENG"},
+        )
+
+
+def test_fifa_fixture_rejects_completed_kickoff_after_retrieval() -> None:
+    payload = json.loads(EDGE_FIXTURE.read_text(encoding="utf-8"))
+    payload["Results"][2]["Date"] = "2099-01-01T00:00:00Z"
+
+    with pytest.raises(TournamentValidationError, match="kickoff_at must not be after retrieved_at"):
+        normalize_fifa_fixture(
+            payload,
+            known_codes={"BEL", "SEN", "ARG", "CPV", "FRA", "MAR", "NOR", "ENG"},
+            retrieved_at=datetime.fromisoformat("2026-07-13T12:21:03+00:00"),
+        )
 
 
 def test_final_group_draw_does_not_require_a_winner_id() -> None:
@@ -182,6 +223,24 @@ def test_checked_live_example_has_100_facts_and_simulates_full_path() -> None:
         "final",
     )
     assert forecast.stage_probabilities["semi-finals"] == 1.0
+
+
+def test_checked_completed_match_metadata_uses_raw_fifa_team_ids() -> None:
+    document = json.loads((EXAMPLE / "tournament.json").read_text(encoding="utf-8"))
+    fifa_team_ids = {
+        team["metadata"]["fifa_team_id"]
+        for team in document["teams"]
+    }
+    completed = document["completed_matches"]
+
+    assert all(
+        match["metadata"][field] in fifa_team_ids
+        for match in completed
+        for field in ("fifa_home_team_id", "fifa_away_team_id")
+    )
+    france_morocco = next(match for match in completed if match["match_id"] == "400021536")
+    assert france_morocco["metadata"]["fifa_home_team_id"] == "43946"
+    assert france_morocco["metadata"]["fifa_away_team_id"] == "43872"
 
 
 def test_checked_backtest_has_all_72_group_targets() -> None:

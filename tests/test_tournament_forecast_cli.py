@@ -189,6 +189,40 @@ def test_backtest_writes_report_and_returns_nonzero_when_sample_is_insufficient(
     assert json.loads(result.stdout) == report
 
 
+def test_backtest_cli_rejects_a_document_missing_a_required_case_result(
+    tmp_path: Path,
+) -> None:
+    from tournament_forecaster.backtest import ratings_sha256
+
+    ratings = {"alpha": 1600.0, "bravo": 1500.0}
+    source = tmp_path / "backtest.json"
+    source.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "model_version": "poisson-elo-v1",
+                "home_advantage_rating_points": 0,
+                "ratings": ratings,
+                "ratings_sha256": ratings_sha256(ratings),
+                "cases": [
+                    {
+                        "source_id": "official-1",
+                        "captured_at": "2026-06-09T12:00:00+00:00",
+                        "kickoff_at": "2026-06-11T12:00:00+00:00",
+                        "home_team_id": "alpha",
+                        "away_team_id": "bravo",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run_cli(tmp_path, "backtest", "--input", str(source))
+
+    _assert_user_error(result, "missing required properties: result")
+
+
 @pytest.mark.parametrize(
     ("document", "message"),
     [

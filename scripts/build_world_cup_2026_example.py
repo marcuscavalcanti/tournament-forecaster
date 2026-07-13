@@ -140,50 +140,50 @@ def _team_id(row: Mapping[str, object], side: str) -> str:
     return str(value or "").strip()
 
 
+def _strict_integer(value: object, label: str, *, minimum: int | None = None) -> int:
+    if type(value) is not int or (minimum is not None and value < minimum):
+        if minimum is None:
+            raise TournamentValidationError(f"{label} must be an integer")
+        qualifier = "positive" if minimum == 1 else "non-negative"
+        raise TournamentValidationError(f"{label} must be a {qualifier} integer")
+    return value
+
+
+def _timestamp(value: object, label: str) -> datetime:
+    if not isinstance(value, str) or not value.strip():
+        raise TournamentValidationError(f"{label} must be an ISO-8601 timestamp")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise TournamentValidationError(f"{label} must be an ISO-8601 timestamp") from error
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise TournamentValidationError(f"{label} must include a timezone")
+    return parsed
+
+
 def _score(row: Mapping[str, object], side: str) -> int | None:
     value = row.get(f"{side}TeamScore")
     if value is None:
         value = _side(row, side).get("Score")
     if value is None:
         return None
-    if isinstance(value, bool):
-        raise TournamentValidationError("FIFA score must be a non-negative integer")
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError) as error:
-        raise TournamentValidationError("FIFA score must be a non-negative integer") from error
-    if parsed < 0:
-        raise TournamentValidationError("FIFA score must be a non-negative integer")
-    return parsed
+    return _strict_integer(value, "FIFA score", minimum=0)
 
 
 def _result_type(row: Mapping[str, object]) -> int:
     value = row.get("ResultType") if "ResultType" in row else row.get("resultType")
-    if isinstance(value, bool):
-        raise TournamentValidationError("unsupported FIFA result type")
-    try:
-        return int(value)
-    except (TypeError, ValueError) as error:
-        raise TournamentValidationError("unsupported FIFA result type") from error
+    return _strict_integer(value, "FIFA result type")
 
 
 def _match_number(row: Mapping[str, object]) -> int:
-    value = row.get("MatchNumber")
-    if isinstance(value, bool):
-        raise TournamentValidationError("FIFA match number must be a positive integer")
-    try:
-        number = int(value)
-    except (TypeError, ValueError) as error:
-        raise TournamentValidationError("FIFA match number must be a positive integer") from error
-    if number < 1:
-        raise TournamentValidationError("FIFA match number must be a positive integer")
-    return number
+    return _strict_integer(row.get("MatchNumber"), "FIFA match number", minimum=1)
 
 
 def normalize_fifa_fixture(
     payload: object,
     *,
     known_codes: set[str] | frozenset[str],
+    retrieved_at: datetime | None = None,
 ) -> NormalizedFixture:
     """Normalize saved or fetched FIFA rows and never promote a non-final score."""
 
@@ -204,22 +204,34 @@ def normalize_fifa_fixture(
         result_type = _result_type(raw)
         home_code = _code(raw, "Home")
         away_code = _code(raw, "Away")
+        home_fifa_team_id = _team_id(raw, "Home")
+        away_fifa_team_id = _team_id(raw, "Away")
         for code in (home_code, away_code):
             if code not in known_codes and not re.fullmatch(r"(?:W|RU)\d+", code):
                 raise TournamentValidationError(f"unknown FIFA team code: {code or '<missing>'}")
         home_score = _score(raw, "Home")
         away_score = _score(raw, "Away")
+        kickoff_text = str(raw.get("Date") or raw.get("date") or "").strip()
+        kickoff_at = _timestamp(kickoff_text, f"FIFA match {source_id} kickoff_at")
         winner_id = str(raw.get("Winner") or raw.get("winner") or "").strip()
         winner_code: str | None = None
         if winner_id:
-            if winner_id == _team_id(raw, "Home"):
+            if winner_id == home_fifa_team_id:
                 winner_code = home_code
-            elif winner_id == _team_id(raw, "Away"):
+            elif winner_id == away_fifa_team_id:
                 winner_code = away_code
             else:
                 raise TournamentValidationError(f"FIFA winner is not an entrant for match {source_id}")
         is_final = result_type in _FINAL_RESULT_TYPES
         if is_final:
+            if not home_fifa_team_id or not away_fifa_team_id:
+                raise TournamentValidationError(
+                    f"final FIFA match {source_id} requires both provider team IDs"
+                )
+            if retrieved_at is not None and kickoff_at > retrieved_at:
+                raise TournamentValidationError(
+                    f"FIFA match {source_id} kickoff_at must not be after retrieved_at"
+                )
             if home_score is None or away_score is None:
                 raise TournamentValidationError(f"final FIFA match {source_id} has no score")
             inferred = home_code if home_score > away_score else away_code if away_score > home_score else None
@@ -237,9 +249,11 @@ def normalize_fifa_fixture(
             "source_id": source_id,
             "stage_id": stage_id,
             "match_number": _match_number(raw),
-            "kickoff_at": str(raw.get("Date") or raw.get("date") or "").strip(),
+            "kickoff_at": kickoff_text,
             "home_code": home_code,
             "away_code": away_code,
+            "fifa_home_team_id": home_fifa_team_id,
+            "fifa_away_team_id": away_fifa_team_id,
             "home_score": home_score,
             "away_score": away_score,
             "winner_code": winner_code,
@@ -283,7 +297,14 @@ def _raw_rows(payload: object) -> tuple[Mapping[str, object], ...]:
         raise TournamentValidationError("FIFA fixture must contain a Results array")
     if not all(isinstance(row, Mapping) for row in rows):
         raise TournamentValidationError("FIFA match row must be an object")
-    return tuple(rows)  # type: ignore[return-value]
+    return tuple(row for row in rows if isinstance(row, Mapping))
+
+
+def _normalized_match_number(row: Mapping[str, object]) -> int:
+    value = row.get("match_number")
+    if type(value) is not int:
+        raise TournamentValidationError("normalized FIFA match number must be an integer")
+    return value
 
 
 def _extract_teams_and_groups(
@@ -343,7 +364,7 @@ def _knockout_stage(
             "mode": "fixed",
             "ties": [
                 {"id": row["source_id"], "entrants": entrant_sources[str(row["source_id"])]}
-                for row in sorted(rows, key=lambda item: int(item["match_number"]))
+                for row in sorted(rows, key=_normalized_match_number)
             ],
         },
         "legs": 1,
@@ -364,19 +385,18 @@ def build_documents(
 ) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
     """Build tournament, backtest input, and backtest report documents."""
 
-    try:
-        parsed_retrieved_at = datetime.fromisoformat(retrieved_at.replace("Z", "+00:00"))
-    except ValueError as error:
-        raise TournamentValidationError("retrieved_at must be an ISO-8601 timestamp") from error
-    if parsed_retrieved_at.tzinfo is None:
-        raise TournamentValidationError("retrieved_at must include a timezone")
+    parsed_retrieved_at = _timestamp(retrieved_at, "retrieved_at")
     teams_by_code, group_codes = _extract_teams_and_groups(payload)
-    normalized = normalize_fifa_fixture(payload, known_codes=set(teams_by_code))
+    normalized = normalize_fifa_fixture(
+        payload,
+        known_codes=set(teams_by_code),
+        retrieved_at=parsed_retrieved_at,
+    )
     all_rows = (*normalized.completed, *normalized.pending)
     rows_by_stage = {
         stage_id: sorted(
             (row for row in all_rows if row["stage_id"] == stage_id),
-            key=lambda item: int(item["match_number"]),
+            key=_normalized_match_number,
         )
         for stage_id in _STAGE_IDS.values()
     }
@@ -439,7 +459,7 @@ def build_documents(
         entrants_by_stage[stage_id] = sources
 
     match_id_by_number = {
-        int(row["match_number"]): str(row["source_id"])
+        _normalized_match_number(row): str(row["source_id"])
         for row in all_rows
     }
 
@@ -499,8 +519,8 @@ def build_documents(
             "score": {"home": score_home, "away": score_away},
             "metadata": {
                 **_source_metadata(row),
-                "fifa_home_team_id": code_to_id[str(row["home_code"])],
-                "fifa_away_team_id": code_to_id[str(row["away_code"])],
+                "fifa_home_team_id": row["fifa_home_team_id"],
+                "fifa_away_team_id": row["fifa_away_team_id"],
             },
         }
         if row["stage_id"] != "group-stage":
@@ -790,13 +810,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         report,
         retrieved_at=retrieved_at,
     )
+    completed_matches = tournament.get("completed_matches")
+    backtest_cases = backtest.get("cases")
+    if not isinstance(completed_matches, Sequence) or not isinstance(backtest_cases, Sequence):
+        raise TournamentValidationError("generated example collections must be arrays")
     print(
         json.dumps(
             {
                 "output_dir": str(arguments.output_dir),
                 "retrieved_at": retrieved_at,
-                "completed_facts": len(tournament["completed_matches"]),
-                "backtest_cases": len(backtest["cases"]),
+                "completed_facts": len(completed_matches),
+                "backtest_cases": len(backtest_cases),
                 "backtest_status": report["status"],
             },
             sort_keys=True,

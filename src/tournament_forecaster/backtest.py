@@ -6,7 +6,7 @@ import hashlib
 import json
 import math
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -39,6 +39,8 @@ _CASE_PROPERTIES = frozenset(
         "metadata",
     }
 )
+_ROOT_REQUIRED = _ROOT_PROPERTIES - {"metadata"}
+_CASE_REQUIRED = _CASE_PROPERTIES - {"metadata"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,8 +105,8 @@ def _mapping(value: object, label: str) -> Mapping[str, object]:
     return value
 
 
-def _sequence(value: object, label: str) -> Sequence[object]:
-    if isinstance(value, (str, bytes, bytearray)) or not isinstance(value, Sequence):
+def _sequence(value: object, label: str) -> list[object]:
+    if not isinstance(value, list):
         raise TournamentValidationError(f"{label} must be an array")
     return value
 
@@ -115,6 +117,21 @@ def _reject_unknown(value: Mapping[str, object], allowed: frozenset[str], label:
         raise TournamentValidationError(
             f"{label} contains unknown properties: {', '.join(unknown)}"
         )
+
+
+def _require_properties(
+    value: Mapping[str, object], required: frozenset[str], label: str
+) -> None:
+    missing = sorted(required - set(value))
+    if missing:
+        raise TournamentValidationError(
+            f"{label} is missing required properties: {', '.join(missing)}"
+        )
+
+
+def _validate_optional_metadata(value: Mapping[str, object], label: str) -> None:
+    if "metadata" in value:
+        _mapping(value["metadata"], f"{label}.metadata")
 
 
 def _text(value: object, label: str) -> str:
@@ -164,13 +181,15 @@ def evaluate_backtest(
         raise TournamentValidationError("min_resolved must be an integer greater than or equal to 1")
     root = _mapping(document, "backtest document")
     _reject_unknown(root, _ROOT_PROPERTIES, "backtest document")
-    if root.get("schema_version") != 1:
+    _require_properties(root, _ROOT_REQUIRED, "backtest document")
+    _validate_optional_metadata(root, "backtest document")
+    if type(root.get("schema_version")) is not int or root["schema_version"] != 1:
         raise TournamentValidationError("unsupported backtest schema version")
     model_version = _text(root.get("model_version"), "model_version")
     if model_version not in _SUPPORTED_MODEL_VERSIONS:
         raise TournamentValidationError(f"unsupported model_version: {model_version}")
     home_advantage = _finite_number(
-        root.get("home_advantage_rating_points", 0.0),
+        root["home_advantage_rating_points"],
         "home_advantage_rating_points",
     )
     ratings_document = _mapping(root.get("ratings"), "ratings")
@@ -189,6 +208,8 @@ def evaluate_backtest(
     for index, case_value in enumerate(_sequence(root.get("cases"), "cases")):
         case = _mapping(case_value, f"cases[{index}]")
         _reject_unknown(case, _CASE_PROPERTIES, f"cases[{index}]")
+        _require_properties(case, _CASE_REQUIRED, f"cases[{index}]")
+        _validate_optional_metadata(case, f"cases[{index}]")
         source_id = _text(case.get("source_id"), f"cases[{index}].source_id")
         if source_id in source_ids:
             raise TournamentValidationError("backtest source_id values must be unique")

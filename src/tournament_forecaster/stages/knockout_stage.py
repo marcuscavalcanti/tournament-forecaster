@@ -35,16 +35,25 @@ class KnockoutStageResult:
 def _winner_from_draw(
     first_team_id: str,
     second_team_id: str,
+    deciding_home_team_id: str,
     ratings: Mapping[str, float],
     rng: random.Random,
     aggregate_tiebreak: str,
+    home_advantage: float,
 ) -> str:
+    first_is_home = deciding_home_team_id == first_team_id
+    first_advantage = home_advantage if first_is_home else 0.0
+    second_advantage = home_advantage if not first_is_home else 0.0
     if aggregate_tiebreak == "penalties":
-        first_wins = resolve_penalty_shootout(rng)
+        first_wins = resolve_penalty_shootout(
+            rng,
+            first_team_advantage_points=first_advantage,
+            second_team_advantage_points=second_advantage,
+        )
     else:
         first_wins = resolve_knockout_draw(
-            float(ratings.get(first_team_id, DEFAULT_RATING)),
-            float(ratings.get(second_team_id, DEFAULT_RATING)),
+            float(ratings.get(first_team_id, DEFAULT_RATING)) + first_advantage,
+            float(ratings.get(second_team_id, DEFAULT_RATING)) + second_advantage,
             rng,
         )
     return first_team_id if first_wins else second_team_id
@@ -125,6 +134,10 @@ def simulate_knockout_stage(
     assert isinstance(pairing_config, Mapping)
     ties = pairing_config["ties"]
     assert isinstance(ties, Sequence)
+    typed_ties: list[Mapping[str, object]] = []
+    for tie in ties:
+        assert isinstance(tie, Mapping)
+        typed_ties.append(tie)
     legs_value = stage["legs"]
     if isinstance(legs_value, bool) or not isinstance(legs_value, int):
         raise TournamentValidationError("knockout legs must be an integer")
@@ -138,7 +151,7 @@ def simulate_knockout_stage(
     )
     pairings = build_pairings(
         str(pairing_config["mode"]),
-        ties,  # type: ignore[arg-type]
+        typed_ties,
         state,
         rng,
         locked_pairs=locked,
@@ -215,9 +228,11 @@ def simulate_knockout_stage(
             winner = _winner_from_draw(
                 pairing.first_team_id,
                 pairing.second_team_id,
+                expected_legs[-1][0],
                 ratings,
                 rng,
                 aggregate_tiebreak,
+                home_advantage,
             )
         winners[pairing.match_id] = winner
 

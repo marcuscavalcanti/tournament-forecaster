@@ -140,6 +140,57 @@ def test_explicit_team_entrant_rejects_unknown_team_reference() -> None:
         load_tournament_document(document)
 
 
+def test_explicit_team_entrants_reject_the_same_team_in_both_slots() -> None:
+    from tournament_forecaster.config import load_tournament_document
+    from tournament_forecaster.errors import TournamentValidationError
+
+    document = _document()
+    document["stages"] = [
+        _terminal_stage(
+            entrants=[
+                {"type": "team", "team_id": "north-city"},
+                {"type": "team", "team_id": "north-city"},
+            ]
+        )
+    ]
+    document["completed_matches"] = []
+
+    with pytest.raises(TournamentValidationError, match="duplicate entrant"):
+        load_tournament_document(document)
+
+
+def test_completed_fixed_pair_rejects_a_pure_team_source_contradiction() -> None:
+    from tournament_forecaster.config import load_tournament_document
+    from tournament_forecaster.errors import TournamentValidationError
+
+    document = _document()
+    teams = cast(list[dict[str, object]], document["teams"])
+    teams.append({"id": "east-city", "display_name": "East City"})
+    ratings = cast(dict[str, float], document["ratings"])
+    ratings["east-city"] = 1450
+    document["stages"] = [
+        _terminal_stage(
+            entrants=[
+                {"type": "team", "team_id": "north-city"},
+                {"type": "team", "team_id": "south-city"},
+            ]
+        )
+    ]
+    document["completed_matches"] = [
+        {
+            "match_id": "final-1",
+            "stage_id": "final",
+            "home_team_id": "north-city",
+            "away_team_id": "east-city",
+            "score": {"home": 1, "away": 0},
+            "winner_team_id": "north-city",
+        }
+    ]
+
+    with pytest.raises(TournamentValidationError, match="contradicts fixed pairing sources"):
+        load_tournament_document(document)
+
+
 def _source_group_stage() -> dict[str, object]:
     return {
         "id": "source-groups",

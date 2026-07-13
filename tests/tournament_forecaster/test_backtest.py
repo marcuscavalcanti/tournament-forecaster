@@ -4,8 +4,10 @@ import hashlib
 import json
 import math
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from tournament_forecaster.backtest import evaluate_backtest
 from tournament_forecaster.errors import TournamentValidationError
@@ -142,3 +144,41 @@ def test_empty_and_insufficient_samples_are_non_ok_with_null_metrics() -> None:
     assert insufficient_report.ok is False
     assert insufficient_report.sample_size == 1
     assert all(value is not None for value in insufficient_report.metrics.values())
+
+
+@pytest.mark.parametrize(
+    "malformation",
+    [
+        "missing_home_advantage",
+        "missing_result",
+        "invalid_schema_version_type",
+        "invalid_root_metadata",
+        "invalid_case_metadata",
+    ],
+)
+def test_evaluator_enforces_the_shipped_backtest_schema(malformation: str) -> None:
+    document = _document()
+    case = document["cases"][0]  # type: ignore[index]
+    if malformation == "missing_home_advantage":
+        del document["home_advantage_rating_points"]
+    elif malformation == "missing_result":
+        del case["result"]
+    elif malformation == "invalid_schema_version_type":
+        document["schema_version"] = True
+    elif malformation == "invalid_root_metadata":
+        document["metadata"] = []
+    else:
+        case["metadata"] = []
+
+    schema_path = (
+        Path(__file__).parents[2]
+        / "src"
+        / "tournament_forecaster"
+        / "schemas"
+        / "backtest.schema.json"
+    )
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+
+    assert list(Draft202012Validator(schema).iter_errors(document))
+    with pytest.raises(TournamentValidationError):
+        evaluate_backtest(document)

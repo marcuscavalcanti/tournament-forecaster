@@ -480,3 +480,37 @@ def test_penalties_tiebreak_uses_a_neutral_shootout_after_a_draw() -> None:
     )
 
     assert result.winners == {"final-1": "bravo"}
+
+
+@pytest.mark.parametrize("aggregate_tiebreak", ["extra_time_then_penalties", "penalties"])
+@pytest.mark.parametrize(
+    ("legs", "home_away_order", "expected_home_team"),
+    [
+        (1, "listed_team_first_leg_home", "alpha"),
+        (2, "listed_team_first_leg_home", "bravo"),
+    ],
+)
+def test_draw_resolution_applies_home_advantage_at_the_deciding_venue(
+    aggregate_tiebreak: str,
+    legs: int,
+    home_away_order: str,
+    expected_home_team: str,
+) -> None:
+    stage = _stage(legs=legs)
+    stage["home_away_order"] = home_away_order
+    stage["aggregate_tiebreak"] = aggregate_tiebreak
+    stage["metadata"] = {"home_advantage_rating_points": 2000}
+
+    winners = [
+        simulate_knockout_stage(
+            stage,
+            state=_state(),
+            ratings={"alpha": 1500.0, "bravo": 1500.0},
+            completed_matches=(),
+            rng=random.Random(seed),
+            score_simulator=lambda *_: Score(0, 0),
+        ).winners["final-1"]
+        for seed in range(50)
+    ]
+
+    assert winners.count(expected_home_team) >= 49

@@ -15,7 +15,15 @@ from .standings import DEFAULT_RATING as DEFAULT_RATING
 def rating_win_probability(first_rating: float, second_rating: float) -> float:
     """Return the neutral-site Elo win strength for the first team."""
 
-    return 1.0 / (1.0 + 10.0 ** ((second_rating - first_rating) / 400.0))
+    difference = second_rating - first_rating
+    if math.isinf(difference):
+        return 0.0 if difference > 0.0 else 1.0
+    exponent = math.log(10.0) * difference / 400.0
+    if exponent >= 0.0:
+        inverse = math.exp(-exponent)
+        return inverse / (1.0 + inverse)
+    forward = math.exp(exponent)
+    return 1.0 / (1.0 + forward)
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,10 +152,18 @@ def resolve_knockout_draw(
     return rng.random() < rating_win_probability(first_rating, second_rating)
 
 
-def resolve_penalty_shootout(rng: random.Random) -> bool:
-    """Resolve a neutral shootout; true means the first team advances."""
+def resolve_penalty_shootout(
+    rng: random.Random,
+    *,
+    first_team_advantage_points: float = 0.0,
+    second_team_advantage_points: float = 0.0,
+) -> bool:
+    """Resolve a shootout with only explicitly configured venue advantage."""
 
-    return rng.random() < 0.5
+    return rng.random() < rating_win_probability(
+        first_team_advantage_points,
+        second_team_advantage_points,
+    )
 
 
 def wilson_interval(

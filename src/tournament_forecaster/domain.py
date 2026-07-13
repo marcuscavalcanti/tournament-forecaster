@@ -154,6 +154,43 @@ def _reject_unknown_properties(
         )
 
 
+def _entrant_is_resolved(
+    source: Mapping[str, object], state: QualificationState
+) -> bool:
+    source_type = source.get("type")
+    if source_type == "team":
+        return True
+    if source_type == "group_rank":
+        stage_id = source.get("stage_id")
+        group = source.get("group")
+        return (
+            isinstance(stage_id, str)
+            and isinstance(group, str)
+            and group in state.group_rankings.get(stage_id, {})
+        )
+    if source_type == "best_additional":
+        return source.get("stage_id") in state.best_additional
+    if source_type == "league_rank":
+        return source.get("stage_id") in state.league_rankings
+    if source_type == "match_winner":
+        return source.get("match_id") in state.match_winners
+    return False
+
+
+def _tie_is_resolved(
+    tie: Mapping[str, object], state: QualificationState
+) -> bool:
+    entrants = tie.get("entrants")
+    return (
+        isinstance(entrants, Sequence)
+        and not isinstance(entrants, (str, bytes))
+        and all(
+            isinstance(source, Mapping) and _entrant_is_resolved(source, state)
+            for source in entrants
+        )
+    )
+
+
 def _boolean(value: object, label: str) -> bool:
     if not isinstance(value, bool):
         raise TournamentValidationError(f"{label} must be a boolean")
@@ -1007,7 +1044,8 @@ def validate_tournament(tournament: Tournament) -> None:
                         assert isinstance(groups, Mapping)
                         group_id = str(source["group"])
                         source_rank = _integer(source["rank"], "group_rank entrant rank", minimum=1)
-                        if group_id not in groups or source_rank > len(groups[group_id]):  # type: ignore[arg-type]
+                        group_teams = groups.get(group_id)
+                        if not isinstance(group_teams, Sequence) or source_rank > len(group_teams):
                             raise TournamentValidationError("group_rank entrant does not resolve")
                     else:
                         qualification = source_stage.get("qualification")
@@ -1310,27 +1348,22 @@ def validate_tournament(tournament: Tournament) -> None:
             row.team_id for row in league_rankings
         )
 
-    rank_source_types = {"group_rank", "best_additional", "league_rank"}
-    for stage_id, locked_pairs in sorted(locked_pairs_by_stage.items()):
-        stage = stages_by_id[stage_id]
+    for stage_id, stage in sorted(stages_by_id.items()):
+        if stage.get("type") != "knockout":
+            continue
         pairing = stage["pairing"]
         assert isinstance(pairing, Mapping)
         ties = pairing["ties"]
         assert isinstance(ties, Sequence)
         mode = str(pairing["mode"])
+        locked_pairs = locked_pairs_by_stage.get(stage_id, {})
         selected_ties = tuple(
             tie
             for tie in ties
             if isinstance(tie, Mapping)
-            and (mode != "fixed" or str(tie["id"]) in locked_pairs)
+            and _tie_is_resolved(tie, resolved_state)
         )
-        selected_sources = tuple(
-            source
-            for tie in selected_ties
-            for source in tie["entrants"]  # type: ignore[index]
-            if isinstance(source, Mapping)
-        )
-        if not any(source.get("type") in rank_source_types for source in selected_sources):
+        if not selected_ties and not locked_pairs:
             continue
         resolved_ties = resolve_ties(selected_ties, resolved_state)
         validate_locked_pairs(

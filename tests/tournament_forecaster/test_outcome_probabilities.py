@@ -38,3 +38,28 @@ def test_generic_score_simulation_has_no_hidden_home_advantage() -> None:
         away_goals += score.away
 
     assert abs(home_goals - away_goals) < 600
+
+
+@pytest.mark.parametrize(
+    ("home_rating", "away_rating", "home_is_stronger"),
+    [
+        (400_000.0, 0.0, True),
+        (0.0, 400_000.0, False),
+        (1e308, -1e308, True),
+        (-1e308, 1e308, False),
+    ],
+)
+def test_exact_outcomes_are_stable_for_extreme_finite_ratings(
+    home_rating: float,
+    away_rating: float,
+    home_is_stronger: bool,
+) -> None:
+    probabilities = predict_match_outcomes(home_rating, away_rating)
+    values = (probabilities.home_win, probabilities.draw, probabilities.away_win)
+
+    assert all(math.isfinite(value) and 0.0 <= value <= 1.0 for value in values)
+    assert sum(values) == pytest.approx(1.0)
+    if home_is_stronger:
+        assert probabilities.home_win > probabilities.away_win
+    else:
+        assert probabilities.away_win > probabilities.home_win
