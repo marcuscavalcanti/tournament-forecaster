@@ -130,7 +130,7 @@ def legacy_to_generic(document: Mapping[str, object]) -> CompatibilityConversion
     for legacy_stage, value in _mapping(raw_intervals, "legacy confidence intervals").items():
         source_path = f"bundle.stage_confidence_intervals.{legacy_stage}"
         if legacy_stage == "titulo":
-            target = "championship"
+            target = "championship_probability"
         elif legacy_stage in _LEGACY_TO_GENERIC_STAGE:
             target = _LEGACY_TO_GENERIC_STAGE[legacy_stage]
         else:
@@ -240,7 +240,7 @@ def generic_to_legacy(document: Mapping[str, object]) -> CompatibilityConversion
         mapped["confidence_intervals"] = "bundle.stage_confidence_intervals"
     for interval_id, bounds in forecast.confidence_intervals.items():
         source_path = f"confidence_intervals.{interval_id}"
-        if interval_id == "championship":
+        if interval_id == "championship_probability":
             legacy_stage = "titulo"
         else:
             legacy_stage = _GENERIC_TO_LEGACY_STAGE.get(interval_id)

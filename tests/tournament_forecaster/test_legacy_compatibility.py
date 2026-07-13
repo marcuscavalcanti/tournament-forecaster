@@ -66,8 +66,17 @@ def test_legacy_to_generic_reports_every_mapped_defaulted_and_dropped_field() ->
     assert conversion.document["tournament_id"] == "world-cup-2026"
     assert conversion.document["focus_team_id"] == "brazil"
     assert conversion.document["championship_probability"] == 0.117
-    assert conversion.document["stage_probabilities"]["quarter-finals"] == 0.721
+    assert conversion.document["confidence_intervals"] == {
+        "championship_probability": [0.081, 0.154]
+    }
+    stage_probabilities = conversion.document["stage_probabilities"]
+    assert isinstance(stage_probabilities, Mapping)
+    assert stage_probabilities["quarter-finals"] == 0.721
     assert conversion.report.mapped["bundle.stage_probabilities.titulo"] == "championship_probability"
+    assert (
+        conversion.report.mapped["bundle.stage_confidence_intervals.titulo[0]"]
+        == "confidence_intervals.championship_probability[0]"
+    )
     assert conversion.report.defaulted["tournament_id"] == "world-cup-2026"
     assert "bundle.group_name" in conversion.report.dropped
     assert "evidence[0].name" in conversion.report.dropped
@@ -115,7 +124,7 @@ def test_unknown_legacy_stage_payload_is_dropped_at_every_nested_leaf() -> None:
     _assert_leaf_complete_ledger(legacy, conversion)
 
 
-def test_generic_to_legacy_reports_translation_without_importing_legacy_into_core() -> None:
+def test_generic_to_legacy_round_trips_canonical_championship_confidence_interval() -> None:
     generic = {
         "schema_version": 2,
         "run_id": "run-1",
@@ -130,7 +139,12 @@ def test_generic_to_legacy_reports_translation_without_importing_legacy_into_cor
         "stage_order": ["quarter-finals", "semi-finals", "final"],
         "matchup_probabilities": [],
         "championship_probability": 0.117,
-        "confidence_intervals": {"championship": [0.081, 0.154]},
+        "confidence_intervals": {
+            "quarter-finals": [0.681, 0.761],
+            "semi-finals": [0.383, 0.463],
+            "final": [0.195, 0.275],
+            "championship_probability": [0.081, 0.154],
+        },
         "input_provenance": [],
         "warnings": ["generic warning"],
         "council": None,
@@ -139,16 +153,30 @@ def test_generic_to_legacy_reports_translation_without_importing_legacy_into_cor
     conversion = generic_to_legacy(generic)
 
     bundle = conversion.document["bundle"]
+    assert isinstance(bundle, Mapping)
     assert bundle["stage_probabilities"] == {
         "quartas": 72.1,
         "semifinal": 42.3,
         "final": 23.5,
         "titulo": 11.7,
     }
-    assert bundle["stage_confidence_intervals"]["titulo"] == [8.1, 15.4]
+    assert bundle["stage_confidence_intervals"] == {
+        "quartas": [68.1, 76.1],
+        "semifinal": [38.3, 46.3],
+        "final": [19.5, 27.5],
+        "titulo": [8.1, 15.4],
+    }
     assert conversion.report.mapped["championship_probability"] == "bundle.stage_probabilities.titulo"
+    assert (
+        conversion.report.mapped["confidence_intervals.championship_probability[0]"]
+        == "bundle.stage_confidence_intervals.titulo[0]"
+    )
     assert "run_id" in conversion.report.dropped
     _assert_leaf_complete_ledger(generic, conversion)
+
+    round_trip = legacy_to_generic(conversion.document)
+
+    assert round_trip.document["confidence_intervals"] == generic["confidence_intervals"]
 
 
 def test_generic_package_never_imports_worldcup_brazil() -> None:
