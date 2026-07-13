@@ -105,6 +105,53 @@ def test_redact_url_preserves_benign_names_that_merely_end_in_key() -> None:
     assert redacted.count("REDACTED") == 2
 
 
+def test_redact_url_redacts_oauth_fragment_secrets_and_preserves_benign_fragments() -> None:
+    redacted = redact_url(
+        "https://example.test/callback#access_token=fragment-access&"
+        "refresh_token=fragment-refresh&id_token=fragment-id&"
+        "client_secret=fragment-client&view=summary"
+    )
+
+    for secret in (
+        "fragment-access",
+        "fragment-refresh",
+        "fragment-id",
+        "fragment-client",
+    ):
+        assert secret not in redacted
+    assert redacted.count("REDACTED") == 4
+    assert redacted.endswith("&view=summary")
+    assert redact_url("https://example.test/odds#market-summary").endswith(
+        "#market-summary"
+    )
+    assert redact_url("https://example.test/odds#view=summary&round=semi-finals").endswith(
+        "#view=summary&round=semi-finals"
+    )
+
+
+def test_preview_odds_never_persists_oauth_fragment_secrets(tmp_path: Path) -> None:
+    source = _odds_source(
+        tmp_path,
+        odds=[
+            {
+                "market": "champion",
+                "selection_id": "alpha-club",
+                "decimal_odds": 4.25,
+                "source_url": (
+                    "https://odds.example.test/callback#"
+                    "access_token=fragment-secret&view=summary"
+                ),
+            }
+        ],
+    )
+
+    serialized = json.dumps(preview_odds(source).to_dict(), sort_keys=True)
+
+    assert "fragment-secret" not in serialized
+    assert "access_token=REDACTED" in serialized
+    assert "view=summary" in serialized
+
+
 @pytest.mark.parametrize(
     "credential_name",
     [

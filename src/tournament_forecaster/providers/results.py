@@ -1130,6 +1130,19 @@ def _read_preview_target(
         os.close(parent_descriptor)
 
 
+def _revalidate_preview_source(preview: ImportPreview) -> None:
+    current_identity, current_bytes = _read_local_file(
+        preview.source_path,
+        "results source",
+    )
+    if (
+        current_identity != preview.source_identity
+        or len(current_bytes) != preview.source_identity.size
+        or _digest(current_bytes) != preview.source_identity.digest
+    ):
+        raise _error("results source identity or content changed since preview")
+
+
 def _mapping(value: object, label: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping) or not all(isinstance(key, str) for key in value):
         raise _error(f"{label} must be an object with string keys")
@@ -2731,6 +2744,7 @@ def apply_results(
         raise _error("preview belongs to a different tournament config path")
     if canonical.parent != preview.config_parent_identity.path:
         raise _error("preview belongs to a different tournament config parent")
+    _revalidate_preview_source(preview)
 
     parent_descriptor, _ = _open_parent_directory(
         preview.config_parent_identity.path,

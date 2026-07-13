@@ -384,6 +384,108 @@ def test_apply_rejects_same_bytes_at_a_different_inode_before_mutation(
     assert config.read_bytes() == original_bytes
 
 
+def test_apply_rejects_deleted_preview_source_before_mutation(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    source = _json_source(tmp_path, [_result()])
+    preview = preview_results(config, source, format="json")
+    original_config = config.read_bytes()
+    source.unlink()
+
+    with pytest.raises(TournamentValidationError, match="results source.*(?:accessed|changed)"):
+        apply_results(config, preview)
+
+    assert config.read_bytes() == original_config
+    assert _provider_artifact_paths(tmp_path, config.name) == []
+
+
+def test_apply_rejects_replaced_preview_source_before_mutation(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    source = _json_source(tmp_path, [_result()])
+    preview = preview_results(config, source, format="json")
+    original_config = config.read_bytes()
+    replacement = tmp_path / "replacement-results.json"
+    replacement.write_text(
+        source.read_text(encoding="utf-8").replace('"home_score": 2', '"home_score": 3'),
+        encoding="utf-8",
+    )
+    replacement.replace(source)
+
+    with pytest.raises(TournamentValidationError, match="results source.*changed"):
+        apply_results(config, preview)
+
+    assert config.read_bytes() == original_config
+    assert _provider_artifact_paths(tmp_path, config.name) == []
+
+
+def test_apply_rejects_same_source_bytes_at_a_new_inode_before_mutation(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    source = _json_source(tmp_path, [_result()])
+    preview = preview_results(config, source, format="json")
+    original_config = config.read_bytes()
+    original_source = source.read_bytes()
+    replacement = tmp_path / "same-results.json"
+    replacement.write_bytes(original_source)
+    assert replacement.stat().st_ino != preview.source_identity.inode
+    replacement.replace(source)
+
+    with pytest.raises(TournamentValidationError, match="results source.*changed"):
+        apply_results(config, preview)
+
+    assert source.read_bytes() == original_source
+    assert config.read_bytes() == original_config
+    assert _provider_artifact_paths(tmp_path, config.name) == []
+
+
+def test_apply_rejects_in_place_source_content_change_even_with_same_stat_fields(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    source = _json_source(tmp_path, [_result()])
+    preview = preview_results(config, source, format="json")
+    original_config = config.read_bytes()
+    changed_source = source.read_bytes().replace(b'"home_score": 2', b'"home_score": 3')
+    assert len(changed_source) == preview.source_identity.size
+    source.write_bytes(changed_source)
+    os.utime(
+        source,
+        ns=(source.stat().st_atime_ns, preview.source_identity.mtime_ns),
+    )
+    current = source.stat()
+    assert current.st_ino == preview.source_identity.inode
+    assert current.st_size == preview.source_identity.size
+    assert current.st_mtime_ns == preview.source_identity.mtime_ns
+
+    with pytest.raises(TournamentValidationError, match="results source.*changed"):
+        apply_results(config, preview)
+
+    assert config.read_bytes() == original_config
+    assert _provider_artifact_paths(tmp_path, config.name) == []
+
+
+def test_apply_reopens_the_canonical_source_after_preview_through_an_alias(
+    tmp_path: Path,
+) -> None:
+    real_parent = tmp_path / "real"
+    real_parent.mkdir()
+    config = _config(real_parent)
+    source = _json_source(real_parent, [_result()])
+    alias = tmp_path / "alias"
+    alias.symlink_to(real_parent, target_is_directory=True)
+    preview = preview_results(alias / config.name, alias / source.name, format="json")
+    alias.unlink()
+
+    receipt = apply_results(config, preview)
+
+    assert receipt.changed is True
+    assert load_tournament(config).completed_matches
+
+
 def test_apply_rejects_symlink_swap_before_mutation(tmp_path: Path) -> None:
     config = _config(tmp_path)
     preview = preview_results(config, _json_source(tmp_path, [_result()]), format="json")

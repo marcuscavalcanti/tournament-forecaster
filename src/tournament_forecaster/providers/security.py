@@ -32,6 +32,7 @@ _SENSITIVE_NAMES = frozenset(
         "credential",
         "credentials",
         "googleaccessid",
+        "idtoken",
         "key",
         "password",
         "passwd",
@@ -77,6 +78,8 @@ _SENSITIVE_TERMINAL_TOKENS = frozenset(
         "token",
     }
 )
+
+
 def _name_tokens(name: str) -> tuple[str, ...]:
     acronym_split = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", name)
     camel_split = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", acronym_split)
@@ -111,26 +114,35 @@ def credential_shaped_name(name: str) -> bool:
     )
 
 
-def redact_url(url: str) -> str:
-    """Remove userinfo and redact all credential-shaped query values."""
-
-    try:
-        parsed = urlsplit(url)
-    except ValueError:
-        return REDACTED
-    netloc = parsed.netloc.rsplit("@", 1)[-1]
-    query = urlencode(
+def _redact_parameters(parameters: str) -> str:
+    return urlencode(
         [
             (name, "REDACTED" if credential_shaped_name(name) else value)
             for name, value in parse_qsl(
-                parsed.query,
+                parameters,
                 keep_blank_values=True,
                 errors="replace",
             )
         ],
         doseq=True,
     )
-    return urlunsplit((parsed.scheme, netloc, parsed.path, query, parsed.fragment))
+
+
+def redact_url(url: str) -> str:
+    """Remove userinfo and redact credential-shaped query and fragment values."""
+
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return REDACTED
+    netloc = parsed.netloc.rsplit("@", 1)[-1]
+    query = _redact_parameters(parsed.query)
+    fragment = (
+        _redact_parameters(parsed.fragment)
+        if "=" in parsed.fragment
+        else parsed.fragment
+    )
+    return urlunsplit((parsed.scheme, netloc, parsed.path, query, fragment))
 
 
 def sanitize_metadata(value: object, *, label: str = "metadata") -> object:
