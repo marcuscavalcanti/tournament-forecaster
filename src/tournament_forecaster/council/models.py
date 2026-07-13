@@ -71,6 +71,14 @@ class CouncilOpinion:
     summary: str
     key_factors: tuple[str, ...]
 
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "stage_probabilities",
+            MappingProxyType(dict(self.stage_probabilities)),
+        )
+        object.__setattr__(self, "key_factors", tuple(self.key_factors))
+
     def to_dict(self) -> dict[str, object]:
         return {
             "agent_id": self.agent_id,
