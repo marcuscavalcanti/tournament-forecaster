@@ -53,3 +53,5 @@ jobs:
         run: python -m pytest -q tests/test_clean_source_install.py
       - name: Offline clean-wheel onboarding
         run: python -m pytest -q tests/test_clean_wheel.py
+      - name: Platform-specific results provider apply
+        run: python -m pytest -q tests/tournament_forecaster/test_results_provider.py
