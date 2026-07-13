@@ -75,6 +75,13 @@ with suppress(ImportError):  # pragma: no cover - unsupported platforms fail clo
     _fcntl = importlib.import_module("fcntl")
 
 _RENAME_EXCHANGE = 0x00000002
+_RENAME_NO_REPLACE = (
+    0x00000004
+    if sys.platform == "darwin"
+    else 0x00000001
+    if sys.platform.startswith("linux")
+    else None
+)
 _atomic_exchange_library, _atomic_exchange_function = (
     _load_atomic_exchange_function()
 )
@@ -174,6 +181,12 @@ class LocalDirectoryIdentity:
             "device": self.device,
             "inode": self.inode,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class ApplyResult:
+    changed: bool
+    backup_path: Path | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -347,8 +360,10 @@ def _require_race_resistant_primitives() -> None:
         "supports_follow_symlinks",
         (),
     )
-    if _atomic_exchange_function is None:
-        raise _error("atomic exchange is unavailable on this platform")
+    if _atomic_exchange_function is None or _RENAME_NO_REPLACE is None:
+        raise _error(
+            "atomic exchange and no-replace moves are unavailable on this platform"
+        )
     if (
         not hasattr(os, "O_DIRECTORY")
         or not hasattr(os, "O_NOFOLLOW")
@@ -356,7 +371,6 @@ def _require_race_resistant_primitives() -> None:
         or os.mkdir not in supports_dir_fd
         or os.stat not in supports_dir_fd
         or os.stat not in supports_follow_symlinks
-        or os.rename not in supports_dir_fd
         or _fcntl is None
     ):
         raise _error(
@@ -364,14 +378,18 @@ def _require_race_resistant_primitives() -> None:
         )
 
 
-def _atomic_exchange_at(
-    parent_descriptor: int,
+def _atomic_rename_at(
+    source_descriptor: int,
     source_name: str,
+    destination_descriptor: int,
     destination_name: str,
+    *,
+    flags: int,
+    operation: str,
 ) -> None:
     function = _atomic_exchange_function
     if function is None:
-        raise _error("atomic exchange is unavailable on this platform")
+        raise _error(f"atomic {operation} is unavailable on this platform")
     for name in (source_name, destination_name):
         if (
             not name
@@ -379,19 +397,52 @@ def _atomic_exchange_at(
             or os.path.basename(name) != name
             or "\x00" in name
         ):
-            raise _error("atomic exchange requires safe relative entry names")
+            raise _error(f"atomic {operation} requires safe relative entry names")
     ctypes.set_errno(0)
     result = function(
-        parent_descriptor,
+        source_descriptor,
         os.fsencode(source_name),
-        parent_descriptor,
+        destination_descriptor,
         os.fsencode(destination_name),
-        _RENAME_EXCHANGE,
+        flags,
     )
     if result != 0:
         error_number = ctypes.get_errno()
         detail = os.strerror(error_number) if error_number else "unknown platform error"
-        raise _error(f"atomic exchange failed: {detail}")
+        raise _error(f"atomic {operation} failed: {detail}")
+
+
+def _atomic_exchange_at(
+    parent_descriptor: int,
+    source_name: str,
+    destination_name: str,
+) -> None:
+    _atomic_rename_at(
+        parent_descriptor,
+        source_name,
+        parent_descriptor,
+        destination_name,
+        flags=_RENAME_EXCHANGE,
+        operation="exchange",
+    )
+
+
+def _atomic_move_no_replace_at(
+    source_descriptor: int,
+    source_name: str,
+    destination_descriptor: int,
+    destination_name: str,
+) -> None:
+    if _RENAME_NO_REPLACE is None:
+        raise _error("atomic no-replace move is unavailable on this platform")
+    _atomic_rename_at(
+        source_descriptor,
+        source_name,
+        destination_descriptor,
+        destination_name,
+        flags=_RENAME_NO_REPLACE,
+        operation="no-replace move",
+    )
 
 
 def _directory_identity(
@@ -793,11 +844,11 @@ def _quarantine_entry_at(
     relative_path = str(Path(directory_name) / entry_name)
     moved = False
     try:
-        os.rename(
+        _atomic_move_no_replace_at(
+            parent_descriptor,
             source_name,
+            quarantine_descriptor,
             entry_name,
-            src_dir_fd=parent_descriptor,
-            dst_dir_fd=quarantine_descriptor,
         )
         moved = True
         os.fsync(quarantine_descriptor)
@@ -837,14 +888,16 @@ def _quarantine_entry_at(
             matches_expected=matches_expected,
         )
     except (OSError, TournamentValidationError) as error:
-        preserved_path = (
-            parent_path / relative_path
+        destination_path = parent_path / relative_path
+        preservation_detail = (
+            f"tournament config entry was preserved at {destination_path}"
             if moved
-            else parent_path / source_name
+            else f"tournament config source remains at {parent_path / source_name}; "
+            f"quarantine destination path: {destination_path}"
         )
         raise _error(
-            f"tournament config entry was preserved at {preserved_path}; "
-            f"quarantine directory: {parent_path / directory_name}"
+            f"{preservation_detail}; "
+            f"quarantine directory: {parent_path / directory_name}; {error}"
         ) from error
     finally:
         os.close(quarantine_descriptor)
@@ -1326,9 +1379,9 @@ def _quarantine_temp_at(
     target_name: str,
     canonical_path: Path,
     temporary_name: str | None,
-) -> None:
+) -> Path | None:
     if temporary_name is None:
-        return
+        return None
     try:
         os.stat(
             temporary_name,
@@ -1336,19 +1389,20 @@ def _quarantine_temp_at(
             follow_symlinks=False,
         )
     except FileNotFoundError:
-        return
+        return None
     except OSError as error:
         raise _error(
             f"prepared tournament config could not be inspected: "
             f"{parent_path / temporary_name}"
         ) from error
-    _quarantine_entry_at(
+    quarantined = _quarantine_entry_at(
         parent_descriptor,
         parent_path,
         temporary_name,
         target_name,
         canonical_path,
     )
+    return parent_path / quarantined.relative_path
 
 
 def _write_recovery_file_at(
@@ -2008,7 +2062,7 @@ def apply_results(
     preview: ImportPreview,
     *,
     replace_conflicts: bool = False,
-) -> None:
+) -> ApplyResult:
     """Atomically apply a still-current preview after complete domain validation."""
 
     _require_race_resistant_primitives()
@@ -2048,7 +2102,7 @@ def apply_results(
         if preview.conflicts and not replace_conflicts:
             raise _error("cannot apply preview with conflicts without explicit replacement")
         if not preview.additions and not (replace_conflicts and preview.conflicts):
-            return
+            return ApplyResult(changed=False, backup_path=None)
 
         root = _candidate_document(
             current_bytes,
@@ -2107,7 +2161,8 @@ def apply_results(
                 commit_bytes,
                 replacement_identity,
                 replacement_bytes,
-                f"atomic tournament config exchange failed: {error}",
+                "runtime filesystem rejected atomic exchange after setup; "
+                f"canonical data was not exchanged: {error}",
             )
         try:
             os.fsync(parent_descriptor)
@@ -2242,15 +2297,29 @@ def apply_results(
             )
         _verify_parent_identity(parent_descriptor, preview.config_parent_identity)
 
-        quarantined = _quarantine_entry_at(
-            parent_descriptor,
-            preview.config_parent_identity.path,
-            exchange_name,
-            canonical.name,
-            canonical,
-            expected_identity=commit_identity,
-            expected_bytes=commit_bytes,
-        )
+        try:
+            quarantined = _quarantine_entry_at(
+                parent_descriptor,
+                preview.config_parent_identity.path,
+                exchange_name,
+                canonical.name,
+                canonical,
+                expected_identity=commit_identity,
+                expected_bytes=commit_bytes,
+            )
+        except TournamentValidationError as error:
+            _recover_atomic_exchange_at(
+                parent_descriptor,
+                preview.config_parent_identity.path,
+                exchange_name,
+                canonical.name,
+                canonical,
+                commit_identity,
+                commit_bytes,
+                replacement_identity,
+                replacement_bytes,
+                f"displaced tournament config could not be quarantined: {error}",
+            )
         if not quarantined.matches_expected:
             _recover_cleanup_substitution_at(
                 parent_descriptor,
@@ -2286,6 +2355,45 @@ def apply_results(
         ):
             raise _error("tournament config target changed during commit finalization")
         _verify_parent_identity(parent_descriptor, preview.config_parent_identity)
+        return ApplyResult(
+            changed=True,
+            backup_path=(
+                preview.config_parent_identity.path / quarantined.relative_path
+            ),
+        )
+    except BaseException as error:
+        retained_paths: list[Path] = []
+        cleanup_error: BaseException | None = None
+        if temporary_name is not None:
+            try:
+                retained_path = _quarantine_temp_at(
+                    parent_descriptor,
+                    preview.config_parent_identity.path,
+                    canonical.name,
+                    canonical,
+                    temporary_name,
+                )
+                if retained_path is not None:
+                    retained_paths.append(retained_path)
+            except BaseException as quarantine_error:
+                cleanup_error = quarantine_error
+            finally:
+                temporary_name = None
+        if lock_descriptor >= 0:
+            retained_paths.append(
+                preview.config_parent_identity.path / f".{canonical.name}.lock"
+            )
+        if retained_paths or cleanup_error is not None:
+            details = [f"operation failed: {error}"]
+            if retained_paths:
+                details.append(
+                    "retained paths: "
+                    + ", ".join(str(path) for path in sorted(set(retained_paths)))
+                )
+            if cleanup_error is not None:
+                details.append(f"candidate quarantine failed: {cleanup_error}")
+            raise _error("; ".join(details)) from error
+        raise
     finally:
         try:
             _quarantine_temp_at(

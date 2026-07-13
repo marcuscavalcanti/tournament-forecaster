@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ctypes
+import errno
 import fcntl
 import json
 import os
@@ -217,6 +219,17 @@ def _regular_paths_with_bytes(parent: Path, content: bytes) -> list[Path]:
     return matches
 
 
+def _provider_artifact_paths(parent: Path, target_name: str) -> list[Path]:
+    paths: list[Path] = []
+    for root in parent.iterdir():
+        if not root.name.startswith(f".{target_name}."):
+            continue
+        paths.append(root)
+        if root.is_dir() and not root.is_symlink():
+            paths.extend(root.rglob("*"))
+    return sorted(paths)
+
+
 def test_preview_apply_and_repreview_classify_addition_then_idempotent(
     tmp_path: Path,
 ) -> None:
@@ -233,7 +246,11 @@ def test_preview_apply_and_repreview_classify_addition_then_idempotent(
     assert preview.source_provenance.provider == "offline-fixture"
     assert preview.source_provenance.retrieved_at == "2026-07-11T12:00:00+00:00"
 
-    apply_results(config, preview)
+    before = config.read_bytes()
+    receipt = apply_results(config, preview)
+    assert receipt.changed is True
+    assert receipt.backup_path is not None
+    assert receipt.backup_path.read_bytes() == before
     tournament = load_tournament(config)
     assert [
         (match.match_id, match.score.home, match.score.away)
@@ -244,7 +261,9 @@ def test_preview_apply_and_repreview_classify_addition_then_idempotent(
     assert repeated.additions == ()
     assert [fact.match_id for fact in repeated.idempotent] == [expected_match_id]
     before = config.read_bytes()
-    apply_results(config, repeated)
+    repeated_receipt = apply_results(config, repeated)
+    assert repeated_receipt.changed is False
+    assert repeated_receipt.backup_path is None
     assert config.read_bytes() == before
 
 
@@ -422,12 +441,24 @@ def test_apply_revalidates_digest_after_temp_fsync_before_replace(
 
     monkeypatch.setattr(os, "fsync", inject_concurrent_edit)
 
-    with pytest.raises(TournamentValidationError, match="changed.*commit|content.*changed"):
+    with pytest.raises(
+        TournamentValidationError,
+        match="changed.*commit|content.*changed",
+    ) as captured:
         apply_results(config, preview)
 
     assert injected is True
     assert config.read_bytes() == concurrent_bytes
     assert not list(tmp_path.glob(".tournament.json.*.tmp"))
+    assert captured.value.__cause__ is not None
+    assert "tournament config content changed before commit" in str(
+        captured.value.__cause__
+    )
+    artifacts = _provider_artifact_paths(tmp_path, config.name)
+    assert artifacts
+    message = str(captured.value)
+    for artifact in artifacts:
+        assert str(artifact) in message
 
 
 def test_apply_preserves_destination_edit_injected_inside_final_transition(
@@ -616,8 +647,7 @@ def test_cleanup_quarantines_entry_substituted_after_exact_role_check(
     sentinel = tmp_path / "cleanup-symlink-target.txt"
     sentinel.write_text("sentinel stays untouched\n", encoding="utf-8")
     original_exact_check = results_provider._entry_is_exact_regular_file_at
-    original_unlink = os.unlink
-    original_rename = os.rename
+    original_move = results_provider._atomic_move_no_replace_at
     cleanup_armed = False
     exchange_name: str | None = None
     injected_identity: tuple[int, int] | None = None
@@ -665,39 +695,23 @@ def test_cleanup_quarantines_entry_substituted_after_exact_role_check(
                 sentinel,
             )
 
-    def unlink_after_substitution(
-        path: str | os.PathLike[str],
-        *,
-        dir_fd: int | None = None,
+    def move_after_substitution(
+        source_descriptor: int,
+        source_name: str,
+        destination_descriptor: int,
+        destination_name: str,
     ) -> None:
         if (
             cleanup_armed
             and exchange_name is not None
-            and os.fspath(path) == exchange_name
-            and dir_fd is not None
+            and source_name == exchange_name
         ):
-            inject_substitute(dir_fd, exchange_name)
-        original_unlink(path, dir_fd=dir_fd)
-
-    def rename_after_substitution(
-        source: str | os.PathLike[str],
-        destination: str | os.PathLike[str],
-        *,
-        src_dir_fd: int | None = None,
-        dst_dir_fd: int | None = None,
-    ) -> None:
-        if (
-            cleanup_armed
-            and exchange_name is not None
-            and os.fspath(source) == exchange_name
-            and src_dir_fd is not None
-        ):
-            inject_substitute(src_dir_fd, exchange_name)
-        original_rename(
-            source,
-            destination,
-            src_dir_fd=src_dir_fd,
-            dst_dir_fd=dst_dir_fd,
+            inject_substitute(source_descriptor, exchange_name)
+        original_move(
+            source_descriptor,
+            source_name,
+            destination_descriptor,
+            destination_name,
         )
 
     monkeypatch.setattr(
@@ -705,13 +719,11 @@ def test_cleanup_quarantines_entry_substituted_after_exact_role_check(
         "_entry_is_exact_regular_file_at",
         exact_check_then_arm_cleanup,
     )
-    monkeypatch.setattr(os, "unlink", unlink_after_substitution)
-    monkeypatch.setattr(os, "rename", rename_after_substitution)
-    supported_dir_fd = set(os.supports_dir_fd)
-    supported_dir_fd.discard(original_unlink)
-    supported_dir_fd.discard(original_rename)
-    supported_dir_fd.update({unlink_after_substitution, rename_after_substitution})
-    monkeypatch.setattr(os, "supports_dir_fd", supported_dir_fd)
+    monkeypatch.setattr(
+        results_provider,
+        "_atomic_move_no_replace_at",
+        move_after_substitution,
+    )
 
     with pytest.raises(TournamentValidationError) as captured:
         apply_results(config, preview)
@@ -734,6 +746,96 @@ def test_cleanup_quarantines_entry_substituted_after_exact_role_check(
     ]
     for recovery_path in hidden_paths:
         assert str(recovery_path) in message
+
+
+def test_quarantine_no_replace_preserves_injected_destination_and_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    preview = preview_results(config, _json_source(tmp_path, [_result()]), format="json")
+    original_bytes = config.read_bytes()
+    injected_bytes = b"same-user quarantine destination\n"
+    injected_identity: tuple[int, int] | None = None
+
+    def inject_destination(
+        destination_descriptor: int,
+        destination_name: str,
+    ) -> None:
+        nonlocal injected_identity
+        if injected_identity is None:
+            injected_identity = _atomic_install_regular(
+                destination_descriptor,
+                destination_name,
+                injected_bytes,
+                "quarantine-destination",
+            )
+
+    native_move = getattr(results_provider, "_atomic_move_no_replace_at", None)
+    if native_move is not None:
+
+        def move_with_injected_destination(
+            source_descriptor: int,
+            source_name: str,
+            destination_descriptor: int,
+            destination_name: str,
+        ) -> None:
+            inject_destination(destination_descriptor, destination_name)
+            native_move(
+                source_descriptor,
+                source_name,
+                destination_descriptor,
+                destination_name,
+            )
+
+        monkeypatch.setattr(
+            results_provider,
+            "_atomic_move_no_replace_at",
+            move_with_injected_destination,
+        )
+    else:
+        original_rename = os.rename
+
+        def rename_with_injected_destination(
+            source: str | os.PathLike[str],
+            destination: str | os.PathLike[str],
+            *,
+            src_dir_fd: int | None = None,
+            dst_dir_fd: int | None = None,
+        ) -> None:
+            if os.fspath(destination) == "entry" and dst_dir_fd is not None:
+                inject_destination(dst_dir_fd, "entry")
+            original_rename(
+                source,
+                destination,
+                src_dir_fd=src_dir_fd,
+                dst_dir_fd=dst_dir_fd,
+            )
+
+        monkeypatch.setattr(os, "rename", rename_with_injected_destination)
+        supported_dir_fd = set(os.supports_dir_fd)
+        supported_dir_fd.discard(original_rename)
+        supported_dir_fd.add(rename_with_injected_destination)
+        monkeypatch.setattr(os, "supports_dir_fd", supported_dir_fd)
+
+    with pytest.raises(TournamentValidationError) as captured:
+        apply_results(config, preview)
+
+    assert injected_identity is not None
+    assert config.read_bytes() == original_bytes
+    assert _paths_with_identity(
+        tmp_path,
+        (preview.config_identity.device, preview.config_identity.inode),
+    )
+    injected_paths = _paths_with_identity(tmp_path, injected_identity)
+    assert injected_paths
+    message = str(captured.value)
+    assert "no-replace" in message
+    for path in injected_paths:
+        assert str(path) in message
+    artifacts = _provider_artifact_paths(tmp_path, config.name)
+    for artifact in artifacts:
+        assert str(artifact) in message
 
 
 def test_rollback_restores_newer_destination_and_reports_every_recovery_path(
@@ -992,6 +1094,79 @@ def test_apply_fails_closed_before_mutation_without_atomic_exchange(
 
     assert config.read_bytes() == before
     assert not (tmp_path / f".{config.name}.lock").exists()
+
+
+def test_apply_fails_closed_before_mutation_without_no_replace_move(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    preview = preview_results(config, _json_source(tmp_path, [_result()]), format="json")
+    before = config.read_bytes()
+    monkeypatch.setattr(
+        results_provider,
+        "_RENAME_NO_REPLACE",
+        None,
+        raising=False,
+    )
+
+    with pytest.raises(TournamentValidationError, match="no-replace.*unavailable"):
+        apply_results(config, preview)
+
+    assert config.read_bytes() == before
+    assert not (tmp_path / f".{config.name}.lock").exists()
+
+
+def test_first_native_exchange_runtime_rejection_reports_retained_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    preview = preview_results(config, _json_source(tmp_path, [_result()]), format="json")
+    before = config.read_bytes()
+    before_identity = (config.stat().st_dev, config.stat().st_ino)
+    native_rename = results_provider._atomic_exchange_function
+    assert native_rename is not None
+    rejected = False
+
+    def reject_exchange_on_filesystem(
+        source_descriptor: int,
+        source_name: bytes,
+        destination_descriptor: int,
+        destination_name: bytes,
+        flags: int,
+    ) -> int:
+        nonlocal rejected
+        if flags == results_provider._RENAME_EXCHANGE:
+            rejected = True
+            ctypes.set_errno(errno.EOPNOTSUPP)
+            return -1
+        return native_rename(
+            source_descriptor,
+            source_name,
+            destination_descriptor,
+            destination_name,
+            flags,
+        )
+
+    monkeypatch.setattr(
+        results_provider,
+        "_atomic_exchange_function",
+        reject_exchange_on_filesystem,
+    )
+
+    with pytest.raises(TournamentValidationError) as captured:
+        apply_results(config, preview)
+
+    assert rejected is True
+    assert config.read_bytes() == before
+    assert (config.stat().st_dev, config.stat().st_ino) == before_identity
+    message = str(captured.value)
+    assert "runtime filesystem rejected atomic exchange after setup" in message
+    artifacts = _provider_artifact_paths(tmp_path, config.name)
+    assert artifacts
+    for artifact in artifacts:
+        assert str(artifact) in message
 
 
 def test_relative_apply_rejects_changed_working_directory(
@@ -1372,6 +1547,9 @@ def test_cli_results_import_previews_by_default_and_requires_apply_for_mutation(
     ) == 0
     applied_output = capsys.readouterr().out
     assert "Applied results: 1 addition" in applied_output
+    assert "Backup retained:" in applied_output
+    backup_path = Path(applied_output.rsplit("Backup retained: ", 1)[1].strip())
+    assert backup_path.read_bytes() == before
     assert len(load_tournament(config).completed_matches) == 1
 
 

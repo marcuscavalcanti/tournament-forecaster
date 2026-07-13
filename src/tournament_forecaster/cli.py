@@ -230,7 +230,7 @@ def _run_update_results(arguments: argparse.Namespace) -> int:
     if not arguments.apply:
         print("Preview only; pass --apply to mutate the tournament config.")
         return 0
-    apply_results(
+    receipt = apply_results(
         arguments.config,
         preview,
         replace_conflicts=arguments.replace_conflicts,
@@ -239,6 +239,8 @@ def _run_update_results(arguments: argparse.Namespace) -> int:
         f"Applied results: {len(preview.additions)} addition(s), "
         f"{len(preview.conflicts) if arguments.replace_conflicts else 0} replacement(s)."
     )
+    if receipt.backup_path is not None:
+        print(f"Backup retained: {receipt.backup_path}")
     return 0
 
 
