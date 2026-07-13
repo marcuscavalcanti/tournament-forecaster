@@ -108,6 +108,7 @@ The committed diagrams describe the authoritative offline core, the first-class 
 - [Asset manifest and generation contract](docs/assets/architecture/README.md)
 - [Architecture contract](docs/ARCHITECTURE.md)
 - [Product flow](docs/PRODUCT_FLOW.md)
+- [Decision records](docs/decisions/README.md)
 
 ## Legacy Compatibility
 

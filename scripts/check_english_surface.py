@@ -40,7 +40,7 @@ COMPATIBILITY_PREFIXES: Final = (
     "src/tournament_forecaster/compatibility/",
     "tests/tournament_forecaster/fixtures/",
 )
-INTERNAL_PREFIXES: Final = ("docs/superpowers/",)
+INTERNAL_PREFIXES: Final = (".superpowers/",)
 EXEMPT_FILES: Final = {
     Path("tests/tournament_forecaster/test_legacy_compatibility.py"),
 }
