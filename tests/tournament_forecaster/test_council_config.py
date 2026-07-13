@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 
 from tournament_forecaster.council.config import (
+    CouncilAgentConfig,
+    CouncilConfig,
     load_council_config,
     load_council_document,
 )
@@ -160,6 +162,32 @@ def test_rejects_a_custom_blend_policy_even_when_weights_sum_to_one() -> None:
         match="council blend policy must be exactly 0.55 engine and 0.45 council",
     ):
         load_council_document(document)
+
+
+def test_direct_council_config_cannot_bypass_the_fixed_blend_policy() -> None:
+    agent = CouncilAgentConfig(
+        id="agent-a",
+        display_name="Agent A",
+        provider="openai",
+        model="model-a",
+        api_key_env="OPENAI_API_KEY",
+        endpoint="https://api.openai.com/v1/responses",
+    )
+
+    with pytest.raises(
+        TournamentValidationError,
+        match="council blend policy must be exactly 0.55 engine and 0.45 council",
+    ):
+        CouncilConfig(
+            enabled=True,
+            engine_weight=0.6,
+            council_weight=0.4,
+            rounds=1,
+            minimum_valid_agents=1,
+            timeout_seconds=30,
+            max_attempts=1,
+            agents=(agent,),
+        )
 
 
 def test_rejects_unknown_properties_instead_of_silently_ignoring_typos() -> None:

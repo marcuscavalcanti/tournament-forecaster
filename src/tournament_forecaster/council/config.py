@@ -172,6 +172,20 @@ class CouncilConfig:
     agents: tuple[CouncilAgentConfig, ...]
     schema_version: int = 1
 
+    def __post_init__(self) -> None:
+        if not math.isclose(
+            self.engine_weight,
+            ENGINE_WEIGHT,
+            abs_tol=1e-9,
+        ) or not math.isclose(
+            self.council_weight,
+            COUNCIL_WEIGHT,
+            abs_tol=1e-9,
+        ):
+            raise TournamentValidationError(
+                "council blend policy must be exactly 0.55 engine and 0.45 council"
+            )
+
     @property
     def enabled_agents(self) -> tuple[CouncilAgentConfig, ...]:
         return tuple(agent for agent in self.agents if agent.enabled)

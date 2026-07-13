@@ -181,6 +181,36 @@ def test_google_429_surfaces_prepayment_credit_action_without_leaking_key(
     assert "super-secret" not in captured.value.detail
 
 
+def test_bearer_key_is_redacted_when_provider_echoes_the_raw_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = b'{"error":{"message":"invalid API key super-secret"}}'
+    error = urllib.error.HTTPError(
+        "https://provider.example/v1",
+        401,
+        "Unauthorized",
+        {},
+        io.BytesIO(body),
+    )
+
+    def fail(*_args: object, **_kwargs: object) -> object:
+        raise error
+
+    monkeypatch.setattr("urllib.request.urlopen", fail)
+
+    with pytest.raises(CouncilProviderError) as captured:
+        post_json(
+            "https://provider.example/v1",
+            {"Authorization": "Bearer super-secret"},
+            {"model": "example"},
+            timeout_seconds=10,
+        )
+
+    assert captured.value.category == "authentication"
+    assert "super-secret" not in captured.value.detail
+    assert "[REDACTED]" in captured.value.detail
+
+
 def test_parses_fenced_structured_opinion_without_accepting_missing_stages() -> None:
     opinion = parse_opinion(
         """```json

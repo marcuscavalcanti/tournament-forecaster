@@ -20,6 +20,7 @@ Transport: TypeAlias = Callable[
     [str, Mapping[str, str], Mapping[str, object], int],
     Mapping[str, object],
 ]
+_SECRET_HEADER_NAMES = frozenset({"authorization", "x-api-key", "x-goog-api-key"})
 
 
 class CouncilProviderError(RuntimeError):
@@ -46,6 +47,18 @@ def _safe_detail(text: str, secrets: tuple[str, ...] = ()) -> str:
         if secret:
             normalized = normalized.replace(secret, "[REDACTED]")
     return normalized[:600] or "provider returned no error detail"
+
+
+def _header_secrets(headers: Mapping[str, str]) -> tuple[str, ...]:
+    secrets: list[str] = []
+    for name, value in headers.items():
+        if name.casefold() not in _SECRET_HEADER_NAMES:
+            continue
+        secrets.append(value)
+        scheme, separator, credential = value.partition(" ")
+        if separator and scheme.casefold() == "bearer" and credential.strip():
+            secrets.append(credential.strip())
+    return tuple(secrets)
 
 
 def _error_message(body: str) -> str:
@@ -80,7 +93,7 @@ def post_json(
         },
         method="POST",
     )
-    secrets = tuple(headers.values())
+    secrets = _header_secrets(headers)
     try:
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             body = response.read().decode("utf-8", errors="replace")
