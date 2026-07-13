@@ -84,7 +84,6 @@ jobs:
           src/tournament_forecaster/backtest.py
           scripts/check_english_surface.py
           docs/assets/architecture/generate.py
-          --follow-imports=skip
       - name: English public surface
         run: python scripts/check_english_surface.py
       - name: Architecture asset manifest

@@ -396,6 +396,29 @@ def test_workflows_are_offline_scoped_and_do_not_publish() -> None:
     assert "publish" not in release
 
 
+def test_ci_mypy_gate_types_imported_public_bases() -> None:
+    ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    command_match = re.search(
+        r"^\s+- name: Mypy public package and English scanner\n"
+        r"\s+run: >-\n"
+        r"(?P<body>(?: {10}.*\n)+)",
+        ci,
+        flags=re.MULTILINE,
+    )
+    assert command_match is not None
+
+    command = " ".join(line.strip() for line in command_match.group("body").splitlines())
+    assert shlex.split(command) == [
+        "mypy",
+        "src/tournament_forecaster/config.py",
+        "src/tournament_forecaster/resources.py",
+        "src/tournament_forecaster/providers/results.py",
+        "src/tournament_forecaster/backtest.py",
+        "scripts/check_english_surface.py",
+        "docs/assets/architecture/generate.py",
+    ]
+
+
 def test_workflow_actions_are_pinned_to_immutable_commits() -> None:
     action_pattern = re.compile(r"^\s*-?\s*uses:\s*([^\s#]+)(?:\s+#\s*(\S+))?", re.MULTILINE)
     for workflow in sorted((ROOT / ".github/workflows").glob("*.yml")):
