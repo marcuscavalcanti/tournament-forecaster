@@ -83,7 +83,7 @@ The committed diagrams describe the authoritative offline core and clearly mark 
 
 ## Legacy Compatibility
 
-The Brazil-focused `worldcup_brazil` workflow is deprecated compatibility, not the product entry point. It remains available for one release cycle so existing operators can migrate configurations and automation. See [Migration from World Cup Brazil](docs/MIGRATION_FROM_WORLDCUP_BRAZIL.md).
+The Brazil-focused `worldcup_brazil` workflow is deprecated compatibility, not the product entry point. Its package and command aliases remain throughout `v0.1.x` and may be removed only when the release is `v0.2.0` or later and the date is `2026-10-01` or later. See [Migration from World Cup Brazil](docs/MIGRATION_FROM_WORLDCUP_BRAZIL.md) for explicit environment-file, bridge, and command-array opt-ins.
 
 ## Trust And Governance
 

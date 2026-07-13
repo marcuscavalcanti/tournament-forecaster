@@ -424,7 +424,7 @@ tournament-forecast simulate --config examples/world-cup-2026-live/tournament.js
 
 The first source installation requires package-index/network access to obtain Hatchling and any transitive build dependencies. Hatchling is not vendored. Once the package is installed, simulation, initialization, validation, reporting, presets, and the deterministic backtest run offline.
 
-The existing `worldcup-brazil-report` console command remains as a deprecated alias for one release cycle.
+The existing `worldcup-brazil-report` console command and `worldcup_brazil` package remain as deprecated aliases throughout `v0.1.x`. Removal requires both a `v0.2.0` or later release and a date on or after `2026-10-01`.
 
 ### 10.1 Clone-to-first-output contract
 

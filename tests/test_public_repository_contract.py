@@ -11,6 +11,7 @@ import sys
 import tarfile
 import tomllib
 import zipfile
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -61,14 +62,20 @@ REQUIRED_FILES = {
 TASK6_OVERLAY_PATHS = (
     Path(".env.example"),
     Path(".github/workflows"),
+    Path("CONTRIBUTING.md"),
     Path("Makefile"),
     Path("README.md"),
     Path("SECURITY.md"),
     Path("docs/ARCHITECTURE.md"),
     Path("docs/CONFIGURATION.md"),
+    Path("docs/MIGRATION_FROM_WORLDCUP_BRAZIL.md"),
     Path("docs/PROVIDERS.md"),
     Path("docs/assets/architecture"),
     Path("docs/knockout-stage-output-contract.md"),
+    Path("docs/superpowers/plans/2026-07-10-tournament-forecaster-productization.md"),
+    Path(
+        "docs/superpowers/specs/2026-07-10-open-source-tournament-forecaster-design.md"
+    ),
     Path("pyproject.toml"),
     Path("scripts/check_english_surface.py"),
     Path("tests/test_agents_fallbacks.py"),
@@ -95,6 +102,63 @@ DOCUMENTED_TOURNAMENT_FIELDS = {
     "ratings",
     "completed_matches",
 }
+LEGACY_ALIAS_REMOVAL_VERSION = (0, 2, 0)
+LEGACY_ALIAS_REMOVAL_DATE = date(2026, 10, 1)
+LEGACY_POLICY_PATHS = (
+    Path("README.md"),
+    Path("SECURITY.md"),
+    Path("docs/MIGRATION_FROM_WORLDCUP_BRAZIL.md"),
+    Path("docs/superpowers/specs/2026-07-10-open-source-tournament-forecaster-design.md"),
+    Path("docs/superpowers/plans/2026-07-10-tournament-forecaster-productization.md"),
+)
+MYPY_STEP_NAME = "Targeted strict Mypy for green public modules and release tooling"
+MYPY_TARGETS = (
+    "src/tournament_forecaster/__init__.py",
+    "src/tournament_forecaster/__main__.py",
+    "src/tournament_forecaster/atomic_io.py",
+    "src/tournament_forecaster/backtest.py",
+    "src/tournament_forecaster/cli.py",
+    "src/tournament_forecaster/config.py",
+    "src/tournament_forecaster/domain.py",
+    "src/tournament_forecaster/errors.py",
+    "src/tournament_forecaster/group_fixtures.py",
+    "src/tournament_forecaster/pairing.py",
+    "src/tournament_forecaster/probabilities.py",
+    "src/tournament_forecaster/providers/__init__.py",
+    "src/tournament_forecaster/providers/odds.py",
+    "src/tournament_forecaster/providers/results.py",
+    "src/tournament_forecaster/providers/security.py",
+    "src/tournament_forecaster/qualification.py",
+    "src/tournament_forecaster/reports/__init__.py",
+    "src/tournament_forecaster/reports/bracket_svg.py",
+    "src/tournament_forecaster/reports/markdown_report.py",
+    "src/tournament_forecaster/resources.py",
+    "src/tournament_forecaster/stages/__init__.py",
+    "src/tournament_forecaster/stages/group_stage.py",
+    "src/tournament_forecaster/stages/knockout_stage.py",
+    "src/tournament_forecaster/stages/league_stage.py",
+    "src/tournament_forecaster/validation.py",
+    "scripts/check_english_surface.py",
+    "docs/assets/architecture/generate.py",
+)
+MYPY_DEBT_TARGETS = {
+    "src/tournament_forecaster/reports/json_report.py",
+    "src/tournament_forecaster/reports/publication.py",
+    "src/tournament_forecaster/simulation.py",
+    "src/tournament_forecaster/standings.py",
+}
+STRICT_RUFF_STEP_NAME = "Strict Ruff for green release and provider contract targets"
+STRICT_RUFF_TARGETS = (
+    "src/tournament_forecaster/providers/security.py",
+    "scripts/check_english_surface.py",
+    "tests/test_clean_wheel.py",
+    "tests/test_clean_source_install.py",
+    "tests/test_public_repository_contract.py",
+    "tests/test_readme_diagrams.py",
+    "tests/tournament_forecaster/test_results_provider.py",
+    "tests/tournament_forecaster/test_odds_provider.py",
+    "docs/assets/architecture/generate.py",
+)
 
 
 def _tracked_files() -> tuple[Path, ...]:
@@ -115,6 +179,139 @@ def _workflow_job(workflow: str, job_name: str) -> str:
     )
     assert match is not None, f"missing workflow job: {job_name}"
     return match.group("body")
+
+
+def _workflow_step_command(workflow: str, step_name: str) -> list[str]:
+    match = re.search(
+        rf"^      - name: {re.escape(step_name)}\n"
+        r"        run: >-\n"
+        r"(?P<body>(?: {10}.*\n)+)",
+        workflow,
+        flags=re.MULTILINE,
+    )
+    assert match is not None, f"missing workflow step: {step_name}"
+    command = " ".join(line.strip() for line in match.group("body").splitlines())
+    return shlex.split(command)
+
+
+def _version_triplet(version: str) -> tuple[int, int, int]:
+    match = re.fullmatch(r"(?:v)?(\d+)\.(\d+)\.(\d+)", version)
+    assert match is not None, f"unsupported project version: {version}"
+    return tuple(int(part) for part in match.groups())
+
+
+def _legacy_alias_removal_allowed(version: str, as_of: date) -> bool:
+    return (
+        _version_triplet(version) >= LEGACY_ALIAS_REMOVAL_VERSION
+        and as_of >= LEGACY_ALIAS_REMOVAL_DATE
+    )
+
+
+def _assert_legacy_migration_contract(
+    migration: str,
+    policy_documents: tuple[str, ...],
+    example_config: dict[str, object],
+) -> None:
+    normalized = migration.casefold()
+    for phrase in (
+        "no `.env` file or shell profile is loaded implicitly",
+        "`--env-file`",
+        "`--shell-env-file`",
+        "`--bridges`",
+        "`--no-bridges`",
+        '"bridges_enabled": true',
+        "`worldcup_enable_bridges=1`",
+        "argument array, not a shell string",
+        "`legacy_env_file`",
+        "`legacy_shell_env_file`",
+        "`legacy_bridges`",
+    ):
+        assert phrase in normalized
+
+    json_blocks = re.findall(r"```json\n(.*?)```", migration, flags=re.DOTALL)
+    examples = [json.loads(block) for block in json_blocks]
+    bridge_examples = [item for item in examples if item.get("bridges_enabled") is True]
+    assert len(bridge_examples) == 1
+    agents = bridge_examples[0].get("agents")
+    assert isinstance(agents, list) and agents
+    browser_command = agents[0].get("browser_command")
+    assert isinstance(browser_command, list) and all(
+        isinstance(argument, str) and argument for argument in browser_command
+    )
+
+    assert example_config.get("bridges_enabled", False) is False
+    for document in policy_documents:
+        policy = document.casefold()
+        assert "v0.1.x" in policy
+        assert "v0.2.0" in policy
+        assert "2026-10-01" in policy
+        assert "one release cycle" not in policy
+        assert "one-release-cycle" not in policy
+    assert "both conditions" in normalized
+    assert "neither threshold alone permits removal" in normalized
+
+
+def _assert_quality_gate_contract(
+    workflow: str,
+    makefile: str,
+    contributing: str,
+) -> None:
+    assert (
+        "$(PYTHON) -m compileall -q src/tournament_forecaster worldcup_brazil scripts"
+        in makefile
+    )
+    assert _workflow_step_command(workflow, MYPY_STEP_NAME) == ["mypy", *MYPY_TARGETS]
+    assert _workflow_step_command(workflow, STRICT_RUFF_STEP_NAME) == [
+        "ruff",
+        "check",
+        *STRICT_RUFF_TARGETS,
+        "--select",
+        "E,F,I,UP,B,SIM",
+    ]
+
+    package_modules = {
+        path.relative_to(ROOT).as_posix()
+        for path in (ROOT / "src/tournament_forecaster").rglob("*.py")
+        if "compatibility" not in path.parts
+    }
+    assert set(MYPY_TARGETS) & package_modules == package_modules - MYPY_DEBT_TARGETS
+    for target in MYPY_TARGETS:
+        content = (ROOT / target).read_text(encoding="utf-8")
+        assert "# type: ignore" not in content
+        assert "# mypy:" not in content
+
+    normalized = contributing.casefold()
+    assert "targeted strict mypy" in normalized
+    assert "package-wide strict mypy" in normalized
+    assert "not yet green" in normalized
+    assert "no new suppressions" in normalized
+    for target in MYPY_DEBT_TARGETS:
+        assert f"`{target}`" in contributing
+
+
+def _legacy_make_dry_run(target: str, *assignments: str) -> subprocess.CompletedProcess[str]:
+    environment = os.environ.copy()
+    for key in (
+        "LEGACY_ENV_FILE",
+        "LEGACY_SHELL_ENV_FILE",
+        "LEGACY_BRIDGES",
+        "WORLDCUP_ENABLE_BRIDGES",
+    ):
+        environment.pop(key, None)
+    return subprocess.run(
+        [
+            "make",
+            "--dry-run",
+            target,
+            "RESULTS_INPUT=/private/tmp/results.json",
+            "MARKET_ODDS_INPUT=/private/tmp/odds.json",
+            *assignments,
+        ],
+        cwd=ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+    )
 
 
 def _tracked_package_files() -> set[str]:
@@ -404,6 +601,123 @@ def test_configuration_contract_rejects_stale_field_mutation() -> None:
     mutated = configuration.replace("`focus_team_id`", "`default_focus_team_id`", 1)
 
     assert _documented_core_fields(mutated) != DOCUMENTED_TOURNAMENT_FIELDS
+
+
+def test_legacy_migration_uses_explicit_safe_opt_ins_and_retains_aliases() -> None:
+    migration = (ROOT / "docs/MIGRATION_FROM_WORLDCUP_BRAZIL.md").read_text(
+        encoding="utf-8"
+    )
+    policy_documents = tuple(
+        (ROOT / path).read_text(encoding="utf-8") for path in LEGACY_POLICY_PATHS
+    )
+    example_config = json.loads(
+        (ROOT / "config/worldcup_brazil.example.json").read_text(encoding="utf-8")
+    )
+    _assert_legacy_migration_contract(migration, policy_documents, example_config)
+
+    metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    version = metadata["project"]["version"]
+    assert not _legacy_alias_removal_allowed(version, date.max)
+    assert metadata["project"]["scripts"]["worldcup-brazil-report"] == (
+        "worldcup_brazil.cli:main"
+    )
+    assert (ROOT / "worldcup_brazil/__init__.py").is_file()
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("No `.env` file or shell profile is loaded implicitly", "Load `.env` automatically"),
+        ("`--bridges`", "implicit bridges"),
+        ("v0.2.0", "v0.1.9"),
+        ("2026-10-01", "2026-09-30"),
+        ("argument array, not a shell string", "shell command string"),
+    ],
+)
+def test_legacy_migration_contract_rejects_policy_mutations(old: str, new: str) -> None:
+    migration_path = Path("docs/MIGRATION_FROM_WORLDCUP_BRAZIL.md")
+    migration = (ROOT / migration_path).read_text(encoding="utf-8")
+    assert old in migration
+    mutated_migration = migration.replace(old, new)
+    policy_documents = tuple(
+        mutated_migration
+        if path == migration_path
+        else (ROOT / path).read_text(encoding="utf-8")
+        for path in LEGACY_POLICY_PATHS
+    )
+    example_config = json.loads(
+        (ROOT / "config/worldcup_brazil.example.json").read_text(encoding="utf-8")
+    )
+
+    with pytest.raises(AssertionError):
+        _assert_legacy_migration_contract(
+            mutated_migration,
+            policy_documents,
+            example_config,
+        )
+
+
+def test_legacy_migration_contract_rejects_enabled_bridge_default_mutation() -> None:
+    migration = (ROOT / "docs/MIGRATION_FROM_WORLDCUP_BRAZIL.md").read_text(
+        encoding="utf-8"
+    )
+    policy_documents = tuple(
+        (ROOT / path).read_text(encoding="utf-8") for path in LEGACY_POLICY_PATHS
+    )
+    example_config = json.loads(
+        (ROOT / "config/worldcup_brazil.example.json").read_text(encoding="utf-8")
+    )
+    example_config["bridges_enabled"] = True
+
+    with pytest.raises(AssertionError):
+        _assert_legacy_migration_contract(migration, policy_documents, example_config)
+
+
+@pytest.mark.parametrize(
+    ("version", "as_of"),
+    [
+        ("0.1.9", date(2026, 10, 1)),
+        ("0.2.0", date(2026, 9, 30)),
+    ],
+)
+def test_legacy_alias_removal_rejects_single_threshold_mutations(
+    version: str,
+    as_of: date,
+) -> None:
+    assert not _legacy_alias_removal_allowed(version, as_of)
+    assert _legacy_alias_removal_allowed("0.2.0", date(2026, 10, 1))
+
+
+def test_legacy_make_targets_require_intentional_environment_and_bridge_opt_ins() -> None:
+    default = _legacy_make_dry_run("daily")
+    assert default.returncode == 0, default.stdout + default.stderr
+    assert "--env-file" not in default.stdout
+    assert "--shell-env-file" not in default.stdout
+    assert "--bridges" not in default.stdout
+    assert "--no-bridges" not in default.stdout
+
+    daily = _legacy_make_dry_run(
+        "daily",
+        "LEGACY_ENV_FILE=/private/tmp/legacy.env",
+        "LEGACY_BRIDGES=1",
+    )
+    assert daily.returncode == 0, daily.stdout + daily.stderr
+    assert '--env-file "/private/tmp/legacy.env"' in daily.stdout
+    assert "--bridges" in daily.stdout
+
+    force = _legacy_make_dry_run(
+        "force",
+        "LEGACY_SHELL_ENV_FILE=/private/tmp/legacy-profile.env",
+        "LEGACY_BRIDGES=0",
+    )
+    assert force.returncode == 0, force.stdout + force.stderr
+    assert '--shell-env-file "/private/tmp/legacy-profile.env"' in force.stdout
+    assert "--no-bridges" in force.stdout
+    assert "--force" in force.stdout
+
+    invalid = _legacy_make_dry_run("daily", "LEGACY_BRIDGES=yes")
+    assert invalid.returncode != 0
+    assert "LEGACY_BRIDGES must be empty, 0, or 1" in invalid.stderr
 
 
 def test_output_directory_symlink_policy_and_canonical_remedy_are_public() -> None:
@@ -700,27 +1014,43 @@ def test_workflows_are_offline_scoped_and_do_not_publish() -> None:
     assert "publish" not in release
 
 
+def test_ci_quality_gates_compile_the_package_and_name_targeted_strict_scopes() -> None:
+    _assert_quality_gate_contract(
+        (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"),
+        (ROOT / "Makefile").read_text(encoding="utf-8"),
+        (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8"),
+    )
+
+
+@pytest.mark.parametrize("mutation", ["compile", "mypy", "strict-ruff", "debt-docs"])
+def test_ci_quality_gate_contract_rejects_scope_mutations(mutation: str) -> None:
+    ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    contributing = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    if mutation == "compile":
+        makefile = makefile.replace("src/tournament_forecaster ", "", 1)
+    elif mutation == "mypy":
+        ci = ci.replace("          src/tournament_forecaster/qualification.py\n", "", 1)
+    elif mutation == "strict-ruff":
+        ci = ci.replace(
+            "          tests/tournament_forecaster/test_odds_provider.py\n",
+            "",
+            1,
+        )
+    else:
+        contributing = contributing.replace(
+            "`src/tournament_forecaster/reports/publication.py`",
+            "publication module",
+            1,
+        )
+
+    with pytest.raises(AssertionError):
+        _assert_quality_gate_contract(ci, makefile, contributing)
+
+
 def test_ci_mypy_gate_types_imported_public_bases() -> None:
     ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    command_match = re.search(
-        r"^\s+- name: Mypy public package and English scanner\n"
-        r"\s+run: >-\n"
-        r"(?P<body>(?: {10}.*\n)+)",
-        ci,
-        flags=re.MULTILINE,
-    )
-    assert command_match is not None
-
-    command = " ".join(line.strip() for line in command_match.group("body").splitlines())
-    assert shlex.split(command) == [
-        "mypy",
-        "src/tournament_forecaster/config.py",
-        "src/tournament_forecaster/resources.py",
-        "src/tournament_forecaster/providers/results.py",
-        "src/tournament_forecaster/backtest.py",
-        "scripts/check_english_surface.py",
-        "docs/assets/architecture/generate.py",
-    ]
+    assert _workflow_step_command(ci, MYPY_STEP_NAME) == ["mypy", *MYPY_TARGETS]
 
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     mypy_config = metadata.get("tool", {}).get("mypy")

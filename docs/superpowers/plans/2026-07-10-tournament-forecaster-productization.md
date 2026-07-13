@@ -4,7 +4,7 @@
 
 **Goal:** Turn the merged Brazil-specific repository into an installable, English-first, configuration-driven tournament forecaster whose installed offline runtime generates valid JSON, Markdown, and SVG output.
 
-**Architecture:** Build a new `src/tournament_forecaster` package that does not import `worldcup_brazil`. The generic core owns schema validation, standings, qualification, typed entrant resolution, one- and two-leg knockout simulation, deterministic Monte Carlo, and reports. `worldcup_brazil` remains a deprecated compatibility integration for one release cycle; it is not the generic engine.
+**Architecture:** Build a new `src/tournament_forecaster` package that does not import `worldcup_brazil`. The generic core owns schema validation, standings, qualification, typed entrant resolution, one- and two-leg knockout simulation, deterministic Monte Carlo, and reports. `worldcup_brazil` remains a deprecated compatibility integration throughout `v0.1.x`; it is not the generic engine. Removal requires both `v0.2.0` or later and `2026-10-01` or later.
 
 **Tech Stack:** Python 3.11-3.13, standard library runtime, Hatchling build backend, pytest, Ruff, mypy, JSON Schema documents, GitHub Actions.
 

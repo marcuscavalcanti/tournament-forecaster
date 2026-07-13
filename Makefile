@@ -20,6 +20,24 @@ MARKET_ODDS_URL ?= https://api.the-odds-api.com/v4/sports/soccer_fifa_world_cup_
 MARKET_ODDS_REQUIRED ?= 0
 DEBATE_INPUT ?=
 DEBATE_OUTPUT ?=
+LEGACY_ENV_FILE ?=
+LEGACY_SHELL_ENV_FILE ?=
+LEGACY_BRIDGES ?=
+
+LEGACY_RUN_ARGS :=
+ifneq ($(strip $(LEGACY_ENV_FILE)),)
+LEGACY_RUN_ARGS += --env-file "$(LEGACY_ENV_FILE)"
+endif
+ifneq ($(strip $(LEGACY_SHELL_ENV_FILE)),)
+LEGACY_RUN_ARGS += --shell-env-file "$(LEGACY_SHELL_ENV_FILE)"
+endif
+ifeq ($(strip $(LEGACY_BRIDGES)),1)
+LEGACY_RUN_ARGS += --bridges
+else ifeq ($(strip $(LEGACY_BRIDGES)),0)
+LEGACY_RUN_ARGS += --no-bridges
+else ifneq ($(strip $(LEGACY_BRIDGES)),)
+$(error LEGACY_BRIDGES must be empty, 0, or 1)
+endif
 
 RUN_DAILY := $(PYTHON) scripts/run_daily_worldcup_brazil.py \
 	--config "$(CONFIG)" \
@@ -27,7 +45,8 @@ RUN_DAILY := $(PYTHON) scripts/run_daily_worldcup_brazil.py \
 	--source-memory "$(SOURCE_MEMORY)" \
 	--output-dir "$(OUTPUT_DIR)" \
 	--watchdog-log "$(WATCHDOG_LOG)" \
-	--calibration-log "$(CALIBRATION_INPUT)"
+	--calibration-log "$(CALIBRATION_INPUT)" \
+	$(LEGACY_RUN_ARGS)
 
 DEBATE_ARGS := --output-dir "$(OUTPUT_DIR)" --watchdog-log "$(WATCHDOG_LOG)"
 ifneq ($(strip $(DEBATE_INPUT)),)
@@ -66,6 +85,7 @@ help:
 	@printf "Main commands:\n"
 	@printf "  make daily      runs the legacy daily job; creates a post only after 3 days\n"
 	@printf "  make force      runs the legacy daily job now, ignoring the 3-day window\n"
+	@printf "    Legacy opt-ins: LEGACY_ENV_FILE, LEGACY_SHELL_ENV_FILE, LEGACY_BRIDGES=0|1\n"
 	@printf "  make watch      follows the watchdog log in real time\n"
 	@printf "  make debate     renders the legacy opponent room and Brazil room\n"
 	@printf "  make doctor     diagnoses legacy agent quorum and sources without a post\n"
@@ -130,7 +150,7 @@ calibrate-base-rating:
 
 validate:
 	$(PYTEST) -q
-	$(PYTHON) -m compileall -q worldcup_brazil scripts
+	$(PYTHON) -m compileall -q src/tournament_forecaster worldcup_brazil scripts
 	$(PYTHON) scripts/validate_blind_peer_review_contract.py >/tmp/worldcup_blind_peer_review_contract.json
 	$(PYTHON) scripts/validate_opponent_room_contract.py >/tmp/worldcup_opponent_room_contract.json
 	python3 -m json.tool config/worldcup_brazil.example.json >/tmp/worldcup_brazil_config_check.json

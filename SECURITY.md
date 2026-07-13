@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-Security fixes are provided for the latest release and the current default branch. The deprecated `worldcup_brazil` compatibility surface receives only critical fixes during its one-release-cycle migration window.
+Security fixes are provided for the latest release and the current default branch. The deprecated `worldcup_brazil` compatibility surface receives only critical fixes throughout `v0.1.x`. Its aliases may be removed only at `v0.2.0` or later and on or after `2026-10-01`.
 
 ## Reporting A Vulnerability
 
