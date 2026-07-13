@@ -6,15 +6,15 @@ The repository may contain:
 
 - project-authored synthetic presets and fixtures;
 - schemas and minimal examples needed to explain public contracts; and
-- normalized, cited factual example data with a retrieval timestamp and documented transformation.
+- normalized, cited factual example data whose source redistribution license covers the checked-in use, including applicable database rights.
 
-The World Cup 2026 example is allowed because it stores a project-authored normalized factual compilation with cited provenance and a directory-level redistribution notice, not a raw provider response or protected visual asset. Its source notice must state the source terms reviewed, what was transformed, what rights are not claimed, and that the factual snapshot is outside the repository's MIT grant.
+The World Cup 2026 example is allowed because its match facts come from OpenFootball's CC0 1.0 `worldcup.json` database. The directory notice pins the exact source URL, license URL, retrieval timestamp, source SHA-256, transformation, and known limitations. Normalization or a disclaimer alone is never a redistribution basis.
 
 The repository must not contain raw provider payloads, credentials, cookies, authorization headers, local `.env` files, personal absolute paths, browser captures, attachments, caches, runtime outputs, or protected provider and governing-body logos.
 
 ## Provenance Minimum
 
-Every factual dataset must identify the source, `retrieved_at` timestamp, source IDs when available, normalization steps, rating provenance, redistribution basis, license boundary, and known limitations. A citation is not an endorsement and does not transfer the source's rights. The repository MIT license applies only to material the project is entitled to license under MIT.
+Every factual dataset must identify the exact source and license URLs, `retrieved_at` timestamp, source SHA-256, stable identifier policy, transformation steps, rating provenance, redistribution basis, license boundary, and known limitations. The cited source license must actually permit repository redistribution; attribution, normalization, factuality, or a disclaimer is not a substitute. Source-derived facts retain their source license. The repository MIT license applies only to project-authored material and does not relicense third-party facts.
 
 ## Acquisition And Retention
 

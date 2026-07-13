@@ -6,13 +6,16 @@
       "home_team_id": "mexico",
       "kickoff_at": "2026-06-11T19:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 1,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 0,
         "home": 2
       },
-      "source_id": "400021443"
+      "source_id": "openfootball-worldcup-2026-match-001"
     },
     {
       "away_team_id": "czechia",
@@ -20,13 +23,16 @@
       "home_team_id": "korea-republic",
       "kickoff_at": "2026-06-12T02:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 2,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 1,
         "home": 2
       },
-      "source_id": "400021441"
+      "source_id": "openfootball-worldcup-2026-match-002"
     },
     {
       "away_team_id": "bosnia-and-herzegovina",
@@ -34,13 +40,16 @@
       "home_team_id": "canada",
       "kickoff_at": "2026-06-12T19:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 7,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 1,
         "home": 1
       },
-      "source_id": "400021449"
+      "source_id": "openfootball-worldcup-2026-match-007"
     },
     {
       "away_team_id": "paraguay",
@@ -48,13 +57,16 @@
       "home_team_id": "usa",
       "kickoff_at": "2026-06-13T01:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 19,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 1,
         "home": 4
       },
-      "source_id": "400021458"
+      "source_id": "openfootball-worldcup-2026-match-019"
     },
     {
       "away_team_id": "scotland",
@@ -62,13 +74,16 @@
       "home_team_id": "haiti",
       "kickoff_at": "2026-06-14T01:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 14,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 1,
         "home": 0
       },
-      "source_id": "400021453"
+      "source_id": "openfootball-worldcup-2026-match-014"
     },
     {
       "away_team_id": "turkiye",
@@ -76,13 +91,16 @@
       "home_team_id": "australia",
       "kickoff_at": "2026-06-14T04:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 20,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 0,
         "home": 2
       },
-      "source_id": "400021463"
+      "source_id": "openfootball-worldcup-2026-match-020"
     },
     {
       "away_team_id": "morocco",
@@ -90,13 +108,16 @@
       "home_team_id": "brazil",
       "kickoff_at": "2026-06-13T22:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 13,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 1,
         "home": 1
       },
-      "source_id": "400021456"
+      "source_id": "openfootball-worldcup-2026-match-013"
     },
     {
       "away_team_id": "switzerland",
@@ -104,13 +125,16 @@
       "home_team_id": "qatar",
       "kickoff_at": "2026-06-13T19:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 8,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 1,
         "home": 1
       },
-      "source_id": "400021447"
+      "source_id": "openfootball-worldcup-2026-match-008"
     },
     {
       "away_team_id": "ecuador",
@@ -118,13 +142,16 @@
       "home_team_id": "cote-d-ivoire",
       "kickoff_at": "2026-06-14T23:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 26,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 0,
         "home": 1
       },
-      "source_id": "400021467"
+      "source_id": "openfootball-worldcup-2026-match-026"
     },
     {
       "away_team_id": "curacao",
@@ -132,13 +159,16 @@
       "home_team_id": "germany",
       "kickoff_at": "2026-06-14T17:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 25,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 1,
         "home": 7
       },
-      "source_id": "400021464"
+      "source_id": "openfootball-worldcup-2026-match-025"
     },
     {
       "away_team_id": "japan",
@@ -146,13 +176,16 @@
       "home_team_id": "netherlands",
       "kickoff_at": "2026-06-14T20:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 31,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 2,
         "home": 2
       },
-      "source_id": "400021470"
+      "source_id": "openfootball-worldcup-2026-match-031"
     },
     {
       "away_team_id": "tunisia",
@@ -160,13 +193,16 @@
       "home_team_id": "sweden",
       "kickoff_at": "2026-06-15T02:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 32,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 1,
         "home": 5
       },
-      "source_id": "400021474"
+      "source_id": "openfootball-worldcup-2026-match-032"
     },
     {
       "away_team_id": "uruguay",
@@ -174,13 +210,16 @@
       "home_team_id": "saudi-arabia",
       "kickoff_at": "2026-06-15T22:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 44,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 1,
         "home": 1
       },
-      "source_id": "400021486"
+      "source_id": "openfootball-worldcup-2026-match-044"
     },
     {
       "away_team_id": "cabo-verde",
@@ -188,13 +227,16 @@
       "home_team_id": "spain",
       "kickoff_at": "2026-06-15T16:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 43,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 0,
         "home": 0
       },
-      "source_id": "400021482"
+      "source_id": "openfootball-worldcup-2026-match-043"
     },
     {
       "away_team_id": "new-zealand",
@@ -202,13 +244,16 @@
       "home_team_id": "ir-iran",
       "kickoff_at": "2026-06-16T01:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 38,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 2,
         "home": 2
       },
-      "source_id": "400021476"
+      "source_id": "openfootball-worldcup-2026-match-038"
     },
     {
       "away_team_id": "egypt",
@@ -216,13 +261,16 @@
       "home_team_id": "belgium",
       "kickoff_at": "2026-06-15T19:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 37,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 1,
         "home": 1
       },
-      "source_id": "400021478"
+      "source_id": "openfootball-worldcup-2026-match-037"
     },
     {
       "away_team_id": "senegal",
@@ -230,13 +278,16 @@
       "home_team_id": "france",
       "kickoff_at": "2026-06-16T19:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 49,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 1,
         "home": 3
       },
-      "source_id": "400021490"
+      "source_id": "openfootball-worldcup-2026-match-049"
     },
     {
       "away_team_id": "norway",
@@ -244,13 +295,16 @@
       "home_team_id": "iraq",
       "kickoff_at": "2026-06-16T22:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 50,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 4,
         "home": 1
       },
-      "source_id": "400021488"
+      "source_id": "openfootball-worldcup-2026-match-050"
     },
     {
       "away_team_id": "algeria",
@@ -258,13 +312,16 @@
       "home_team_id": "argentina",
       "kickoff_at": "2026-06-17T01:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 55,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 0,
         "home": 3
       },
-      "source_id": "400021496"
+      "source_id": "openfootball-worldcup-2026-match-055"
     },
     {
       "away_team_id": "jordan",
@@ -272,13 +329,16 @@
       "home_team_id": "austria",
       "kickoff_at": "2026-06-17T04:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 56,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 1,
         "home": 3
       },
-      "source_id": "400021498"
+      "source_id": "openfootball-worldcup-2026-match-056"
     },
     {
       "away_team_id": "panama",
@@ -286,13 +346,16 @@
       "home_team_id": "ghana",
       "kickoff_at": "2026-06-17T23:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 68,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 0,
         "home": 1
       },
-      "source_id": "400021510"
+      "source_id": "openfootball-worldcup-2026-match-068"
     },
     {
       "away_team_id": "croatia",
@@ -300,13 +363,16 @@
       "home_team_id": "england",
       "kickoff_at": "2026-06-17T20:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 67,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 2,
         "home": 4
       },
-      "source_id": "400021507"
+      "source_id": "openfootball-worldcup-2026-match-067"
     },
     {
       "away_team_id": "congo-dr",
@@ -314,13 +380,16 @@
       "home_team_id": "portugal",
       "kickoff_at": "2026-06-17T17:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 61,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 1,
         "home": 1
       },
-      "source_id": "400021502"
+      "source_id": "openfootball-worldcup-2026-match-061"
     },
     {
       "away_team_id": "colombia",
@@ -328,13 +397,16 @@
       "home_team_id": "uzbekistan",
       "kickoff_at": "2026-06-18T02:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 62,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 3,
         "home": 1
       },
-      "source_id": "400021504"
+      "source_id": "openfootball-worldcup-2026-match-062"
     },
     {
       "away_team_id": "south-africa",
@@ -342,13 +414,16 @@
       "home_team_id": "czechia",
       "kickoff_at": "2026-06-18T16:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 3,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 1,
         "home": 1
       },
-      "source_id": "400021440"
+      "source_id": "openfootball-worldcup-2026-match-003"
     },
     {
       "away_team_id": "bosnia-and-herzegovina",
@@ -356,13 +431,16 @@
       "home_team_id": "switzerland",
       "kickoff_at": "2026-06-18T19:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 9,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 1,
         "home": 4
       },
-      "source_id": "400021446"
+      "source_id": "openfootball-worldcup-2026-match-009"
     },
     {
       "away_team_id": "qatar",
@@ -370,13 +448,16 @@
       "home_team_id": "canada",
       "kickoff_at": "2026-06-18T22:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 10,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 0,
         "home": 6
       },
-      "source_id": "400021450"
+      "source_id": "openfootball-worldcup-2026-match-010"
     },
     {
       "away_team_id": "korea-republic",
@@ -384,13 +465,16 @@
       "home_team_id": "mexico",
       "kickoff_at": "2026-06-19T01:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 4,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 0,
         "home": 1
       },
-      "source_id": "400021442"
+      "source_id": "openfootball-worldcup-2026-match-004"
     },
     {
       "away_team_id": "haiti",
@@ -398,13 +482,16 @@
       "home_team_id": "brazil",
       "kickoff_at": "2026-06-20T00:30:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 16,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 0,
         "home": 3
       },
-      "source_id": "400021457"
+      "source_id": "openfootball-worldcup-2026-match-016"
     },
     {
       "away_team_id": "morocco",
@@ -412,13 +499,16 @@
       "home_team_id": "scotland",
       "kickoff_at": "2026-06-19T22:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 15,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 1,
         "home": 0
       },
-      "source_id": "400021454"
+      "source_id": "openfootball-worldcup-2026-match-015"
     },
     {
       "away_team_id": "paraguay",
@@ -426,13 +516,16 @@
       "home_team_id": "turkiye",
       "kickoff_at": "2026-06-20T03:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 22,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 1,
         "home": 0
       },
-      "source_id": "400021460"
+      "source_id": "openfootball-worldcup-2026-match-022"
     },
     {
       "away_team_id": "australia",
@@ -440,13 +533,16 @@
       "home_team_id": "usa",
       "kickoff_at": "2026-06-19T19:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 21,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 0,
         "home": 2
       },
-      "source_id": "400021462"
+      "source_id": "openfootball-worldcup-2026-match-021"
     },
     {
       "away_team_id": "cote-d-ivoire",
@@ -454,13 +550,16 @@
       "home_team_id": "germany",
       "kickoff_at": "2026-06-20T20:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 27,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 1,
         "home": 2
       },
-      "source_id": "400021469"
+      "source_id": "openfootball-worldcup-2026-match-027"
     },
     {
       "away_team_id": "curacao",
@@ -468,13 +567,16 @@
       "home_team_id": "ecuador",
       "kickoff_at": "2026-06-21T00:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 28,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 0,
         "home": 0
       },
-      "source_id": "400021465"
+      "source_id": "openfootball-worldcup-2026-match-028"
     },
     {
       "away_team_id": "sweden",
@@ -482,13 +584,16 @@
       "home_team_id": "netherlands",
       "kickoff_at": "2026-06-20T17:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 33,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 1,
         "home": 5
       },
-      "source_id": "400021472"
+      "source_id": "openfootball-worldcup-2026-match-033"
     },
     {
       "away_team_id": "japan",
@@ -496,13 +601,16 @@
       "home_team_id": "tunisia",
       "kickoff_at": "2026-06-21T04:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 34,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 4,
         "home": 0
       },
-      "source_id": "400021475"
+      "source_id": "openfootball-worldcup-2026-match-034"
     },
     {
       "away_team_id": "cabo-verde",
@@ -510,13 +618,16 @@
       "home_team_id": "uruguay",
       "kickoff_at": "2026-06-21T22:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 46,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 2,
         "home": 2
       },
-      "source_id": "400021487"
+      "source_id": "openfootball-worldcup-2026-match-046"
     },
     {
       "away_team_id": "saudi-arabia",
@@ -524,13 +635,16 @@
       "home_team_id": "spain",
       "kickoff_at": "2026-06-21T16:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 45,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 0,
         "home": 4
       },
-      "source_id": "400021483"
+      "source_id": "openfootball-worldcup-2026-match-045"
     },
     {
       "away_team_id": "ir-iran",
@@ -538,13 +652,16 @@
       "home_team_id": "belgium",
       "kickoff_at": "2026-06-21T19:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 39,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 0,
         "home": 0
       },
-      "source_id": "400021477"
+      "source_id": "openfootball-worldcup-2026-match-039"
     },
     {
       "away_team_id": "egypt",
@@ -552,13 +669,16 @@
       "home_team_id": "new-zealand",
       "kickoff_at": "2026-06-22T01:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 40,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 3,
         "home": 1
       },
-      "source_id": "400021480"
+      "source_id": "openfootball-worldcup-2026-match-040"
     },
     {
       "away_team_id": "senegal",
@@ -566,13 +686,16 @@
       "home_team_id": "norway",
       "kickoff_at": "2026-06-23T00:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 52,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 2,
         "home": 3
       },
-      "source_id": "400021491"
+      "source_id": "openfootball-worldcup-2026-match-052"
     },
     {
       "away_team_id": "iraq",
@@ -580,13 +703,16 @@
       "home_team_id": "france",
       "kickoff_at": "2026-06-22T21:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 51,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 0,
         "home": 3
       },
-      "source_id": "400021492"
+      "source_id": "openfootball-worldcup-2026-match-051"
     },
     {
       "away_team_id": "austria",
@@ -594,13 +720,16 @@
       "home_team_id": "argentina",
       "kickoff_at": "2026-06-22T17:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 57,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 0,
         "home": 2
       },
-      "source_id": "400021494"
+      "source_id": "openfootball-worldcup-2026-match-057"
     },
     {
       "away_team_id": "algeria",
@@ -608,13 +737,16 @@
       "home_team_id": "jordan",
       "kickoff_at": "2026-06-23T03:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 58,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 2,
         "home": 1
       },
-      "source_id": "400021499"
+      "source_id": "openfootball-worldcup-2026-match-058"
     },
     {
       "away_team_id": "ghana",
@@ -622,13 +754,16 @@
       "home_team_id": "england",
       "kickoff_at": "2026-06-23T20:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 69,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 0,
         "home": 0
       },
-      "source_id": "400021506"
+      "source_id": "openfootball-worldcup-2026-match-069"
     },
     {
       "away_team_id": "croatia",
@@ -636,13 +771,16 @@
       "home_team_id": "panama",
       "kickoff_at": "2026-06-23T23:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 70,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 1,
         "home": 0
       },
-      "source_id": "400021511"
+      "source_id": "openfootball-worldcup-2026-match-070"
     },
     {
       "away_team_id": "uzbekistan",
@@ -650,13 +788,16 @@
       "home_team_id": "portugal",
       "kickoff_at": "2026-06-23T17:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 63,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 0,
         "home": 5
       },
-      "source_id": "400021503"
+      "source_id": "openfootball-worldcup-2026-match-063"
     },
     {
       "away_team_id": "congo-dr",
@@ -664,13 +805,16 @@
       "home_team_id": "colombia",
       "kickoff_at": "2026-06-24T02:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 64,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 0,
         "home": 1
       },
-      "source_id": "400021501"
+      "source_id": "openfootball-worldcup-2026-match-064"
     },
     {
       "away_team_id": "brazil",
@@ -678,13 +822,16 @@
       "home_team_id": "scotland",
       "kickoff_at": "2026-06-24T22:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 17,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 3,
         "home": 0
       },
-      "source_id": "400021455"
+      "source_id": "openfootball-worldcup-2026-match-017"
     },
     {
       "away_team_id": "haiti",
@@ -692,13 +839,16 @@
       "home_team_id": "morocco",
       "kickoff_at": "2026-06-24T22:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 18,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 2,
         "home": 4
       },
-      "source_id": "400021452"
+      "source_id": "openfootball-worldcup-2026-match-018"
     },
     {
       "away_team_id": "canada",
@@ -706,13 +856,16 @@
       "home_team_id": "switzerland",
       "kickoff_at": "2026-06-24T19:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 11,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 1,
         "home": 2
       },
-      "source_id": "400021451"
+      "source_id": "openfootball-worldcup-2026-match-011"
     },
     {
       "away_team_id": "qatar",
@@ -720,13 +873,16 @@
       "home_team_id": "bosnia-and-herzegovina",
       "kickoff_at": "2026-06-24T19:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 12,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 1,
         "home": 3
       },
-      "source_id": "400021448"
+      "source_id": "openfootball-worldcup-2026-match-012"
     },
     {
       "away_team_id": "mexico",
@@ -734,13 +890,16 @@
       "home_team_id": "czechia",
       "kickoff_at": "2026-06-25T01:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 5,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 3,
         "home": 0
       },
-      "source_id": "400021444"
+      "source_id": "openfootball-worldcup-2026-match-005"
     },
     {
       "away_team_id": "korea-republic",
@@ -748,13 +907,16 @@
       "home_team_id": "south-africa",
       "kickoff_at": "2026-06-25T01:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 6,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 0,
         "home": 1
       },
-      "source_id": "400021445"
+      "source_id": "openfootball-worldcup-2026-match-006"
     },
     {
       "away_team_id": "cote-d-ivoire",
@@ -762,13 +924,16 @@
       "home_team_id": "curacao",
       "kickoff_at": "2026-06-25T20:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 29,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 2,
         "home": 0
       },
-      "source_id": "400021468"
+      "source_id": "openfootball-worldcup-2026-match-029"
     },
     {
       "away_team_id": "germany",
@@ -776,13 +941,16 @@
       "home_team_id": "ecuador",
       "kickoff_at": "2026-06-25T20:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 30,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 1,
         "home": 2
       },
-      "source_id": "400021466"
+      "source_id": "openfootball-worldcup-2026-match-030"
     },
     {
       "away_team_id": "sweden",
@@ -790,13 +958,16 @@
       "home_team_id": "japan",
       "kickoff_at": "2026-06-25T23:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 35,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 1,
         "home": 1
       },
-      "source_id": "400021471"
+      "source_id": "openfootball-worldcup-2026-match-035"
     },
     {
       "away_team_id": "netherlands",
@@ -804,13 +975,16 @@
       "home_team_id": "tunisia",
       "kickoff_at": "2026-06-25T23:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 36,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 3,
         "home": 1
       },
-      "source_id": "400021473"
+      "source_id": "openfootball-worldcup-2026-match-036"
     },
     {
       "away_team_id": "usa",
@@ -818,13 +992,16 @@
       "home_team_id": "turkiye",
       "kickoff_at": "2026-06-26T02:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 23,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 2,
         "home": 3
       },
-      "source_id": "400021459"
+      "source_id": "openfootball-worldcup-2026-match-023"
     },
     {
       "away_team_id": "australia",
@@ -832,13 +1009,16 @@
       "home_team_id": "paraguay",
       "kickoff_at": "2026-06-26T02:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 24,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 0,
         "home": 0
       },
-      "source_id": "400021461"
+      "source_id": "openfootball-worldcup-2026-match-024"
     },
     {
       "away_team_id": "france",
@@ -846,13 +1026,16 @@
       "home_team_id": "norway",
       "kickoff_at": "2026-06-26T19:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 53,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 4,
         "home": 1
       },
-      "source_id": "400021489"
+      "source_id": "openfootball-worldcup-2026-match-053"
     },
     {
       "away_team_id": "iraq",
@@ -860,13 +1043,16 @@
       "home_team_id": "senegal",
       "kickoff_at": "2026-06-26T19:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 54,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 0,
         "home": 5
       },
-      "source_id": "400021493"
+      "source_id": "openfootball-worldcup-2026-match-054"
     },
     {
       "away_team_id": "ir-iran",
@@ -874,13 +1060,16 @@
       "home_team_id": "egypt",
       "kickoff_at": "2026-06-27T03:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 41,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 1,
         "home": 1
       },
-      "source_id": "400021479"
+      "source_id": "openfootball-worldcup-2026-match-041"
     },
     {
       "away_team_id": "belgium",
@@ -888,13 +1077,16 @@
       "home_team_id": "new-zealand",
       "kickoff_at": "2026-06-27T03:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 42,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 5,
         "home": 1
       },
-      "source_id": "400021481"
+      "source_id": "openfootball-worldcup-2026-match-042"
     },
     {
       "away_team_id": "saudi-arabia",
@@ -902,13 +1094,16 @@
       "home_team_id": "cabo-verde",
       "kickoff_at": "2026-06-27T00:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 47,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 0,
         "home": 0
       },
-      "source_id": "400021485"
+      "source_id": "openfootball-worldcup-2026-match-047"
     },
     {
       "away_team_id": "spain",
@@ -916,13 +1111,16 @@
       "home_team_id": "uruguay",
       "kickoff_at": "2026-06-27T00:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 48,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 1,
         "home": 0
       },
-      "source_id": "400021484"
+      "source_id": "openfootball-worldcup-2026-match-048"
     },
     {
       "away_team_id": "england",
@@ -930,13 +1128,16 @@
       "home_team_id": "panama",
       "kickoff_at": "2026-06-27T21:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 71,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 2,
         "home": 0
       },
-      "source_id": "400021508"
+      "source_id": "openfootball-worldcup-2026-match-071"
     },
     {
       "away_team_id": "ghana",
@@ -944,13 +1145,16 @@
       "home_team_id": "croatia",
       "kickoff_at": "2026-06-27T21:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 72,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 1,
         "home": 2
       },
-      "source_id": "400021509"
+      "source_id": "openfootball-worldcup-2026-match-072"
     },
     {
       "away_team_id": "austria",
@@ -958,13 +1162,16 @@
       "home_team_id": "algeria",
       "kickoff_at": "2026-06-28T02:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 59,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 3,
         "home": 3
       },
-      "source_id": "400021497"
+      "source_id": "openfootball-worldcup-2026-match-059"
     },
     {
       "away_team_id": "argentina",
@@ -972,13 +1179,16 @@
       "home_team_id": "jordan",
       "kickoff_at": "2026-06-28T02:00:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 60,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 3,
         "home": 1
       },
-      "source_id": "400021495"
+      "source_id": "openfootball-worldcup-2026-match-060"
     },
     {
       "away_team_id": "portugal",
@@ -986,13 +1196,16 @@
       "home_team_id": "colombia",
       "kickoff_at": "2026-06-27T23:30:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 65,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 0,
         "home": 0
       },
-      "source_id": "400021505"
+      "source_id": "openfootball-worldcup-2026-match-065"
     },
     {
       "away_team_id": "uzbekistan",
@@ -1000,13 +1213,16 @@
       "home_team_id": "congo-dr",
       "kickoff_at": "2026-06-27T23:30:00Z",
       "metadata": {
-        "source": "official FIFA calendar API"
+        "license": "CC0 1.0 Universal",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 66,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
       },
       "result": {
         "away": 1,
         "home": 3
       },
-      "source_id": "400021500"
+      "source_id": "openfootball-worldcup-2026-match-066"
     }
   ],
   "home_advantage_rating_points": 0,
@@ -1015,7 +1231,24 @@
     "rating_provenance": {
       "captured_at": "2026-06-09T23:27:23-03:00",
       "git_commit": "a7b6e694",
-      "limitation": "Project-authored, not an official FIFA rating source."
+      "limitation": "Project-authored, not an official rating source."
+    },
+    "source_snapshot": {
+      "completed_fact_count": 100,
+      "known_limitations": [
+        "The community-maintained source is not an official live feed.",
+        "The source has no trusted result-finalization timestamp.",
+        "The generic project bracket cannot model the third-place loser entrants."
+      ],
+      "license": "CC0 1.0 Universal",
+      "license_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/LICENSE.md",
+      "retrieved_at": "2026-07-13T16:35:34Z",
+      "source": "OpenFootball worldcup.json",
+      "source_match_count": 104,
+      "source_sha256": "b0aef8771d7fc3b6a5ec04cf7a9f9cd167c4e8b0be9152b3a35ae5629bb4e8d5",
+      "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json",
+      "stable_id_policy": "Existing numeric knockout IDs are project-owned topology IDs, not source or provider IDs.",
+      "transformation": "Validated the 104-match structure; mapped OpenFootball team aliases and stages to project topology; converted kickoff offsets to UTC; selected et over ft for extra-time finals; used p only to identify shootout winners; omitted goals, grounds, half-time scores, and the unsupported third-place tie."
     }
   },
   "model_version": "poisson-elo-v1",

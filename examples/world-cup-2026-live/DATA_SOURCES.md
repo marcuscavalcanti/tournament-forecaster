@@ -2,28 +2,37 @@
 
 ## Results and bracket
 
-- Source: official FIFA calendar API `https://api.fifa.com/api/v3/calendar/matches`
-- Parameters: `idCompetition=17`, `idSeason=285023`, `language=en`, `count=500`
-- Retrieved at: `2026-07-13T12:21:03Z`
-- Checked-in data: normalized match facts, source IDs, schedule IDs, and team IDs only
-- Raw API response: never checked in
-- Final result types accepted: `1`, `2`, and `3`; type `3` is completed extra time
-- Singular FIFA stage label `Quarter-final` maps to `quarter-finals`
+- Source: OpenFootball `worldcup.json` World Cup 2026 snapshot
+- Exact source URL: https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json
+- Retrieved at: `2026-07-13T16:35:34Z`
+- Source SHA-256: `b0aef8771d7fc3b6a5ec04cf7a9f9cd167c4e8b0be9152b3a35ae5629bb4e8d5`
+- Source rows: `104`; completed rows at retrieval: `100`
+- Source license: `CC0 1.0 Universal`
+- Exact license URL: https://raw.githubusercontent.com/openfootball/worldcup.json/master/LICENSE.md
+- License scope: the repository license expressly addresses extraction, dissemination,
+  reuse of data, and database rights.
 
-The snapshot has 100 completed facts. At retrieval,
-`4/4` quarter-finals,
+At retrieval, `4/4` quarter-finals,
 `0/2` semi-finals, and
 `0/1` final were complete.
 
-## Redistribution basis
+## Transformation
 
-- Terms reviewed: FIFA [Terms of Service](https://inside.fifa.com/terms-of-service), last reviewed `2026-07-13`.
-- Status: this directory contains a project-authored normalized factual compilation of match identities, participants, kickoff times, stages, and final scores for reproducible non-commercial analysis.
-- Scope: no raw FIFA API response, commentary, article text, photograph, audiovisual work, logo, competition emblem, or other expressive FIFA content is redistributed.
-- License boundary: this factual snapshot is not covered by the MIT License. MIT covers the project-authored software, documentation, schemas, and synthetic presets; no FIFA license, endorsement, trademark right, or ownership of FIFA source content is claimed.
-- Attribution: provider IDs and the source endpoint are retained so every normalized fact can be traced back to FIFA. Users who refresh or redistribute the dataset must review the then-current source terms and applicable database or contract rights for their jurisdiction.
+The deterministic builder validates all 104 rows and the chronological completion
+frontier, maps OpenFootball labels to project team and stage IDs, converts each explicit
+`UTC+/-H` kickoff offset to UTC, and retains only participants, stages, kickoff times,
+and final match facts. For knockout matches, `et` is the final score when present;
+`p` selects the winner but does not replace the tied football score. Goal events,
+half-time scores, grounds, and the third-place tie are omitted. Existing numeric
+knockout IDs are project-owned stable topology IDs, not source or provider IDs.
 
-The repository includes the minimal normalized facts, rather than FIFA's source database or response structure, to make the checked-in simulation and backtest reproducible while keeping the source-rights boundary explicit.
+## Redistribution and license boundary
+
+The normalized OpenFootball-derived match facts in `tournament.json` and
+`backtest.json` retain CC0 1.0 status. The repository MIT license covers only
+project-authored code, schemas, documentation, topology, transformations, synthetic
+data, and ratings; it does not relicense the CC0 facts. The source and license links
+remain recorded for reproducibility even though CC0 does not require attribution.
 
 ## Ratings
 
@@ -32,18 +41,41 @@ The repository includes the minimal normalized facts, rather than FIFA's source 
 - Canonical ratings object SHA-256: `983a20748541db3612dd75fa2d5dde954d1b89de52a23c1b19f345a427bca259`
 
 The ratings are leakage-free for the 72 group outcomes because they were frozen
-before those matches. They are not an official FIFA rating source and do not prove
+before those matches. They are not an official rating source and do not prove
 universal model calibration.
 
-## Update procedure
+## Known limitations
+
+- OpenFootball is a community-maintained dataset, not an official live feed.
+- The source does not include a trusted result-finalization timestamp. The builder
+  requires `retrieved_at` to be after `kickoff_at`, but that cannot establish when a
+  score first became final.
+- The generic bracket cannot represent third-place loser entrants, so match 103 is
+  verified against source topology but omitted from the distributable tournament.
+- Team aliases are explicit and fail closed when source labels drift.
+
+## Update and verification procedure
+
+Use an ignored local source capture. For the checked-in frontier:
 
 ```bash
-python scripts/build_world_cup_2026_example.py --fetch   --output-dir examples/world-cup-2026-live
+python scripts/build_world_cup_2026_example.py \
+  --source /private/tmp/openfootball-worldcup-2026.json \
+  --retrieved-at 2026-07-13T16:35:34Z \
+  --expected-source-sha256 b0aef8771d7fc3b6a5ec04cf7a9f9cd167c4e8b0be9152b3a35ae5629bb4e8d5 \
+  --expected-completed-facts 100 \
+  --output-dir examples/world-cup-2026-live
+
+python scripts/build_world_cup_2026_example.py \
+  --source /private/tmp/openfootball-worldcup-2026.json \
+  --retrieved-at 2026-07-13T16:35:34Z \
+  --expected-source-sha256 b0aef8771d7fc3b6a5ec04cf7a9f9cd167c4e8b0be9152b3a35ae5629bb4e8d5 \
+  --expected-completed-facts 100 \
+  --output-dir examples/world-cup-2026-live \
+  --verify
 ```
 
-For deterministic fixture tests, use `--fixture PATH --retrieved-at TIMESTAMP`.
-The builder rejects unknown teams, conflicting duplicate matches, invalid winners,
-unsupported stages/result types, any non-final row as a completed fact, and completed
-rows unless `retrieved_at` is strictly after kickoff. FIFA calendar rows do not expose
-a trusted result-finalization timestamp, so this prevents at-or-before-kickoff
-backdating but cannot prove when the provider first made a final result available.
+For a future refresh, `--fetch` downloads the exact source URL above. Review the new
+hash and frontier before replacing the checked-in artifacts. The updater rejects
+unknown teams or stages, malformed offsets and scores, duplicate match numbers,
+invalid extra-time or penalty outcomes, topology drift, and completion gaps.

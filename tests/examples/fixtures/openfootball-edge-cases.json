@@ -1,0 +1,101 @@
+{
+  "name": "Synthetic World Cup fixture",
+  "matches": [
+    {
+      "round": "Matchday 1",
+      "date": "2026-07-09",
+      "time": "16:00 UTC-4",
+      "team1": "France",
+      "team2": "Morocco",
+      "score": {
+        "ft": [
+          2,
+          0
+        ],
+        "ht": [
+          0,
+          0
+        ]
+      },
+      "group": "Group I"
+    },
+    {
+      "round": "Round of 32",
+      "num": 2,
+      "date": "2026-07-10",
+      "time": "17:00 UTC-4",
+      "team1": "Belgium",
+      "team2": "Senegal",
+      "score": {
+        "ft": [
+          2,
+          2
+        ],
+        "et": [
+          3,
+          2
+        ],
+        "ht": [
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "round": "Round of 16",
+      "num": 3,
+      "date": "2026-07-11",
+      "time": "20:00 UTC-5",
+      "team1": "Argentina",
+      "team2": "Cape Verde",
+      "score": {
+        "ft": [
+          1,
+          1
+        ],
+        "et": [
+          3,
+          2
+        ],
+        "ht": [
+          1,
+          0
+        ]
+      }
+    },
+    {
+      "round": "Quarter-final",
+      "num": 4,
+      "date": "2026-07-12",
+      "time": "13:00 UTC-7",
+      "team1": "South Korea",
+      "team2": "Ivory Coast",
+      "score": {
+        "ft": [
+          0,
+          0
+        ],
+        "et": [
+          0,
+          0
+        ],
+        "p": [
+          4,
+          3
+        ],
+        "ht": [
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "round": "Semi-final",
+      "num": 5,
+      "date": "2026-07-14",
+      "time": "14:00 UTC-5",
+      "team1": "W4",
+      "team2": "Bosnia & Herzegovina"
+    }
+  ]
+}
