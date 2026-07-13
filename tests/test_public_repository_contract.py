@@ -24,8 +24,8 @@ from tournament_forecaster.resources import resource_path
 ROOT = Path(__file__).parents[1]
 QUICKSTART = "\n".join(
     (
-        "git clone https://github.com/marcuscavalcanti/worldcup2026.git",
-        "cd worldcup2026",
+        "git clone https://github.com/marcuscavalcanti/tournament-forecaster.git",
+        "cd tournament-forecaster",
         "python3 -m venv .venv && . .venv/bin/activate && python -m pip install .",
         "tournament-forecast simulate --config "
         "examples/world-cup-2026-live/tournament.json "

@@ -40,10 +40,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/marcuscavalcanti/worldcup2026"
-Documentation = "https://github.com/marcuscavalcanti/worldcup2026#readme"
-Issues = "https://github.com/marcuscavalcanti/worldcup2026/issues"
-Source = "https://github.com/marcuscavalcanti/worldcup2026"
+Homepage = "https://github.com/marcuscavalcanti/tournament-forecaster"
+Documentation = "https://github.com/marcuscavalcanti/tournament-forecaster#readme"
+Issues = "https://github.com/marcuscavalcanti/tournament-forecaster/issues"
+Source = "https://github.com/marcuscavalcanti/tournament-forecaster"
 
 [project.scripts]
 tournament-forecast = "tournament_forecaster.cli:main"

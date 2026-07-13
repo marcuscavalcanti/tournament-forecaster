@@ -416,8 +416,8 @@ Supported Python versions are 3.11 through 3.13.
 Primary onboarding:
 
 ```bash
-git clone https://github.com/marcuscavalcanti/worldcup2026.git
-cd worldcup2026
+git clone https://github.com/marcuscavalcanti/tournament-forecaster.git
+cd tournament-forecaster
 python3 -m venv .venv && . .venv/bin/activate && python -m pip install .
 tournament-forecast simulate --config examples/world-cup-2026-live/tournament.json --iterations 10000 --output-dir outputs
 ```

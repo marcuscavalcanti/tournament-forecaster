@@ -1291,7 +1291,7 @@ def _call_web_fetch_agent(spec: AgentSpec, prompt: str, *, timeout: int) -> str:
         url = spec.web_fetch_url.replace("{prompt}", urllib.parse.quote(prompt))
         request = urllib.request.Request(
             url,
-            headers={"User-Agent": "worldcup2026-brazil-radar/0.1"},
+            headers={"User-Agent": "tournament-forecaster/0.1"},
             method="GET",
         )
     else:
@@ -1300,7 +1300,7 @@ def _call_web_fetch_agent(spec: AgentSpec, prompt: str, *, timeout: int) -> str:
             data=json.dumps({"slot": spec.slot, "model": spec.model, "prompt": prompt}).encode("utf-8"),
             headers={
                 "Content-Type": "application/json",
-                "User-Agent": "worldcup2026-brazil-radar/0.1",
+                "User-Agent": "tournament-forecaster/0.1",
             },
             method="POST",
         )

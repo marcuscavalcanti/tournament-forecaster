@@ -278,7 +278,7 @@ def fetch_source(source: EvidenceSource, *, timeout: int = DEFAULT_TIMEOUT_SECON
     request = urllib.request.Request(
         url,
         headers={
-            "User-Agent": "worldcup2026-brazil-radar/0.1 (+https://github.com/marcuscavalcanti/worldcup2026)"
+            "User-Agent": "tournament-forecaster/0.1 (+https://github.com/marcuscavalcanti/tournament-forecaster)"
         },
     )
     try:

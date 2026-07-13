@@ -95,7 +95,7 @@ def test_architecture_manifest_approves_and_reproduces_svg_png_pairs() -> None:
         "origin": "Project-authored architecture diagrams",
         "author": "Marcus Cavalcanti",
         "license": "MIT",
-        "source_repository": "https://github.com/marcuscavalcanti/worldcup2026",
+        "source_repository": "https://github.com/marcuscavalcanti/tournament-forecaster",
         "source_commit": "da8d4dfa116d88af4f1de0590e56c6bb1d8ffc6a",
     }
     records = {record["id"]: record for record in manifest["assets"]}
