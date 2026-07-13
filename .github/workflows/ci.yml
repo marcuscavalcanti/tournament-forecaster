@@ -83,7 +83,11 @@ jobs:
       - name: Package-wide strict Mypy for public package
         run: >-
           mypy
+          --no-incremental
+          --exclude '^worldcup_brazil/'
           src/tournament_forecaster
+          scripts/check_english_surface.py
+          docs/assets/architecture/generate.py
       - name: English public surface
         run: python scripts/check_english_surface.py
       - name: Architecture asset manifest

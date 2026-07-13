@@ -268,5 +268,4 @@ strict = true
 warn_unreachable = true
 exclude = [
   "^worldcup_brazil/",
-  "^src/tournament_forecaster/compatibility/",
 ]

@@ -112,7 +112,26 @@ LEGACY_POLICY_PATHS = (
     Path("docs/superpowers/plans/2026-07-10-tournament-forecaster-productization.md"),
 )
 MYPY_STEP_NAME = "Package-wide strict Mypy for public package"
-MYPY_PACKAGE_TARGET = "src/tournament_forecaster"
+MYPY_COMMAND = (
+    "mypy",
+    "--no-incremental",
+    "--exclude",
+    "^worldcup_brazil/",
+    "src/tournament_forecaster",
+    "scripts/check_english_surface.py",
+    "docs/assets/architecture/generate.py",
+)
+MYPY_DOCUMENTED_COMMAND = (
+    "uv run --locked --extra dev mypy --no-incremental --exclude "
+    "'^worldcup_brazil/' src/tournament_forecaster scripts/check_english_surface.py "
+    "docs/assets/architecture/generate.py"
+)
+MYPY_STALE_DEBT_PHRASES = (
+    "targeted strict mypy",
+    "not yet green",
+    "fix that debt directly",
+    "no new suppressions",
+)
 STRICT_RUFF_STEP_NAME = "Strict Ruff for green release and provider contract targets"
 STRICT_RUFF_TARGETS = (
     "src/tournament_forecaster/providers/security.py",
@@ -220,12 +239,17 @@ def _assert_legacy_migration_contract(
 def _assert_quality_gate_contract(
     workflow: str,
     makefile: str,
+    contributing: str,
 ) -> None:
     assert (
         "$(PYTHON) -m compileall -q src/tournament_forecaster worldcup_brazil scripts"
         in makefile
     )
-    assert _workflow_step_command(workflow, MYPY_STEP_NAME) == ["mypy", MYPY_PACKAGE_TARGET]
+    assert _workflow_step_command(workflow, MYPY_STEP_NAME) == list(MYPY_COMMAND)
+    assert MYPY_DOCUMENTED_COMMAND in contributing
+    normalized_contributing = contributing.casefold()
+    for phrase in MYPY_STALE_DEBT_PHRASES:
+        assert phrase not in normalized_contributing
     assert _workflow_step_command(workflow, STRICT_RUFF_STEP_NAME) == [
         "ruff",
         "check",
@@ -947,7 +971,8 @@ def test_workflows_are_offline_scoped_and_do_not_publish() -> None:
         "generate.py --check-render",
     ):
         assert check in ci
-    assert "worldcup_brazil" not in ci
+    assert ci.count("worldcup_brazil") == 1
+    assert "--exclude '^worldcup_brazil/'" in ci
     assert "tournament-forecast backtest" not in ci
     assert "tournament_forecast_offline" not in ci
     assert "./.github/workflows/ci.yml" in gate
@@ -974,25 +999,26 @@ def test_ci_quality_gates_compile_and_type_check_the_entire_public_package() -> 
     _assert_quality_gate_contract(
         (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"),
         (ROOT / "Makefile").read_text(encoding="utf-8"),
+        (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8"),
     )
 
 
-@pytest.mark.parametrize("mutation", ["compile", "mypy", "strict-ruff"])
+@pytest.mark.parametrize("mutation", ["compile", "mypy", "mypy-docs", "strict-ruff"])
 def test_ci_quality_gate_contract_rejects_scope_mutations(mutation: str) -> None:
     ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    contributing = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
     if mutation == "compile":
         makefile = makefile.replace("src/tournament_forecaster ", "", 1)
     elif mutation == "mypy":
-        ci = ci.replace(
-            f"      - name: {MYPY_STEP_NAME}\n"
-            "        run: >-\n"
-            "          mypy\n"
-            f"          {MYPY_PACKAGE_TARGET}\n",
-            f"      - name: {MYPY_STEP_NAME}\n"
-            "        run: >-\n"
-            "          mypy\n"
-            "          src/tournament_forecaster/qualification.py\n",
+        step, following_steps = ci.split(f"      - name: {MYPY_STEP_NAME}\n", maxsplit=1)
+        ci = step + f"      - name: {MYPY_STEP_NAME}\n" + following_steps.replace(
+            "          docs/assets/architecture/generate.py\n", "", 1
+        )
+    elif mutation == "mypy-docs":
+        contributing = contributing.replace(
+            MYPY_DOCUMENTED_COMMAND,
+            "mypy src/tournament_forecaster",
             1,
         )
     elif mutation == "strict-ruff":
@@ -1003,12 +1029,12 @@ def test_ci_quality_gate_contract_rejects_scope_mutations(mutation: str) -> None
         )
 
     with pytest.raises(AssertionError):
-        _assert_quality_gate_contract(ci, makefile)
+        _assert_quality_gate_contract(ci, makefile, contributing)
 
 
 def test_ci_mypy_gate_types_the_entire_public_package() -> None:
     ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    assert _workflow_step_command(ci, MYPY_STEP_NAME) == ["mypy", MYPY_PACKAGE_TARGET]
+    assert _workflow_step_command(ci, MYPY_STEP_NAME) == list(MYPY_COMMAND)
 
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     mypy_config = metadata.get("tool", {}).get("mypy")
@@ -1016,6 +1042,9 @@ def test_ci_mypy_gate_types_the_entire_public_package() -> None:
     assert mypy_config.get("strict") is True, "[tool.mypy] strict must be true"
     assert mypy_config.get("follow_imports", "normal") == "normal", (
         "[tool.mypy] follow_imports must be absent or normal"
+    )
+    assert mypy_config.get("exclude") == ["^worldcup_brazil/"], (
+        "[tool.mypy] exclude must retain only the legacy worldcup_brazil package"
     )
 
 
@@ -1034,6 +1063,11 @@ def test_ci_mypy_gate_types_the_entire_public_package() -> None:
         (
             'strict = true\nfollow_imports = "error"\n',
             r"\[tool\.mypy\] follow_imports must be absent or normal",
+        ),
+        (
+            'strict = true\nexclude = ["^worldcup_brazil/", '
+            '"^src/tournament_forecaster/compatibility/"]\n',
+            r"\[tool\.mypy\] exclude must retain only the legacy worldcup_brazil package",
         ),
     ],
 )
