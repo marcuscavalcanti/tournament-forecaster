@@ -222,10 +222,10 @@ redact_url(url: str) -> str
 - FIFA remains an opt-in, undocumented adapter exercised only through synthetic offline fixtures; UEFA and CONMEBOL make no live-provider claim.
 - Legacy local executable bridges default off, `--no-bridges` is absolute, and no path reads `~/.zshrc` implicitly.
 
-- [ ] Write failing tests for import preview/apply/conflict, odds provenance, URL redaction, bridge opt-in, and no-shell-profile behavior.
-- [ ] Implement provider protocols and compatibility translation without importing legacy code into the generic core.
-- [ ] Verify focused security/provider tests and the full baseline.
-- [ ] Commit `feat: add safe provider and legacy boundaries`.
+- [x] Write failing tests for import preview/apply/conflict, odds provenance, URL redaction, bridge opt-in, and no-shell-profile behavior.
+- [x] Implement provider protocols and compatibility translation without importing legacy code into the generic core.
+- [x] Verify focused security/provider tests and the full baseline.
+- [x] Commit `feat: add safe provider and legacy boundaries`.
 
 ### Task 5A: Real 2026 Snapshot, Honest Backtest, and Mid-Tournament Starts
 
@@ -274,12 +274,12 @@ tournament-forecast backtest --input PATH [--output PATH] [--min-resolved INT]
 - Backtest data requires `captured_at < kickoff_at`, a stable ratings hash, immutable result source IDs, and no target result inside the prediction snapshot. Metrics never return an apparent perfect zero for an empty sample.
 - The example builder must reject non-final provider rows, unknown teams, duplicate/conflicting scores, unsupported stages, and future results. It must map the FIFA singular `Quarter-final` label correctly and be deterministic for a saved normalized fixture.
 
-- [ ] Write red-first tests for exact 1X2 normalization, neutral equal-rating symmetry, explicit-team entrants, stage home-advantage behavior, leakage rejection, metric boundaries, and a full current-snapshot simulation.
-- [ ] Implement the exact outcome scorer, backtest evaluator/CLI, explicit mid-tournament entrants, and configurable home advantage.
-- [ ] Build the normalized World Cup 2026 snapshot from the official FIFA endpoint and document retrieval time, endpoint parameters, source IDs, rating provenance, and update procedure.
-- [ ] Run the real snapshot simulation and the 72-match group-stage backtest; commit reproducible backtest reports and record the generated forecast summary without tracking runtime output directories.
-- [ ] Verify the example from a clean wheel with network disabled after installation and prove `--focus-team` works without editing config.
-- [ ] Commit `feat: add live World Cup example and backtest` plus any adversarial fixes.
+- [x] Write red-first tests for exact 1X2 normalization, neutral equal-rating symmetry, explicit-team entrants, stage home-advantage behavior, leakage rejection, metric boundaries, and a full current-snapshot simulation.
+- [x] Implement the exact outcome scorer, backtest evaluator/CLI, explicit mid-tournament entrants, and configurable home advantage.
+- [x] Build the normalized World Cup 2026 snapshot from the official FIFA endpoint and document retrieval time, endpoint parameters, source IDs, rating provenance, and update procedure.
+- [x] Run the real snapshot simulation and the 72-match group-stage backtest; commit reproducible backtest reports and record the generated forecast summary without tracking runtime output directories.
+- [x] Verify the example from a clean wheel with network disabled after installation and prove `--focus-team` works without editing config.
+- [x] Commit `feat: add live World Cup example and backtest` plus any adversarial fixes.
 
 ### Task 6: English Public Surface, Governance, and CI
 
@@ -310,12 +310,12 @@ tournament-forecast backtest --input PATH [--output PATH] [--min-resolved INT]
 - Modify: `.gitignore`
 - Modify: `pyproject.toml`
 
-- [ ] Write a failing public-repository contract test for required files, English default surfaces, four-line quickstart placement, no tracked runtime artifacts, and no personal filesystem paths.
-- [ ] Rewrite README to lead with the working wheel quickstart, real outputs, supported format contracts, current limitations, architecture diagrams, and legacy migration link.
-- [ ] Add MIT governance, security/trust boundaries, provider acquisition guidance, data policy, issue templates, and CI matrices.
-- [ ] Scope the English checker to public package, public docs, governance, presets, and generic tests; explicitly exempt the deprecated legacy package and named migration fixtures.
-- [ ] Verify governance contracts, workflow syntax, public scan, package metadata, and full tests.
-- [ ] Commit `docs: publish the generic tournament forecaster surface`.
+- [x] Write a failing public-repository contract test for required files, English default surfaces, four-line quickstart placement, no tracked runtime artifacts, and no personal filesystem paths.
+- [x] Rewrite README to lead with the working wheel quickstart, real outputs, supported format contracts, current limitations, architecture diagrams, and legacy migration link.
+- [x] Add MIT governance, security/trust boundaries, provider acquisition guidance, data policy, issue templates, and CI matrices.
+- [x] Scope the English checker to public package, public docs, governance, presets, and generic tests; explicitly exempt the deprecated legacy package and named migration fixtures.
+- [x] Verify governance contracts, workflow syntax, public scan, package metadata, and full tests.
+- [x] Commit `docs: publish the generic tournament forecaster surface`.
 
 ### Task 7: Final Integration and Adversarial Release Gate
 
