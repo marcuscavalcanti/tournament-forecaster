@@ -36,14 +36,13 @@ PUBLIC_PREFIXES: Final = (
     "presets/",
     ".github/",
 )
-EXEMPT_PREFIXES: Final = (
+COMPATIBILITY_PREFIXES: Final = (
     "src/tournament_forecaster/compatibility/",
     "tests/tournament_forecaster/fixtures/",
-    "docs/superpowers/",
 )
+INTERNAL_PREFIXES: Final = ("docs/superpowers/",)
 EXEMPT_FILES: Final = {
     Path("tests/tournament_forecaster/test_legacy_compatibility.py"),
-    Path("docs/knockout-stage-output-contract.md"),
 }
 LOCALIZED_KEYS: Final = {
     "aliases",
@@ -132,9 +131,16 @@ def _repository_files() -> tuple[Path, ...]:
 
 def _is_public(path: Path) -> bool:
     text = path.as_posix()
-    if path in EXEMPT_FILES or text.startswith(EXEMPT_PREFIXES):
+    if _is_internal(path):
+        return False
+    if path in EXEMPT_FILES or text.startswith(COMPATIBILITY_PREFIXES):
         return False
     return path in PUBLIC_SINGLE_FILES or text.startswith(PUBLIC_PREFIXES)
+
+
+def _is_internal(path: Path) -> bool:
+    """Return whether a document is repository-internal and never distributed."""
+    return path.as_posix().startswith(INTERNAL_PREFIXES)
 
 
 def _json_prose(value: object, *, key: str | None = None) -> list[str]:

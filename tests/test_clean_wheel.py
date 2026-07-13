@@ -7,7 +7,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 REPOSITORY_ROOT = Path(__file__).parents[1]
 PROVIDER_VARIABLES = {
     "ANTHROPIC_API_KEY",
@@ -58,7 +57,15 @@ def test_clean_wheel_all_cli_paths_are_offline_and_process_free_outside_repo(
 ) -> None:
     dist = tmp_path / "dist"
     build = subprocess.run(
-        ["uv", "build", "--wheel", "--out-dir", str(dist)],
+        [
+            sys.executable,
+            "-m",
+            "build",
+            "--wheel",
+            "--no-isolation",
+            "--outdir",
+            str(dist),
+        ],
         cwd=REPOSITORY_ROOT,
         capture_output=True,
         text=True,
@@ -70,7 +77,7 @@ def test_clean_wheel_all_cli_paths_are_offline_and_process_free_outside_repo(
 
     venv = tmp_path / "venv"
     created = subprocess.run(
-        ["uv", "venv", "--python", sys.executable, str(venv)],
+        [sys.executable, "-m", "venv", str(venv)],
         cwd=tmp_path,
         capture_output=True,
         text=True,
@@ -83,7 +90,15 @@ def test_clean_wheel_all_cli_paths_are_offline_and_process_free_outside_repo(
         else "bin/tournament-forecast"
     )
     installed = subprocess.run(
-        ["uv", "pip", "install", "--python", str(python), "--no-deps", str(wheels[0])],
+        [
+            str(python),
+            "-m",
+            "pip",
+            "install",
+            "--no-index",
+            "--no-deps",
+            str(wheels[0]),
+        ],
         cwd=tmp_path,
         capture_output=True,
         text=True,
@@ -107,6 +122,7 @@ def test_clean_wheel_all_cli_paths_are_offline_and_process_free_outside_repo(
 from importlib.metadata import entry_points
 import os
 import runpy
+import socket
 import sys
 
 SHELL_PROFILES = {
@@ -117,10 +133,21 @@ SHELL_PROFILES = {
     "config.fish",
 }
 
+mode, *arguments = sys.argv[1:]
+precreated_socket = None
+if mode in {"selftest-connect", "selftest-bind", "selftest-sendto"}:
+    socket_type = socket.SOCK_DGRAM if mode == "selftest-sendto" else socket.SOCK_STREAM
+    precreated_socket = socket.socket(socket.AF_INET, socket_type)
+
 def deny_side_effects(event, args):
-    if event in {"socket.connect", "socket.bind"}:
+    if event.startswith("socket."):
         raise RuntimeError(f"network denied by audit hook: {event}")
-    if event == "subprocess.Popen" or event == "os.system" or event.startswith("os.spawn") or event == "os.posix_spawn":
+    if (
+        event == "subprocess.Popen"
+        or event == "os.system"
+        or event.startswith("os.spawn")
+        or event == "os.posix_spawn"
+    ):
         raise RuntimeError(f"process denied by audit hook: {event}")
     if event == "open" and args and isinstance(args[0], (str, bytes, os.PathLike)):
         candidate = os.fsdecode(args[0]).replace("\\\\", "/")
@@ -128,13 +155,16 @@ def deny_side_effects(event, args):
             raise RuntimeError(f"shell profile denied by audit hook: {candidate}")
 
 sys.addaudithook(deny_side_effects)
-mode, *arguments = sys.argv[1:]
-if mode == "selftest-connect":
-    import socket
-    socket.socket().connect(("127.0.0.1", 9))
+if mode == "selftest-create":
+    socket.socket()
+elif mode == "selftest-dns":
+    socket.getaddrinfo("localhost", 80)
+elif mode == "selftest-connect":
+    precreated_socket.connect(("127.0.0.1", 9))
 elif mode == "selftest-bind":
-    import socket
-    socket.socket().bind(("127.0.0.1", 0))
+    precreated_socket.bind(("127.0.0.1", 0))
+elif mode == "selftest-sendto":
+    precreated_socket.sendto(b"probe", ("127.0.0.1", 9))
 elif mode == "selftest-subprocess":
     import subprocess
     subprocess.run([sys.executable, "-c", "pass"], check=True)
@@ -161,8 +191,11 @@ else:
     )
 
     policy_selftests = {
+        "selftest-create": "network denied by audit hook: socket.__new__",
+        "selftest-dns": "network denied by audit hook: socket.getaddrinfo",
         "selftest-connect": "network denied by audit hook: socket.connect",
         "selftest-bind": "network denied by audit hook: socket.bind",
+        "selftest-sendto": "network denied by audit hook: socket.sendto",
         "selftest-subprocess": "process denied by audit hook: subprocess.Popen",
         "selftest-system": "process denied by audit hook: os.system",
         "selftest-profile": "shell profile denied by audit hook",
@@ -207,6 +240,22 @@ else:
     )
     assert stable_alias.is_symlink()
     assert all(path.is_file() and path.stat().st_size > 0 for path in readme_artifacts)
+
+    readme_backtest = _run_audited(
+        python,
+        audit_probe,
+        script,
+        outside,
+        environment,
+        "backtest",
+        "--input",
+        "examples/world-cup-2026-live/backtest.json",
+    )
+    assert readme_backtest.returncode == 0, readme_backtest.stderr
+    backtest_report = json.loads(readme_backtest.stdout)
+    assert backtest_report["ok"] is True
+    assert backtest_report["model_version"] == "poisson-elo-v1"
+    assert backtest_report["sample_size"] == 72
 
     quickstart = _run_audited(
         python,

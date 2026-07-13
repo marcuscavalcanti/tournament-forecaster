@@ -26,6 +26,7 @@ classifiers = [
 [project.optional-dependencies]
 dev = [
   "build>=1.2,<2",
+  "hatchling>=1.27,<2",
   "jsonschema>=4.23,<5",
   "mypy>=1.13,<2",
   "Pillow>=11,<13",
@@ -48,6 +49,74 @@ worldcup-brazil-report = "worldcup_brazil.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/tournament_forecaster", "worldcup_brazil"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/.env.example",
+  "/.gitignore",
+  "/CODE_OF_CONDUCT.md",
+  "/CONTRIBUTING.md",
+  "/LICENSE",
+  "/Makefile",
+  "/NOTICE.md",
+  "/README.md",
+  "/SECURITY.md",
+  "/config/worldcup_brazil.example.json",
+  "/docs/ADDING_A_COMPETITION.md",
+  "/docs/ADDING_A_PROVIDER.md",
+  "/docs/ARCHITECTURE.md",
+  "/docs/CONFIGURATION.md",
+  "/docs/DATA_POLICY.md",
+  "/docs/MIGRATION_FROM_WORLDCUP_BRAZIL.md",
+  "/docs/PRODUCT_FLOW.md",
+  "/docs/PROVIDERS.md",
+  "/docs/assets/architecture/README.md",
+  "/docs/assets/architecture/generate.py",
+  "/docs/assets/architecture/manifest.json",
+  "/docs/assets/architecture/product-flow.png",
+  "/docs/assets/architecture/product-flow.svg",
+  "/docs/assets/architecture/technical-architecture.png",
+  "/docs/assets/architecture/technical-architecture.svg",
+  "/docs/knockout-stage-output-contract.md",
+  "/examples/world-cup-2026-live/DATA_SOURCES.md",
+  "/examples/world-cup-2026-live/README.md",
+  "/examples/world-cup-2026-live/backtest-report.json",
+  "/examples/world-cup-2026-live/backtest-report.md",
+  "/examples/world-cup-2026-live/backtest.json",
+  "/examples/world-cup-2026-live/tournament.json",
+  "/presets/champions-league-style/DATA_SOURCES.md",
+  "/presets/champions-league-style/tournament.json",
+  "/presets/libertadores-style/DATA_SOURCES.md",
+  "/presets/libertadores-style/tournament.json",
+  "/presets/synthetic-cup/DATA_SOURCES.md",
+  "/presets/synthetic-cup/tournament.json",
+  "/presets/world-cup-style/DATA_SOURCES.md",
+  "/presets/world-cup-style/tournament.json",
+  "/pyproject.toml",
+  "/src/tournament_forecaster",
+  "/worldcup_brazil",
+]
+exclude = [
+  "/.github",
+  "/.superpowers",
+  "/.venv",
+  "/attachments",
+  "/build",
+  "/data",
+  "/dist",
+  "/docs/superpowers",
+  "/outputs",
+  "/provider_raw",
+  "/raw_provider_payloads",
+  "/scripts",
+  "/tests",
+  "/uv.lock",
+  "/**/__pycache__",
+  "/**/*.local.*",
+  "/**/*.pyc",
+  "/**/*.pyo",
+  "/**/outputs/**",
+]
 
 [tool.pytest.ini_options]
 pythonpath = [".", "src"]

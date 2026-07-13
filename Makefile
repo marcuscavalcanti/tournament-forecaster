@@ -1,8 +1,8 @@
 SHELL := /bin/zsh
 
-PYTHON ?= uv run python
-PYTEST ?= uv run --with pytest --with jsonschema python -m pytest
-PYTHON_WITH_PILLOW ?= uv run --with pillow python
+PYTHON ?= uv run --locked python
+PYTEST ?= uv run --locked --extra dev python -m pytest
+PYTHON_WITH_PILLOW ?= uv run --locked --with pillow python
 
 CONFIG ?= config/worldcup_brazil.json
 STATE ?= data/run_state.json

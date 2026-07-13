@@ -13,7 +13,7 @@ Maintainers will acknowledge a complete report, investigate it privately, coordi
 ## Trust Boundaries
 
 - **Trusted configuration:** Tournament JSON, imported result files, templates, and provider metadata are code-like local inputs. Review them before use. Schema validation limits shape; it does not make an untrusted operational policy safe.
-- **Local command boundary:** Optional bridges execute local commands only when a user explicitly enables and configures them. The generic offline CLI does not discover or execute arbitrary bridge commands automatically.
+- **Local command boundary:** The generic CLI does not implement local command bridges and does not execute commands declared by tournament or provider data. Any future bridge needs a separate threat model, an explicit enablement design, and security review before public configuration is added.
 - **Symlink and output boundary:** Imports reject unsafe file substitutions, apply verifies file identity, and publication uses atomic immutable generations. Do not place output roots in attacker-controlled directories.
 - **Provider key boundary:** Credentials belong in environment variables or an external secret manager. They must never be written to tournament configuration, provider payloads, logs, reports, or source control.
 - **Data provenance boundary:** Normalized facts retain provider and retrieval metadata. Provenance is evidence about origin, not a guarantee that an external fact is accurate, licensed for every use, or unchanged upstream.

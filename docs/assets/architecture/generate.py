@@ -32,6 +32,13 @@ EXPECTED_RENDERER: Final = (
     "macOS sips",
     "sips -s format png {svg} --out {png}",
 )
+EXPECTED_PROVENANCE: Final = (
+    "Project-authored architecture diagrams",
+    "Marcus Cavalcanti",
+    "MIT",
+    "https://github.com/marcuscavalcanti/worldcup2026",
+    "da8d4dfa116d88af4f1de0590e56c6bb1d8ffc6a",
+)
 PROTECTED_MARKS: Final = ("fifa", "uefa", "conmebol", "opta")
 PNG_SIGNATURE: Final = b"\x89PNG\r\n\x1a\n"
 SHA256_PATTERN: Final = re.compile(r"[0-9a-f]{64}")
@@ -57,6 +64,12 @@ class Manifest:
     schema_version: int
     renderer_name: str
     renderer_command: str
+    renderer_reference_version: str
+    provenance_origin: str
+    provenance_author: str
+    provenance_license: str
+    provenance_repository: str
+    provenance_commit: str
     assets: tuple[Asset, ...]
 
 
@@ -108,11 +121,25 @@ def _asset(value: object, index: int) -> Asset:
 def _load_manifest() -> Manifest:
     document: object = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
     root = _mapping(document, "manifest")
-    if set(root) != {"schema_version", "renderer", "assets"}:
-        raise ContractError("manifest keys must be assets, renderer, and schema_version")
+    if set(root) != {"schema_version", "renderer", "provenance", "assets"}:
+        raise ContractError(
+            "manifest keys must be assets, provenance, renderer, and schema_version"
+        )
     renderer = _mapping(root["renderer"], "renderer")
-    if set(renderer) != {"name", "command"}:
-        raise ContractError("renderer keys must be command and name")
+    if set(renderer) != {"name", "command", "reference_version"}:
+        raise ContractError("renderer keys must be command, name, and reference_version")
+    provenance = _mapping(root["provenance"], "provenance")
+    expected_provenance_keys = {
+        "origin",
+        "author",
+        "license",
+        "source_repository",
+        "source_commit",
+    }
+    if set(provenance) != expected_provenance_keys:
+        raise ContractError(
+            f"provenance keys must be {sorted(expected_provenance_keys)}"
+        )
     raw_assets = root["assets"]
     if not isinstance(raw_assets, list):
         raise ContractError("manifest.assets must be an array")
@@ -120,15 +147,32 @@ def _load_manifest() -> Manifest:
         schema_version=_integer(root, "schema_version", "manifest"),
         renderer_name=_text(renderer, "name", "renderer"),
         renderer_command=_text(renderer, "command", "renderer"),
+        renderer_reference_version=_text(renderer, "reference_version", "renderer"),
+        provenance_origin=_text(provenance, "origin", "provenance"),
+        provenance_author=_text(provenance, "author", "provenance"),
+        provenance_license=_text(provenance, "license", "provenance"),
+        provenance_repository=_text(provenance, "source_repository", "provenance"),
+        provenance_commit=_text(provenance, "source_commit", "provenance"),
         assets=tuple(_asset(value, index) for index, value in enumerate(raw_assets)),
     )
 
 
 def _validate_manifest(manifest: Manifest) -> None:
-    if manifest.schema_version != 1:
-        raise ContractError("manifest.schema_version must be 1")
+    if manifest.schema_version != 2:
+        raise ContractError("manifest.schema_version must be 2")
     if (manifest.renderer_name, manifest.renderer_command) != EXPECTED_RENDERER:
         raise ContractError("manifest renderer does not match the approved command")
+    if not manifest.renderer_reference_version.strip():
+        raise ContractError("manifest renderer reference_version must not be empty")
+    provenance = (
+        manifest.provenance_origin,
+        manifest.provenance_author,
+        manifest.provenance_license,
+        manifest.provenance_repository,
+        manifest.provenance_commit,
+    )
+    if provenance != EXPECTED_PROVENANCE:
+        raise ContractError("manifest provenance does not match the approved project source")
     observed = {
         asset.asset_id: (asset.svg, asset.png, asset.width, asset.height)
         for asset in manifest.assets
@@ -225,8 +269,21 @@ def _render(svg: Path, png: Path) -> None:
         raise ContractError(f"sips could not render {svg.name}: {detail}")
 
 
+def _renderer_version() -> str:
+    completed = subprocess.run(
+        [_sips(), "--version"],
+        text=True,
+        capture_output=True,
+    )
+    output = completed.stdout.strip() or completed.stderr.strip()
+    if completed.returncode != 0 or not output:
+        raise ContractError("sips did not report a renderer version")
+    return output.splitlines()[0]
+
+
 def _check_render(manifest: Manifest) -> None:
     _check(manifest)
+    renderer_version = _renderer_version()
     with tempfile.TemporaryDirectory(prefix="architecture-render-") as temporary:
         directory = Path(temporary)
         for asset in manifest.assets:
@@ -235,7 +292,10 @@ def _check_render(manifest: Manifest) -> None:
             _validate_png(asset, rendered, verify_digest=False)
             if rendered.read_bytes() != (DIRECTORY / asset.png).read_bytes():
                 raise ContractError(f"{asset.png} is not a deterministic export of {asset.svg}")
-    print("Architecture render parity: OK")
+    print(
+        "Architecture render parity: OK "
+        f"({renderer_version}; reference {manifest.renderer_reference_version})"
+    )
 
 
 def _manifest_document(manifest: Manifest) -> dict[str, object]:
@@ -244,6 +304,14 @@ def _manifest_document(manifest: Manifest) -> dict[str, object]:
         "renderer": {
             "name": manifest.renderer_name,
             "command": manifest.renderer_command,
+            "reference_version": manifest.renderer_reference_version,
+        },
+        "provenance": {
+            "origin": manifest.provenance_origin,
+            "author": manifest.provenance_author,
+            "license": manifest.provenance_license,
+            "source_repository": manifest.provenance_repository,
+            "source_commit": manifest.provenance_commit,
         },
         "assets": [
             {
@@ -260,12 +328,16 @@ def _manifest_document(manifest: Manifest) -> dict[str, object]:
     }
 
 
+def _commit_file(source: Path, destination: Path) -> None:
+    """Atomically replace one file within the regeneration transaction."""
+    source.replace(destination)
+
+
 def _regenerate(manifest: Manifest) -> None:
     _validate_manifest(manifest)
     for asset in manifest.assets:
         _validate_svg(asset, verify_digest=False)
 
-    updated_assets: list[Asset] = []
     with tempfile.TemporaryDirectory(prefix=".architecture-render-", dir=DIRECTORY) as temporary:
         directory = Path(temporary)
         rendered_assets: dict[str, Path] = {}
@@ -275,23 +347,61 @@ def _regenerate(manifest: Manifest) -> None:
             _validate_png(asset, rendered, verify_digest=False)
             rendered_assets[asset.asset_id] = rendered
 
+        updated_assets: list[Asset] = []
         for asset in manifest.assets:
             rendered = rendered_assets[asset.asset_id]
-            rendered.replace(DIRECTORY / asset.png)
             updated_assets.append(
                 replace(
                     asset,
                     svg_sha256=_sha256(DIRECTORY / asset.svg),
-                    png_sha256=_sha256(DIRECTORY / asset.png),
+                    png_sha256=_sha256(rendered),
                 )
             )
 
-    updated = replace(manifest, assets=tuple(updated_assets))
-    MANIFEST_PATH.write_text(
-        json.dumps(_manifest_document(updated), indent=2, ensure_ascii=True) + "\n",
-        encoding="utf-8",
-    )
-    _check(updated)
+        updated = replace(
+            manifest,
+            renderer_reference_version=_renderer_version(),
+            assets=tuple(updated_assets),
+        )
+        _validate_manifest(updated)
+        manifest_candidate = directory / "manifest.json"
+        manifest_candidate.write_text(
+            json.dumps(_manifest_document(updated), indent=2, ensure_ascii=True) + "\n",
+            encoding="utf-8",
+        )
+
+        commit_plan = [
+            (rendered_assets[asset.asset_id], DIRECTORY / asset.png)
+            for asset in manifest.assets
+        ]
+        commit_plan.append((manifest_candidate, MANIFEST_PATH))
+        rollback_directory = directory / "rollback"
+        rollback_directory.mkdir()
+        backups: list[tuple[Path, Path]] = []
+        for index, (_, destination) in enumerate(commit_plan):
+            backup = rollback_directory / f"{index}-{destination.name}"
+            shutil.copy2(destination, backup)
+            backups.append((backup, destination))
+
+        try:
+            for source, destination in commit_plan:
+                _commit_file(source, destination)
+            _check(updated)
+        except Exception as error:
+            rollback_errors: list[str] = []
+            for backup, destination in reversed(backups):
+                try:
+                    backup.replace(destination)
+                except OSError as rollback_error:
+                    rollback_errors.append(f"{destination.name}: {rollback_error}")
+            if rollback_errors:
+                details = "; ".join(rollback_errors)
+                raise ContractError(
+                    f"architecture regeneration failed and rollback was incomplete: {details}"
+                ) from error
+            raise ContractError(
+                f"architecture regeneration failed and was rolled back: {error}"
+            ) from error
 
 
 def main(argv: Sequence[str] | None = None) -> int:

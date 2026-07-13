@@ -7,6 +7,7 @@ import runpy
 import shutil
 import subprocess
 import sys
+import tarfile
 import tomllib
 from pathlib import Path
 
@@ -30,6 +31,7 @@ REQUIRED_FILES = {
     ".env.example",
     ".github/workflows/ci.yml",
     ".github/workflows/gitleaks.yml",
+    ".github/workflows/release-gate.yml",
     ".github/workflows/release.yml",
     ".github/ISSUE_TEMPLATE/bug_report.yml",
     ".github/ISSUE_TEMPLATE/feature_request.yml",
@@ -47,6 +49,26 @@ REQUIRED_FILES = {
     "docs/assets/architecture/manifest.json",
     "scripts/check_english_surface.py",
 }
+
+TASK6_OVERLAY_PATHS = (
+    Path(".env.example"),
+    Path(".github/workflows"),
+    Path("Makefile"),
+    Path("README.md"),
+    Path("SECURITY.md"),
+    Path("docs/ARCHITECTURE.md"),
+    Path("docs/CONFIGURATION.md"),
+    Path("docs/PROVIDERS.md"),
+    Path("docs/assets/architecture"),
+    Path("docs/knockout-stage-output-contract.md"),
+    Path("pyproject.toml"),
+    Path("scripts/check_english_surface.py"),
+    Path("tests/test_agents_fallbacks.py"),
+    Path("tests/test_clean_wheel.py"),
+    Path("tests/test_public_repository_contract.py"),
+    Path("tests/test_readme_diagrams.py"),
+    Path("uv.lock"),
+)
 
 
 def _tracked_files() -> tuple[Path, ...]:
@@ -223,6 +245,23 @@ def test_public_repo_rejects_tracked_runtime_and_private_material() -> None:
             personal_paths.append(path)
     assert not personal_paths, f"personal absolute paths in tracked files: {personal_paths}"
 
+    named_personal_paths = []
+    for path in tracked:
+        candidate = ROOT / path
+        if not candidate.is_file():
+            continue
+        try:
+            content = candidate.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        named_macos_home = "/Users/" + "marcus"
+        named_windows_home = "C:\\Users\\" + "marcus"
+        if named_macos_home in content or named_windows_home in content:
+            named_personal_paths.append(path)
+    assert not named_personal_paths, (
+        f"named personal absolute paths in tracked files: {named_personal_paths}"
+    )
+
 
 def test_public_governance_and_provider_contracts_are_explicit() -> None:
     license_text = (ROOT / "LICENSE").read_text(encoding="utf-8")
@@ -288,7 +327,16 @@ def test_package_metadata_is_publication_ready_without_runtime_dependencies() ->
 
 def test_workflows_are_offline_scoped_and_do_not_publish() -> None:
     ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8").casefold()
+    gate = (ROOT / ".github/workflows/release-gate.yml").read_text(
+        encoding="utf-8"
+    ).casefold()
+    gitleaks = (ROOT / ".github/workflows/gitleaks.yml").read_text(
+        encoding="utf-8"
+    ).casefold()
     release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8").casefold()
+    assert "workflow_call" in ci
+    assert "workflow_call" in gitleaks
+    assert "workflow_call" in gate
     assert '["3.11", "3.12", "3.13"]' in ci
     for check in (
         "ruff",
@@ -301,16 +349,45 @@ def test_workflows_are_offline_scoped_and_do_not_publish() -> None:
         "backtest",
         "--disable-socket",
         "full tracked test baseline",
+        "pristine clone make validate",
         "generate.py --check-render",
     ):
         assert check in ci
     assert "worldcup_brazil" not in ci
     assert "tournament-forecast backtest" not in ci
     assert "tournament_forecast_offline" not in ci
+    assert "./.github/workflows/ci.yml" in gate
+    assert "./.github/workflows/gitleaks.yml" in gate
+    assert "ubuntu-latest" in gate
+    assert "macos-latest" in gate
+    assert "windows-latest" in gate
+    assert "tests/test_clean_wheel.py" in gate
+    assert "./.github/workflows/release-gate.yml" in release
+    assert "github.ref_type" in release
+    assert "github.ref_name" in release
+    assert "tomllib" in release
+    assert 'project["version"]' in release
+    assert "v{version}" in release
+    assert "needs: [version-contract, release-gate]" in release
     assert "build" in release
     assert "twine check" in release
     assert "pypi" not in release
     assert "publish" not in release
+
+
+def test_workflow_actions_are_pinned_to_immutable_commits() -> None:
+    action_pattern = re.compile(r"^\s*-?\s*uses:\s*([^\s#]+)(?:\s+#\s*(\S+))?", re.MULTILINE)
+    for workflow in sorted((ROOT / ".github/workflows").glob("*.yml")):
+        content = workflow.read_text(encoding="utf-8")
+        for action, version_comment in action_pattern.findall(content):
+            if action.startswith("./"):
+                continue
+            assert re.fullmatch(r"[^@]+@[0-9a-f]{40}", action), (
+                f"{workflow.name} has a mutable action reference: {action}"
+            )
+            assert re.fullmatch(r"v\d+(?:\.\d+){0,2}", version_comment), (
+                f"{workflow.name} must retain a Dependabot-readable version comment for {action}"
+            )
 
 
 def test_english_public_surface_scanner_passes() -> None:
@@ -339,6 +416,177 @@ def test_makefile_help_is_english_and_scanned() -> None:
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.startswith("Main commands:\n")
     assert "make quickstart generates a complete synthetic offline forecast" in completed.stdout
+
+
+def test_pristine_clone_make_validate_installs_declared_test_dependencies(
+    tmp_path: Path,
+) -> None:
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    assert "PYTEST ?= uv run --locked --extra dev python -m pytest" in makefile
+    if os.environ.get("TOURNAMENT_FORECASTER_INNER_MAKE_VALIDATE") == "1":
+        return
+
+    clone = tmp_path / "pristine-clone"
+    cloned = subprocess.run(
+        ["git", "clone", "--local", "--no-hardlinks", "--quiet", str(ROOT), str(clone)],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+    )
+    assert cloned.returncode == 0, cloned.stderr
+    for relative in TASK6_OVERLAY_PATHS:
+        source = ROOT / relative
+        destination = clone / relative
+        if source.is_dir():
+            shutil.rmtree(destination, ignore_errors=True)
+            shutil.copytree(source, destination)
+        elif source.is_file():
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+    assert not (clone / ".venv").exists()
+
+    environment = os.environ.copy()
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    environment["TOURNAMENT_FORECASTER_INNER_MAKE_VALIDATE"] = "1"
+    for key in tuple(environment):
+        if key.endswith("_API_KEY"):
+            environment.pop(key)
+    validated = subprocess.run(
+        ["make", "validate"],
+        cwd=clone,
+        env=environment,
+        text=True,
+        capture_output=True,
+    )
+    assert validated.returncode == 0, validated.stdout + validated.stderr
+
+
+def test_sdist_is_an_explicit_public_allowlist_without_local_material(
+    tmp_path: Path,
+) -> None:
+    metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    sdist = metadata["tool"]["hatch"]["build"]["targets"]["sdist"]
+    includes = set(sdist["include"])
+    excludes = set(sdist["exclude"])
+    for required in (
+        "/src/tournament_forecaster",
+        "/worldcup_brazil",
+        "/README.md",
+        "/LICENSE",
+        "/NOTICE.md",
+        "/docs/PROVIDERS.md",
+        "/examples/world-cup-2026-live/tournament.json",
+    ):
+        assert required in includes
+    for forbidden in (
+        "/.github",
+        "/.superpowers",
+        "/docs/superpowers",
+        "/outputs",
+        "/raw_provider_payloads",
+        "/scripts",
+        "/tests",
+    ):
+        assert forbidden in excludes
+
+    probe_root = ROOT / f"task6-untracked-output-{os.getpid()}-{tmp_path.name}"
+    marker = "TASK6_UNTRACKED_OUTPUT_MUST_NOT_SHIP"
+    probe_root.mkdir()
+    (probe_root / "forecast.json").write_text(marker, encoding="utf-8")
+    dist = tmp_path / "dist"
+    try:
+        built = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "build",
+                "--sdist",
+                "--no-isolation",
+                "--outdir",
+                str(dist),
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+        )
+    finally:
+        shutil.rmtree(probe_root, ignore_errors=True)
+    assert built.returncode == 0, built.stdout + built.stderr
+
+    archives = list(dist.glob("*.tar.gz"))
+    assert len(archives) == 1
+    with tarfile.open(archives[0], mode="r:gz") as archive:
+        files = [member for member in archive.getmembers() if member.isfile()]
+        relative_names = [member.name.split("/", 1)[1] for member in files]
+        allowlisted_paths = tuple(item.removeprefix("/") for item in includes)
+        unexpected = [
+            name
+            for name in relative_names
+            if name != "PKG-INFO"
+            and not any(
+                name == allowed or name.startswith(f"{allowed.rstrip('/')}/")
+                for allowed in allowlisted_paths
+            )
+        ]
+        assert not unexpected, f"sdist members outside the allowlist: {unexpected}"
+        assert not any(
+            name.startswith(
+                (
+                    ".github/",
+                    ".superpowers/",
+                    "docs/superpowers/",
+                    "outputs/",
+                    "scripts/",
+                    "tests/",
+                )
+            )
+            for name in relative_names
+        )
+        assert not any(probe_root.name in name for name in relative_names)
+        text_members = []
+        for member in files:
+            if member.size > 2_000_000:
+                continue
+            stream = archive.extractfile(member)
+            if stream is None:
+                continue
+            try:
+                text_members.append(stream.read().decode("utf-8"))
+            except UnicodeDecodeError:
+                continue
+    archive_text = "\n".join(text_members)
+    assert marker not in archive_text
+    assert "/Users/" not in archive_text
+    assert "C:\\Users\\" not in archive_text
+
+
+def test_internal_docs_are_unshipped_and_knockout_contract_is_public_english() -> None:
+    scanner = runpy.run_path(str(ROOT / "scripts/check_english_surface.py"))
+    assert scanner["_is_public"](Path("docs/knockout-stage-output-contract.md"))
+    assert scanner["_is_internal"](Path("docs/superpowers/plans/internal.md"))
+    assert not scanner["_is_public"](Path("docs/superpowers/plans/internal.md"))
+
+    contract = (ROOT / "docs/knockout-stage-output-contract.md").read_text(
+        encoding="utf-8"
+    )
+    assert contract.startswith("# Output Contract: Knockout Stage\n")
+
+
+def test_generic_cli_does_not_advertise_unimplemented_bridge_controls() -> None:
+    env_example = (ROOT / ".env.example").read_text(encoding="utf-8").casefold()
+    security = (ROOT / "SECURITY.md").read_text(encoding="utf-8").casefold()
+    readme = (ROOT / "README.md").read_text(encoding="utf-8").casefold()
+    configuration = (ROOT / "docs/CONFIGURATION.md").read_text(
+        encoding="utf-8"
+    ).casefold()
+    providers = (ROOT / "docs/PROVIDERS.md").read_text(encoding="utf-8").casefold()
+
+    assert "bridge_command" not in env_example
+    assert "generic cli does not implement local command bridges" in security
+    assert "future bridge" in security
+    for content in (readme, configuration, providers):
+        assert "explicitly enables" not in content
+        assert "separately enabled" not in content
 
 
 def test_only_manifest_approved_architecture_assets_are_bundled() -> None:

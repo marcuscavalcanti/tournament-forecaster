@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
+
+import pytest
 
 ROOT = Path(__file__).parents[1]
 ASSET_DIRECTORY = ROOT / "docs/assets/architecture"
@@ -18,6 +22,16 @@ EXPECTED_ASSETS = {
         1280,
     ),
 }
+
+
+def _load_generator(path: Path) -> ModuleType:
+    module_name = f"architecture_generator_{path.parent.name}_{id(path)}"
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_readme_links_current_english_architecture_contract() -> None:
@@ -46,10 +60,18 @@ def test_architecture_manifest_approves_and_reproduces_svg_png_pairs() -> None:
     generator = ASSET_DIRECTORY / "generate.py"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
-    assert manifest["schema_version"] == 1
+    assert manifest["schema_version"] == 2
     assert manifest["renderer"] == {
         "name": "macOS sips",
         "command": "sips -s format png {svg} --out {png}",
+        "reference_version": "sips-316",
+    }
+    assert manifest["provenance"] == {
+        "origin": "Project-authored architecture diagrams",
+        "author": "Marcus Cavalcanti",
+        "license": "MIT",
+        "source_repository": "https://github.com/marcuscavalcanti/worldcup2026",
+        "source_commit": "da8d4dfa116d88af4f1de0590e56c6bb1d8ffc6a",
     }
     records = {record["id"]: record for record in manifest["assets"]}
     assert set(records) == set(EXPECTED_ASSETS)
@@ -126,4 +148,45 @@ with output.open("ab") as stream:
 
     assert completed.returncode == 1
     assert "injected render failure" in completed.stderr
+    assert {path.name: path.read_bytes() for path in protected} == before
+
+
+@pytest.mark.parametrize("failure_index", [1, 2, 3])
+def test_architecture_regeneration_rolls_back_every_commit_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_index: int,
+) -> None:
+    copied_assets = tmp_path / "architecture"
+    shutil.copytree(ASSET_DIRECTORY, copied_assets)
+    generator = _load_generator(copied_assets / "generate.py")
+    protected = (
+        copied_assets / "product-flow.png",
+        copied_assets / "technical-architecture.png",
+        copied_assets / "manifest.json",
+    )
+    before = {path.name: path.read_bytes() for path in protected}
+
+    def render_changed(source: Path, destination: Path) -> None:
+        shutil.copyfile(source.with_suffix(".png"), destination)
+        with destination.open("ab") as stream:
+            stream.write(b"changed")
+
+    commit_calls = 0
+
+    def fail_at_boundary(source: Path, destination: Path) -> None:
+        nonlocal commit_calls
+        commit_calls += 1
+        if commit_calls == failure_index:
+            raise OSError(f"injected commit failure {failure_index}")
+        os.replace(source, destination)
+
+    monkeypatch.setattr(generator, "_render", render_changed)
+    monkeypatch.setattr(generator, "_renderer_version", lambda: "sips-test")
+    monkeypatch.setattr(generator, "_commit_file", fail_at_boundary)
+
+    with pytest.raises(generator.ContractError, match="rolled back"):
+        generator._regenerate(generator._load_manifest())
+
+    assert commit_calls == failure_index
     assert {path.name: path.read_bytes() for path in protected} == before

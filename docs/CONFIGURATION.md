@@ -28,7 +28,7 @@ Pairing modes are `fixed`, `seeded_draw`, and `open_draw`. Knockout stages decla
 
 Commit reusable public configuration only. Keep credentials in environment variables and machine-specific values in ignored `*.local.json` files. `.env.example` names optional variables but contains no values. The generic simulation, validation, reporting, schema, preset, and backtest paths require no provider key.
 
-Configuration is trusted input. Review local files and templates before running them, especially when an operator has separately enabled a local command bridge.
+Configuration is trusted input. Review local files and templates before running them. The generic CLI does not implement a local command bridge or accept executable commands from configuration.
 
 ## Validation And Reproducibility
 

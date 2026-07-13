@@ -1,43 +1,41 @@
-# Contrato de Saída: Mata-Mata
+# Output Contract: Knockout Stage
 
-Este contrato vale a partir do momento em que o Brasil entra no mata-mata.
+This compatibility contract applies once Brazil enters the knockout stage. It documents the deprecated Brazil-specific renderer; the generic Tournament Forecaster remains the primary public product.
 
-## Temporalidade
+## Timeline
 
-- Fases já concluídas deixam de aparecer como caminho futuro.
-- Resultados concluídos entram como histórico narrativo antes do caminho restante.
-- O próximo jogo deve ser o primeiro confronto futuro do Brasil, usando data do bundle.
-- No mata-mata, o cabeçalho usa `Brasil passa / adversário passa`; empate fica sempre `0`.
+- Completed stages no longer appear as part of the future path.
+- Completed results appear as narrative history before the remaining path.
+- The next match is Brazil's first future fixture, using the date in the input bundle.
+- A knockout heading compares `Brazil advances / opponent advances`; the draw value is always `0`.
 
-## Caminho
+## Path
 
-- O bloco `O CAMINHO ATÉ O HEXA` começa na fase atual ou futura.
-- Se o Brasil já venceu os 16 avos, o caminho começa em `OITAVAS`.
-- O contexto histórico deve dizer explicitamente como o Brasil chegou ali, por exemplo:
-  `Avançou para as oitavas de final com a vitória nos 16 avos sobre o Japão por 2x1.`
-- Cruzamento travado usa `Definido` e `100% de chance desse cruzamento`.
+- The road-to-title block starts at the current or next stage.
+- If Brazil has completed the round of 32, the path starts at the round of 16.
+- Historical context states explicitly how Brazil reached that point, including opponent and score.
+- A locked matchup uses `Confirmed` and `100% chance of this matchup`.
 
-## Resumo da Caminhada
+## Tournament Run Summary
 
-- As probabilidades de chegada por fase devem vir do Monte Carlo condicionado aos resultados já conhecidos.
-- A chance de chegar às quartas, quando o próximo jogo é oitavas, é a chance de passar das oitavas.
-- Portanto, se `Brasil x Noruega` está em `74,1%`, o resumo deve dizer `quartas em 74%`, não um valor divergente de pós-debate.
-- O título continua sendo o percentual final publicado pelo funil do run.
+- Stage-reach probabilities come from Monte Carlo simulation conditioned on known results.
+- When the next match is in the round of 16, quarter-final reach equals the probability of advancing from that match.
+- For example, if `Brazil vs Norway` is `74.1%`, the summary reports `quarter-finals: 74%`; it does not substitute a post-debate value.
+- The title percentage remains the final published probability from the run funnel.
 
-## Bastidores
+## Analysis Notes
 
-- Bastidor não pode ser coreografia de sala, liderança genérica ou frase administrativa.
-- Bastidor precisa expor raciocínio substantivo do audit: variável, threshold, trade-off ou hipótese testada.
-- Exemplos desejáveis:
-  - `Para subir o Hexa de 11,7% para 12,7%, Brasil x Noruega teria que saltar de 74,1% para 80,4%.`
-  - `A sala criou matriz de gatilhos: odds, lesão, escalação ou rating precisam mover Brasil x Noruega/Inglaterra em 3 p.p.`
-  - `Haaland/tornozelo deve virar teste de sensibilidade, não palpite solto.`
-- É proibido converter percentuais de naturezas diferentes como se fossem ajuste do mesmo evento, por exemplo `Hexa 11,7% caiu para Brasil x Noruega 74,1%`.
+- Notes must not be generic room choreography, leadership language, or administrative narration.
+- Notes expose substantive audit reasoning: a variable, threshold, trade-off, or tested hypothesis.
+- Useful examples include:
+  - `To move the title probability from 11.7% to 12.7%, Brazil vs Norway would need to rise from 74.1% to 80.4%.`
+  - `The analysis defined triggers for odds, injury, lineup, or rating evidence that would move Brazil vs Norway or England by 3 percentage points.`
+  - `Haaland's ankle status should become a sensitivity test, not an unsupported guess.`
+- Percentages for different events must not be described as though one directly adjusted the other. A title probability of `11.7%` and a Brazil-vs-Norway advancement probability of `74.1%` are different quantities.
 
-## Infográfico
+## Infographic
 
-- O infográfico deve usar o mesmo contrato temporal do post.
-- O card do último run deve mostrar o próximo confronto futuro, não o primeiro mata-mata antigo.
-- O insight de cruzamento travado deve apontar para o próximo jogo travado relevante.
-- Ranking de modelos, influência por run e índice de acerto permanecem, mas não podem carregar confronto já resolvido como se fosse atual.
-
+- The infographic uses the same temporal contract as the report.
+- The latest-run panel shows the next future fixture, not an earlier resolved knockout match.
+- A locked-matchup insight points to the next relevant confirmed fixture.
+- Model ranking, run influence, and accuracy indicators may remain, but they must not present a resolved fixture as current.

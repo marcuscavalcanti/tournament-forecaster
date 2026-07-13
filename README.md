@@ -83,6 +83,6 @@ The Brazil-focused `worldcup_brazil` workflow is deprecated compatibility, not t
 
 ## Trust And Governance
 
-Tournament configuration is trusted local code-like input. Do not run configurations or local provider bridges from untrusted sources. Security boundaries and private reporting are documented in [Security](SECURITY.md). Contributions follow [Contributing](CONTRIBUTING.md), the [Code of Conduct](CODE_OF_CONDUCT.md), and the [MIT license](LICENSE).
+Tournament configuration is trusted local code-like input. The generic CLI does not execute local command bridges; any future bridge requires a separate reviewed design. Security boundaries and private reporting are documented in [Security](SECURITY.md). Contributions follow [Contributing](CONTRIBUTING.md), the [Code of Conduct](CODE_OF_CONDUCT.md), and the [MIT license](LICENSE).
 
 This project is independent and carries no vendor or governing-body affiliation. See [NOTICE](NOTICE.md).

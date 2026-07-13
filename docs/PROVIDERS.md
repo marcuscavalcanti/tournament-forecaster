@@ -6,7 +6,7 @@ Providers are acquisition boundaries, not owners of tournament truth. Tournament
 
 - **Credentials** such as `THE_ODDS_API_KEY` are secrets. Load them from an environment variable or secret manager, require rotation after suspected exposure, require revocation when retired, and never commit or log them.
 - **Competition and season IDs** identify public datasets and are not secrets. The World Cup example uses competition `17` and season `285023`.
-- **Local bridges** are executable trust boundaries. They are disabled until an operator explicitly enables a reviewed command. Do not accept bridge commands from tournament data or provider payloads.
+- **Local bridges** are a reserved future extension and are not implemented by the generic CLI. No public environment variable enables one; any later bridge requires a separate threat model, explicit configuration contract, and security review.
 
 ## Official FIFA Calendar Discovery
 
@@ -31,6 +31,8 @@ tournament-forecast update-results --config tournament.json --source normalized-
 ```
 
 Conflict replacement requires the separate `--replace-conflicts` flag. Apply fails closed if the source or destination identity changes after preview, if a symlink substitution is detected, or if validation finds an unknown, malformed, future, or non-final result.
+
+A successful mutation prints the retained backup path. Treat that path as manual rollback evidence: inspect the canonical config and remove the containing recovery directory only after reconciliation. The adjacent writer-lock file is persistent coordination state. Missing native exchange or directory-descriptor primitives fail before apply setup; a filesystem can still reject a native exchange at runtime, in which case the canonical config is preserved and the error reports every retained candidate, recovery, and lock path known to the operation.
 
 ## Odds
 

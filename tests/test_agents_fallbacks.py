@@ -445,11 +445,15 @@ def test_call_remote_agent_does_not_fall_back_to_openai_api_when_bridge_is_prefe
         raise AssertionError("expected preferred bridge failure")
 
 
-def test_codex_browser_command_gets_fresh_process_environment(monkeypatch) -> None:
+def test_codex_browser_command_gets_fresh_process_environment(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    synthetic_codex_home = str(tmp_path / "codex-home")
     monkeypatch.setenv("CODEX_THREAD_ID", "parent-thread")
     monkeypatch.setenv("CODEX_SANDBOX_NETWORK_DISABLED", "1")
     monkeypatch.setenv("CODEX_CI", "1")
-    monkeypatch.setenv("CODEX_HOME", "/Users/marcus/.codex")
+    monkeypatch.setenv("CODEX_HOME", synthetic_codex_home)
     monkeypatch.setenv("OPENAI_API_KEY", "keep-openai-key")
 
     env = _browser_command_env(["/opt/homebrew/bin/codex", "--search", "exec"])
@@ -457,21 +461,25 @@ def test_codex_browser_command_gets_fresh_process_environment(monkeypatch) -> No
     assert "CODEX_THREAD_ID" not in env
     assert "CODEX_SANDBOX_NETWORK_DISABLED" not in env
     assert "CODEX_CI" not in env
-    assert env["CODEX_HOME"] == "/Users/marcus/.codex"
+    assert env["CODEX_HOME"] == synthetic_codex_home
     assert env["OPENAI_API_KEY"] == "keep-openai-key"
 
 
-def test_gemini_browser_command_also_gets_fresh_process_environment(monkeypatch) -> None:
+def test_gemini_browser_command_also_gets_fresh_process_environment(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    synthetic_codex_home = str(tmp_path / "codex-home")
     monkeypatch.setenv("CODEX_THREAD_ID", "parent-thread")
     monkeypatch.setenv("CODEX_SANDBOX_NETWORK_DISABLED", "1")
-    monkeypatch.setenv("CODEX_HOME", "/Users/marcus/.codex")
+    monkeypatch.setenv("CODEX_HOME", synthetic_codex_home)
     monkeypatch.setenv("GEMINI_API_KEY", "keep-gemini-key")
 
     env = _browser_command_env(["/opt/homebrew/bin/gemini", "--skip-trust", "-p", "prompt"])
 
     assert "CODEX_THREAD_ID" not in env
     assert "CODEX_SANDBOX_NETWORK_DISABLED" not in env
-    assert env["CODEX_HOME"] == "/Users/marcus/.codex"
+    assert env["CODEX_HOME"] == synthetic_codex_home
     assert env["GEMINI_API_KEY"] == "keep-gemini-key"
 
 
