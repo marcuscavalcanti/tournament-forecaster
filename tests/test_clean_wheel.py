@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -177,6 +178,35 @@ else:
         )
         assert denied.returncode != 0
         assert denial in denied.stderr
+
+    shutil.copytree(
+        REPOSITORY_ROOT / "examples/world-cup-2026-live",
+        outside / "examples/world-cup-2026-live",
+    )
+    readme_simulation = _run_audited(
+        python,
+        audit_probe,
+        script,
+        outside,
+        environment,
+        "simulate",
+        "--config",
+        "examples/world-cup-2026-live/tournament.json",
+        "--iterations",
+        "10000",
+        "--output-dir",
+        "outputs",
+    )
+    assert readme_simulation.returncode == 0, readme_simulation.stderr
+
+    stable_alias = outside / "outputs/fifa-world-cup-2026-live/france"
+    readme_artifacts = (
+        stable_alias / "forecast.json",
+        stable_alias / "report.md",
+        stable_alias / "bracket.svg",
+    )
+    assert stable_alias.is_symlink()
+    assert all(path.is_file() and path.stat().st_size > 0 for path in readme_artifacts)
 
     quickstart = _run_audited(
         python,

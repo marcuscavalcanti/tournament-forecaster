@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
 import re
+import runpy
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -39,6 +42,9 @@ REQUIRED_FILES = {
     "docs/ADDING_A_PROVIDER.md",
     "docs/MIGRATION_FROM_WORLDCUP_BRAZIL.md",
     "docs/DATA_POLICY.md",
+    "docs/assets/architecture/README.md",
+    "docs/assets/architecture/generate.py",
+    "docs/assets/architecture/manifest.json",
     "scripts/check_english_surface.py",
 }
 
@@ -111,6 +117,53 @@ def test_readme_states_the_real_example_and_backtest_boundaries() -> None:
         "72",
     ):
         assert phrase in readme
+
+
+def test_readme_live_simulation_and_backtest_are_socket_denied(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+    socket_disabled,
+) -> None:
+    del socket_disabled
+    from tournament_forecaster.cli import main
+
+    source = ROOT / "examples/world-cup-2026-live"
+    destination = tmp_path / "examples/world-cup-2026-live"
+    shutil.copytree(source, destination)
+    monkeypatch.chdir(tmp_path)
+
+    simulated = main(
+        [
+            "simulate",
+            "--config",
+            "examples/world-cup-2026-live/tournament.json",
+            "--iterations",
+            "10000",
+            "--output-dir",
+            "outputs",
+        ]
+    )
+    assert simulated == 0
+    capsys.readouterr()
+
+    stable_alias = tmp_path / "outputs/fifa-world-cup-2026-live/france"
+    artifacts = (
+        stable_alias / "forecast.json",
+        stable_alias / "report.md",
+        stable_alias / "bracket.svg",
+    )
+    assert stable_alias.is_symlink()
+    assert all(path.is_file() and path.stat().st_size > 0 for path in artifacts)
+
+    backtested = main(
+        ["backtest", "--input", "examples/world-cup-2026-live/backtest.json"]
+    )
+    assert backtested == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["ok"] is True
+    assert report["model_version"] == "poisson-elo-v1"
+    assert report["sample_size"] == 72
 
 
 def test_public_repo_rejects_tracked_runtime_and_private_material() -> None:
@@ -244,10 +297,16 @@ def test_workflows_are_offline_scoped_and_do_not_publish() -> None:
         "test_public_repository_contract.py",
         "test_format_contracts.py",
         "test_clean_wheel.py",
+        "test_readme_diagrams.py",
         "backtest",
+        "--disable-socket",
+        "full tracked test baseline",
+        "generate.py --check-render",
     ):
         assert check in ci
     assert "worldcup_brazil" not in ci
+    assert "tournament-forecast backtest" not in ci
+    assert "tournament_forecast_offline" not in ci
     assert "build" in release
     assert "twine check" in release
     assert "pypi" not in release
@@ -267,12 +326,40 @@ def test_english_public_surface_scanner_passes() -> None:
     assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
-def test_no_protected_provider_logo_assets_are_bundled() -> None:
-    protected_names = {"fifa", "uefa", "conmebol", "opta"}
-    logo_assets = [
+def test_makefile_help_is_english_and_scanned() -> None:
+    scanner = runpy.run_path(str(ROOT / "scripts/check_english_surface.py"))
+    assert scanner["_is_public"](Path("Makefile"))
+
+    completed = subprocess.run(
+        ["make", "help"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.startswith("Main commands:\n")
+    assert "make quickstart generates a complete synthetic offline forecast" in completed.stdout
+
+
+def test_only_manifest_approved_architecture_assets_are_bundled() -> None:
+    asset_directory = ROOT / "docs/assets/architecture"
+    manifest = json.loads((asset_directory / "manifest.json").read_text(encoding="utf-8"))
+    approved = {
+        Path("docs/assets/architecture") / record[key]
+        for record in manifest["assets"]
+        for key in ("svg", "png")
+    }
+    tracked_images = {
         path
         for path in _tracked_files()
         if path.suffix.casefold() in {".svg", ".png", ".jpg", ".jpeg", ".webp"}
-        and any(name in path.name.casefold() for name in protected_names)
-    ]
-    assert not logo_assets
+    }
+    assert tracked_images == approved
+
+    completed = subprocess.run(
+        [sys.executable, str(asset_directory / "generate.py"), "--check"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr

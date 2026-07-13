@@ -63,19 +63,19 @@ endif
 .PHONY: help quickstart daily force watch doctor diagrams calibration profile validate debate update-results update-market-odds calibrate-rho calibrate-base-rating
 
 help:
-	@printf "Comandos principais:\n"
-	@printf "  make daily      roda o job diário; só gera novo post se passaram 3 dias\n"
-	@printf "  make force      força um run agora, ignorando a janela de 3 dias\n"
-	@printf "  make watch      acompanha o watchdog em tempo real\n"
-	@printf "  make debate     mostra a sala adversários -> sala Brasil de forma estruturada\n"
-	@printf "  make doctor     diagnostica quorum/fontes dos agentes sem renderizar post\n"
-	@printf "  make diagrams   regenera os PNGs dos diagramas da engine\n"
-	@printf "  make calibration valida Brier/log loss/ECE usando CALIBRATION_INPUT\n"
-	@printf "  make profile    breakdown de tempo por etapa/rodada do último run no watchdog\n"
-	@printf "  make update-results busca placares oficiais da FIFA e atualiza com APPLY=1; RESULTS_INPUT mantém modo manual\n"
-	@printf "  make update-market-odds busca odds outright estruturadas e atualiza market_outright_odds com APPLY=1\n"
-	@printf "  make validate   roda testes, compileall e valida o JSON exemplo\n"
-	@printf "  make quickstart gera um forecast sintético completo e offline\n"
+	@printf "Main commands:\n"
+	@printf "  make daily      runs the legacy daily job; creates a post only after 3 days\n"
+	@printf "  make force      runs the legacy daily job now, ignoring the 3-day window\n"
+	@printf "  make watch      follows the watchdog log in real time\n"
+	@printf "  make debate     renders the legacy opponent room and Brazil room\n"
+	@printf "  make doctor     diagnoses legacy agent quorum and sources without a post\n"
+	@printf "  make diagrams   regenerates the legacy engine diagram PNGs\n"
+	@printf "  make calibration validates Brier, log loss, and ECE from CALIBRATION_INPUT\n"
+	@printf "  make profile    reports elapsed time by stage and round for the latest run\n"
+	@printf "  make update-results fetches FIFA scores; APPLY=1 writes, RESULTS_INPUT imports a local file\n"
+	@printf "  make update-market-odds fetches outright odds; APPLY=1 writes market_outright_odds\n"
+	@printf "  make validate   runs tests, compileall, and example JSON validation\n"
+	@printf "  make quickstart generates a complete synthetic offline forecast\n"
 
 quickstart:
 	$(PYTHON) -m tournament_forecaster quickstart

@@ -73,6 +73,7 @@ The committed diagrams describe the authoritative offline core and clearly mark 
 
 - [Product flow SVG](docs/assets/architecture/product-flow.svg) ([PNG](docs/assets/architecture/product-flow.png))
 - [Technical architecture SVG](docs/assets/architecture/technical-architecture.svg) ([PNG](docs/assets/architecture/technical-architecture.png))
+- [Asset manifest and generation contract](docs/assets/architecture/README.md)
 - [Architecture contract](docs/ARCHITECTURE.md)
 - [Product flow](docs/PRODUCT_FLOW.md)
 

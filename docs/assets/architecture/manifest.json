@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "renderer": {
+    "name": "macOS sips",
+    "command": "sips -s format png {svg} --out {png}"
+  },
+  "assets": [
+    {
+      "id": "product-flow",
+      "svg": "product-flow.svg",
+      "png": "product-flow.png",
+      "width": 1600,
+      "height": 1100,
+      "svg_sha256": "6cfda6bc89a5045185948600fc8259bb2a7a82a1e8f88bdde66890751b4912e2",
+      "png_sha256": "c9f6c2002516006e0c0bf8a52640d899d5110b98cbd34cdd01e3407a06e8dbf8"
+    },
+    {
+      "id": "technical-architecture",
+      "svg": "technical-architecture.svg",
+      "png": "technical-architecture.png",
+      "width": 1920,
+      "height": 1280,
+      "svg_sha256": "e13db11cca5229fc2cb8a4b6fcb9fcf0fe06350177bfcd55ba3f42b54b840ff5",
+      "png_sha256": "ddd4f478147f88f343f662caee21528e2cf622899902059a676ada7ae9bc14e1"
+    }
+  ]
+}
