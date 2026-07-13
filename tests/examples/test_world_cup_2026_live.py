@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from scripts.build_world_cup_2026_example import (
+    _extract_teams_and_groups,
     _validate_stage_completion_frontier,
     normalize_fifa_fixture,
 )
@@ -206,6 +207,71 @@ def test_fifa_fixture_rejects_team_id_that_conflicts_with_group_topology() -> No
             known_codes=set(canonical_team_ids),
             canonical_team_ids=canonical_team_ids,
         )
+
+
+def test_completed_fifa_row_rejects_entrants_with_the_same_provider_id() -> None:
+    payload = {
+        "Results": [
+            {
+                "IdMatch": "400099999",
+                "StageName": [{"Description": "Quarter-final"}],
+                "Date": "2026-07-10T20:00:00Z",
+                "Home": {"Abbreviation": "AAA", "IdTeam": "101"},
+                "Away": {"Abbreviation": "BBB", "IdTeam": "101"},
+                "HomeTeamScore": 2,
+                "AwayTeamScore": 2,
+                "Winner": "101",
+                "ResultType": 3,
+                "MatchNumber": 97,
+            }
+        ]
+    }
+
+    with pytest.raises(TournamentValidationError, match="distinct provider team IDs"):
+        normalize_fifa_fixture(payload, known_codes={"AAA", "BBB"})
+
+
+def test_live_group_topology_rejects_two_codes_sharing_one_provider_id() -> None:
+    document = json.loads((EXAMPLE / "tournament.json").read_text(encoding="utf-8"))
+    teams_by_id = {team["id"]: team for team in document["teams"]}
+    group_stage = next(
+        stage for stage in document["stages"] if stage["id"] == "group-stage"
+    )
+    rows: list[dict[str, object]] = []
+    for group, team_ids in group_stage["groups"].items():
+        for index in (0, 2):
+            sides: list[dict[str, object]] = []
+            for team_id in team_ids[index : index + 2]:
+                team = teams_by_id[team_id]
+                sides.append(
+                    {
+                        "Abbreviation": team["metadata"]["fifa_code"],
+                        "IdTeam": team["metadata"]["fifa_team_id"],
+                        "TeamName": team["display_name"],
+                    }
+                )
+            rows.append(
+                {
+                    "StageName": [{"Description": "First Stage"}],
+                    "GroupName": [{"Description": f"Group {group}"}],
+                    "Home": sides[0],
+                    "Away": sides[1],
+                }
+            )
+    japan_id = next(
+        team["metadata"]["fifa_team_id"]
+        for team in document["teams"]
+        if team["metadata"]["fifa_code"] == "JPN"
+    )
+    for row in rows:
+        for side in ("Home", "Away"):
+            team = row[side]
+            assert isinstance(team, dict)
+            if team["Abbreviation"] == "FRA":
+                team["IdTeam"] = japan_id
+
+    with pytest.raises(TournamentValidationError, match="provider team IDs must be unique"):
+        _extract_teams_and_groups({"Results": rows})
 
 
 def test_pending_bracket_row_reads_top_level_winner_placeholders() -> None:

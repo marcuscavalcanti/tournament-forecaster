@@ -280,6 +280,19 @@ def _freeze_mapping(value: Mapping[str, object]) -> Mapping[str, object]:
     return MappingProxyType({str(key): _freeze(item) for key, item in value.items()})
 
 
+def _freeze_stage(value: Mapping[str, object]) -> Mapping[str, object]:
+    normalized = dict(value)
+    metadata = normalized.get("metadata")
+    if isinstance(metadata, Mapping) and "home_advantage_rating_points" in metadata:
+        normalized_metadata = dict(metadata)
+        normalized_metadata["home_advantage_rating_points"] = bounded_finite_number(
+            metadata["home_advantage_rating_points"],
+            f"stage {value.get('id', '<unknown>')} metadata home_advantage_rating_points",
+        )
+        normalized["metadata"] = normalized_metadata
+    return _freeze_mapping(normalized)
+
+
 def _thaw(value: object) -> object:
     if isinstance(value, Mapping):
         return {str(key): _thaw(item) for key, item in value.items()}
@@ -386,9 +399,13 @@ class Tournament:
         for stage in self.stages:
             if not isinstance(stage, Mapping):
                 raise TournamentValidationError("stages must be mappings")
-            frozen_stages.append(_freeze_mapping(stage))
+            frozen_stages.append(_freeze_stage(stage))
         object.__setattr__(self, "stages", tuple(frozen_stages))
-        object.__setattr__(self, "ratings", MappingProxyType(dict(self.ratings)))
+        normalized_ratings = {
+            team_id: bounded_finite_number(rating, f"rating {team_id}")
+            for team_id, rating in self.ratings.items()
+        }
+        object.__setattr__(self, "ratings", MappingProxyType(normalized_ratings))
         object.__setattr__(self, "metadata", _freeze_mapping(self.metadata))
         validate_tournament(self)
 

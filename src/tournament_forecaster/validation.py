@@ -22,8 +22,11 @@ def bounded_finite_number(value: object, label: str) -> float:
     if isinstance(value, float) and not math.isfinite(value):
         raise TournamentValidationError(f"{label} must be within finite numeric bounds")
     try:
-        return float(value)
-    except OverflowError as error:
+        normalized = float(value)
+    except (OverflowError, TypeError, ValueError) as error:
         raise TournamentValidationError(
             f"{label} must be within finite numeric bounds"
         ) from error
+    if not math.isfinite(normalized):
+        raise TournamentValidationError(f"{label} must be within finite numeric bounds")
+    return normalized

@@ -191,6 +191,19 @@ def _match_number(row: Mapping[str, object]) -> int:
     return _strict_integer(row.get("MatchNumber"), "FIFA match number", minimum=1)
 
 
+def _validate_unique_provider_team_ids(canonical_team_ids: Mapping[str, str]) -> None:
+    code_by_provider_id: dict[str, str] = {}
+    for code, provider_id in canonical_team_ids.items():
+        if not provider_id:
+            continue
+        existing_code = code_by_provider_id.get(provider_id)
+        if existing_code is not None and existing_code != code:
+            raise TournamentValidationError(
+                "FIFA group topology provider team IDs must be unique"
+            )
+        code_by_provider_id[provider_id] = code
+
+
 def normalize_fifa_fixture(
     payload: object,
     *,
@@ -206,6 +219,8 @@ def normalize_fifa_fixture(
         rows = payload
     if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes, bytearray)):
         raise TournamentValidationError("FIFA fixture must contain a Results array")
+    if canonical_team_ids is not None:
+        _validate_unique_provider_team_ids(canonical_team_ids)
     normalized: dict[str, Mapping[str, object]] = {}
     for raw in rows:
         if not isinstance(raw, Mapping):
@@ -220,6 +235,14 @@ def normalize_fifa_fixture(
         away_code = _code(raw, "Away")
         home_fifa_team_id = _team_id(raw, "Home")
         away_fifa_team_id = _team_id(raw, "Away")
+        if (
+            home_fifa_team_id
+            and away_fifa_team_id
+            and home_fifa_team_id == away_fifa_team_id
+        ):
+            raise TournamentValidationError(
+                f"FIFA match {source_id} entrants must use distinct provider team IDs"
+            )
         if canonical_team_ids is not None:
             for code, provider_id in (
                 (home_code, home_fifa_team_id),
@@ -362,6 +385,9 @@ def _extract_teams_and_groups(
     ids = [team["id"] for team in teams_by_code.values()]
     if len(ids) != len(set(ids)):
         raise TournamentValidationError("normalized FIFA team IDs must be unique")
+    _validate_unique_provider_team_ids(
+        {code: team["fifa_team_id"] for code, team in teams_by_code.items()}
+    )
     return teams_by_code, {
         group: sorted(codes)
         for group, codes in sorted(groups_by_code.items())
