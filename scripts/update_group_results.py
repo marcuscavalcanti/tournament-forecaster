@@ -106,7 +106,7 @@ def _fifa_html_text_from_url(url: str) -> str:
     request = urllib.request.Request(
         url,
         headers={
-            "User-Agent": "worldcup2026-brazil-radar/0.1 (+https://github.com/marcuscavalcanti/worldcup2026)",
+            "User-Agent": "tournament-forecaster/0.1 (+https://github.com/marcuscavalcanti/tournament-forecaster)",
             "Accept": "text/html,application/xhtml+xml",
         },
     )
@@ -161,7 +161,7 @@ def _fifa_json_text_from_url(url: str, config: dict[str, Any]) -> tuple[str, str
     request = urllib.request.Request(
         effective_url,
         headers={
-            "User-Agent": "worldcup2026-brazil-radar/0.1 (+https://github.com/marcuscavalcanti/worldcup2026)",
+            "User-Agent": "tournament-forecaster/0.1 (+https://github.com/marcuscavalcanti/tournament-forecaster)",
             "Accept": "application/json",
         },
     )

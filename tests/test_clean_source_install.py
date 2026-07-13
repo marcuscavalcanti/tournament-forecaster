@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 REPOSITORY_ROOT = Path(__file__).parents[1]
-REMOTE_URL = "https://github.com/marcuscavalcanti/worldcup2026.git"
+REMOTE_URL = "https://github.com/marcuscavalcanti/tournament-forecaster.git"
 
 
 def test_clean_source_install_executes_literal_readme_quickstart(
@@ -61,7 +61,7 @@ def test_clean_source_install_executes_literal_readme_quickstart(
     assert completed.returncode == 0, completed.stdout + completed.stderr
     forecast_path = (
         tmp_path
-        / "worldcup2026"
+        / "tournament-forecaster"
         / "outputs"
         / "fifa-world-cup-2026-live"
         / "france"

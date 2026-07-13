@@ -156,7 +156,7 @@ def _odds_api_text_from_url(url: str) -> tuple[str, str] | None:
     request = urllib.request.Request(
         url,
         headers={
-            "User-Agent": "worldcup2026-brazil-radar/0.1 (+https://github.com/marcuscavalcanti/worldcup2026)",
+            "User-Agent": "tournament-forecaster/0.1 (+https://github.com/marcuscavalcanti/tournament-forecaster)",
             "Accept": "application/json",
         },
     )

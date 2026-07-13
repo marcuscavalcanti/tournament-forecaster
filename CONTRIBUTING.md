@@ -5,8 +5,8 @@
 Use Python 3.11, 3.12, or 3.13.
 
 ```bash
-git clone https://github.com/marcuscavalcanti/worldcup2026.git
-cd worldcup2026
+git clone https://github.com/marcuscavalcanti/tournament-forecaster.git
+cd tournament-forecaster
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -e '.[dev]'

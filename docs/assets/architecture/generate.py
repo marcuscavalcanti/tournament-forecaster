@@ -36,7 +36,7 @@ EXPECTED_PROVENANCE: Final = (
     "Project-authored architecture diagrams",
     "Marcus Cavalcanti",
     "MIT",
-    "https://github.com/marcuscavalcanti/worldcup2026",
+    "https://github.com/marcuscavalcanti/tournament-forecaster",
     "da8d4dfa116d88af4f1de0590e56c6bb1d8ffc6a",
 )
 PROTECTED_MARKS: Final = ("fifa", "uefa", "conmebol", "opta")

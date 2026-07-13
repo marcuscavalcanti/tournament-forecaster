@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security vulnerability
-    url: https://github.com/marcuscavalcanti/worldcup2026/security/advisories/new
+    url: https://github.com/marcuscavalcanti/tournament-forecaster/security/advisories/new
     about: Report vulnerabilities privately through GitHub Private Vulnerability Reporting.
