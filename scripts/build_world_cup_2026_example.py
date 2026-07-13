@@ -26,11 +26,14 @@ from tournament_forecaster.errors import TournamentValidationError  # noqa: E402
 from tournament_forecaster.group_fixtures import generate_group_fixture_specs  # noqa: E402
 
 
+OPENFOOTBALL_SOURCE_COMMIT = "056c53ec82feb3fb68da63d1ce74ec59fc23e95d"
 OPENFOOTBALL_SOURCE_URL = (
-    "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
+    "https://raw.githubusercontent.com/openfootball/worldcup.json/"
+    f"{OPENFOOTBALL_SOURCE_COMMIT}/2026/worldcup.json"
 )
 OPENFOOTBALL_LICENSE_URL = (
-    "https://raw.githubusercontent.com/openfootball/worldcup.json/master/LICENSE.md"
+    "https://raw.githubusercontent.com/openfootball/worldcup.json/"
+    f"{OPENFOOTBALL_SOURCE_COMMIT}/LICENSE.md"
 )
 OPENFOOTBALL_SOURCE_NAME = "OpenFootball worldcup.json"
 OPENFOOTBALL_LICENSE = "CC0 1.0 Universal"
@@ -794,6 +797,7 @@ def _snapshot_metadata(
 ) -> dict[str, object]:
     return {
         "source": OPENFOOTBALL_SOURCE_NAME,
+        "source_commit": OPENFOOTBALL_SOURCE_COMMIT,
         "source_url": OPENFOOTBALL_SOURCE_URL,
         "license": OPENFOOTBALL_LICENSE,
         "license_url": OPENFOOTBALL_LICENSE_URL,
@@ -1244,9 +1248,10 @@ def _readme(
     return f"""# FIFA World Cup 2026 Live Snapshot
 
 This reproducible example uses the [OpenFootball World Cup 2026 JSON]({OPENFOOTBALL_SOURCE_URL})
-snapshot retrieved at `{retrieved_at}` with source SHA-256 `{source_sha256}`. The imported
-match facts remain available under the source repository's CC0 1.0 license. It retains
-all 48 teams and {completed_fact_count} completed match facts:
+snapshot pinned to upstream commit `{OPENFOOTBALL_SOURCE_COMMIT}`, retrieved at `{retrieved_at}`
+with source SHA-256 `{source_sha256}`. The imported match facts remain available under the source
+repository's CC0 1.0 license. It retains all 48 teams and {completed_fact_count} completed match
+facts:
 
 - `72/72` group-stage matches
 - `16/16` Round of 32 matches
@@ -1284,6 +1289,7 @@ def _data_sources(
 ## Results and bracket
 
 - Source: OpenFootball `worldcup.json` World Cup 2026 snapshot
+- Source commit: `{OPENFOOTBALL_SOURCE_COMMIT}`
 - Exact source URL: {OPENFOOTBALL_SOURCE_URL}
 - Retrieved at: `{retrieved_at}`
 - Source SHA-256: `{source_sha256}`

@@ -17,10 +17,15 @@ from tournament_forecaster.simulation import simulate_tournament
 ROOT = Path(__file__).parents[2]
 EXAMPLE = ROOT / "examples" / "world-cup-2026-live"
 EDGE_FIXTURE = Path(__file__).parent / "fixtures" / "openfootball-edge-cases.json"
+SOURCE_COMMIT = "056c53ec82feb3fb68da63d1ce74ec59fc23e95d"
 SOURCE_URL = (
-    "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
+    "https://raw.githubusercontent.com/openfootball/worldcup.json/"
+    f"{SOURCE_COMMIT}/2026/worldcup.json"
 )
-LICENSE_URL = "https://raw.githubusercontent.com/openfootball/worldcup.json/master/LICENSE.md"
+LICENSE_URL = (
+    "https://raw.githubusercontent.com/openfootball/worldcup.json/"
+    f"{SOURCE_COMMIT}/LICENSE.md"
+)
 SOURCE_SHA256 = "b0aef8771d7fc3b6a5ec04cf7a9f9cd167c4e8b0be9152b3a35ae5629bb4e8d5"
 RETRIEVED_AT = "2026-07-13T16:35:34Z"
 BANNED_REDISTRIBUTION_MARKERS = (
@@ -43,13 +48,18 @@ def test_public_snapshot_has_a_cc0_source_instead_of_a_disclaimer() -> None:
     example_readme = (EXAMPLE / "README.md").read_text(encoding="utf-8")
     notice = (ROOT / "NOTICE.md").read_text(encoding="utf-8")
     policy = (ROOT / "docs" / "DATA_POLICY.md").read_text(encoding="utf-8")
-    public_surface = "\n".join((data_sources, readme, example_readme, notice, policy))
+    documents = (data_sources, readme, example_readme, notice, policy)
+    public_surface = "\n".join(documents)
     normalized = public_surface.casefold()
 
     for exact_value in (SOURCE_URL, LICENSE_URL, SOURCE_SHA256, RETRIEVED_AT):
         assert exact_value in data_sources
     assert SOURCE_URL in readme
     assert SOURCE_URL in example_readme
+    assert SOURCE_COMMIT in data_sources
+    assert SOURCE_COMMIT in readme
+    assert SOURCE_COMMIT in example_readme
+    assert all("/master/" not in document for document in documents)
     assert "cc0 1.0" in data_sources.casefold()
     assert "database rights" in data_sources.casefold()
     assert "openfootball-derived match facts remain cc0" in notice.casefold()
@@ -70,11 +80,14 @@ def test_checked_json_artifacts_pin_the_cc0_source_and_drop_fifa_provider_metada
         assert SOURCE_SHA256 in serialized
         assert RETRIEVED_AT.casefold() in serialized
         assert "cc0 1.0" in serialized
+        assert SOURCE_COMMIT in serialized
+        assert "/master/" not in serialized
         for marker in BANNED_REDISTRIBUTION_MARKERS:
             assert marker not in serialized
 
     snapshot = tournament["metadata"]["snapshot"]
     assert snapshot["source"] == "OpenFootball worldcup.json"
+    assert snapshot["source_commit"] == SOURCE_COMMIT
     assert snapshot["completed_fact_count"] == 100
     assert snapshot["source_match_count"] == 104
     assert all("metadata" not in team for team in tournament["teams"])
@@ -84,6 +97,13 @@ def test_checked_json_artifacts_pin_the_cc0_source_and_drop_fifa_provider_metada
     assert {case["metadata"]["source_match_number"] for case in backtest["cases"]} == set(
         range(1, 73)
     )
+
+
+def test_openfootball_updater_uses_immutable_source_and_license_urls() -> None:
+    assert builder.OPENFOOTBALL_SOURCE_URL == SOURCE_URL
+    assert builder.OPENFOOTBALL_LICENSE_URL == LICENSE_URL
+    assert "/master/" not in builder.OPENFOOTBALL_SOURCE_URL
+    assert "/master/" not in builder.OPENFOOTBALL_LICENSE_URL
 
 
 def test_openfootball_normalizer_is_deterministic_and_parses_result_semantics() -> None:

@@ -3,12 +3,13 @@
 ## Results and bracket
 
 - Source: OpenFootball `worldcup.json` World Cup 2026 snapshot
-- Exact source URL: https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json
+- Source commit: `056c53ec82feb3fb68da63d1ce74ec59fc23e95d`
+- Exact source URL: https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json
 - Retrieved at: `2026-07-13T16:35:34Z`
 - Source SHA-256: `b0aef8771d7fc3b6a5ec04cf7a9f9cd167c4e8b0be9152b3a35ae5629bb4e8d5`
 - Source rows: `104`; completed rows at retrieval: `100`
 - Source license: `CC0 1.0 Universal`
-- Exact license URL: https://raw.githubusercontent.com/openfootball/worldcup.json/master/LICENSE.md
+- Exact license URL: https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/LICENSE.md
 - License scope: the repository license expressly addresses extraction, dissemination,
   reuse of data, and database rights.
 
