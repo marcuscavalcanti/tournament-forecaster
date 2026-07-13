@@ -83,6 +83,11 @@ jobs:
           tests/tournament_forecaster/test_odds_provider.py
           docs/assets/architecture/generate.py
           --select E,F,I,UP,B,SIM
+      - name: Public-core complexity ceiling
+        run: >-
+          ruff check
+          src/tournament_forecaster
+          --select C901
       - name: Package-wide strict Mypy for public package
         run: >-
           mypy
@@ -101,10 +106,15 @@ jobs:
           tests/test_public_repository_contract.py::test_pristine_clone_make_validate_installs_declared_test_dependencies
       - name: Clean source-install onboarding
         run: pytest -q tests/test_clean_source_install.py
-      - name: Full tracked test baseline
+      - name: Full tracked test baseline with public-core branch coverage
         env:
           TOURNAMENT_FORECASTER_INNER_MAKE_VALIDATE: "1"
-        run: pytest -q --ignore=tests/test_clean_wheel.py
+        run: >-
+          pytest -q --ignore=tests/test_clean_wheel.py
+          --cov=tournament_forecaster
+          --cov-branch
+          --cov-report=term-missing
+          --cov-fail-under=83
       - name: Build and inspect clean wheel
         run: pytest -q tests/test_clean_wheel.py
       - name: Build distributions

@@ -78,6 +78,7 @@ TASK6_OVERLAY_PATHS = (
     ),
     Path("pyproject.toml"),
     Path("scripts/check_english_surface.py"),
+    Path("src/tournament_forecaster/domain.py"),
     Path("tests/test_agents_fallbacks.py"),
     Path("tests/test_clean_wheel.py"),
     Path("tests/test_clean_source_install.py"),
@@ -85,6 +86,7 @@ TASK6_OVERLAY_PATHS = (
     Path("tests/test_readme_diagrams.py"),
     Path("tests/tournament_forecaster/test_package_resources.py"),
     Path("uv.lock"),
+    Path("worldcup_brazil/agents.py"),
 )
 
 SUPPORTED_NATIVE_CLASSIFIERS = {
@@ -133,6 +135,8 @@ MYPY_STALE_DEBT_PHRASES = (
     "no new suppressions",
 )
 STRICT_RUFF_STEP_NAME = "Strict Ruff for green release and provider contract targets"
+COVERAGE_STEP_NAME = "Full tracked test baseline with public-core branch coverage"
+COMPLEXITY_STEP_NAME = "Public-core complexity ceiling"
 STRICT_RUFF_TARGETS = (
     "src/tournament_forecaster/providers/security.py",
     "scripts/check_english_surface.py",
@@ -169,6 +173,7 @@ def _workflow_job(workflow: str, job_name: str) -> str:
 def _workflow_step_command(workflow: str, step_name: str) -> list[str]:
     match = re.search(
         rf"^      - name: {re.escape(step_name)}\n"
+        r"(?:        env:\n(?: {10}.*\n)+)?"
         r"        run: >-\n"
         r"(?P<body>(?: {10}.*\n)+)",
         workflow,
@@ -1019,13 +1024,58 @@ def test_ci_quality_gates_compile_and_type_check_the_entire_public_package() -> 
     )
 
 
+def test_public_core_branch_coverage_is_measured_and_gated() -> None:
+    ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+    dev_dependencies = metadata["project"]["optional-dependencies"]["dev"]
+    assert any(dependency.startswith("pytest-cov") for dependency in dev_dependencies)
+
+    command = _workflow_step_command(ci, COVERAGE_STEP_NAME)
+    assert "--cov=tournament_forecaster" in command
+    assert "--cov-branch" in command
+    assert "--cov=worldcup_brazil" not in command
+    threshold_argument = next(
+        argument for argument in command if argument.startswith("--cov-fail-under=")
+    )
+    assert int(threshold_argument.partition("=")[2]) >= 70
+
+    assert "COVERAGE_MIN ?=" in makefile
+    assert "--cov=tournament_forecaster" in makefile
+    assert "--cov-branch" in makefile
+    assert "--cov-fail-under=$(COVERAGE_MIN)" in makefile
+
+
+def test_public_core_complexity_ceiling_is_enforced() -> None:
+    ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+    mccabe = metadata["tool"]["ruff"]["lint"]["mccabe"]
+    assert mccabe["max-complexity"] == 45
+    assert _workflow_step_command(ci, COMPLEXITY_STEP_NAME) == [
+        "ruff",
+        "check",
+        "src/tournament_forecaster",
+        "--select",
+        "C901",
+    ]
+    assert "complexity:" in makefile
+    assert "src/tournament_forecaster --select C901" in makefile
+
+
 @pytest.mark.parametrize("mutation", ["compile", "mypy", "mypy-docs", "strict-ruff"])
 def test_ci_quality_gate_contract_rejects_scope_mutations(mutation: str) -> None:
     ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
     contributing = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
     if mutation == "compile":
-        makefile = makefile.replace("src/tournament_forecaster ", "", 1)
+        makefile = makefile.replace(
+            "$(PYTHON) -m compileall -q src/tournament_forecaster worldcup_brazil scripts",
+            "$(PYTHON) -m compileall -q worldcup_brazil scripts",
+            1,
+        )
     elif mutation == "mypy":
         step, following_steps = ci.split(f"      - name: {MYPY_STEP_NAME}\n", maxsplit=1)
         ci = step + f"      - name: {MYPY_STEP_NAME}\n" + following_steps.replace(
