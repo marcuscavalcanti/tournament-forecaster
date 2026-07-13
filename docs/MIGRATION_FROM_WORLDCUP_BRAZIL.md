@@ -14,7 +14,7 @@ Removal is permitted only when both conditions are true: the package version is 
 | Mutable dated output files | Immutable generation plus stable `current` alias |
 | Provider calls inside orchestration | Separate acquisition and local preview/apply |
 | LinkedIn post rendering | Generic JSON, Markdown, and SVG artifacts |
-| Model council | Optional future extension; not part of the deterministic CLI forecast |
+| Model council | First-class optional multi-LLM council, configured separately and bounded by the fixed 55/45 engine/council policy |
 
 ## Explicit Legacy Opt-Ins
 
