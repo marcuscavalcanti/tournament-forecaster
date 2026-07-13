@@ -65,16 +65,12 @@ jobs:
           tests/test_clean_source_install.py
           tests/test_public_repository_contract.py
           tests/test_readme_diagrams.py
-          scripts/check_english_surface.py
           docs/assets/architecture/generate.py
-          --exclude src/tournament_forecaster/compatibility
-          --exclude tests/tournament_forecaster/test_legacy_compatibility.py
           --select E4,E7,E9,F
       - name: Strict Ruff for green release and provider contract targets
         run: >-
           ruff check
           src/tournament_forecaster/providers/security.py
-          scripts/check_english_surface.py
           tests/test_clean_wheel.py
           tests/test_clean_source_install.py
           tests/test_public_repository_contract.py
@@ -92,12 +88,8 @@ jobs:
         run: >-
           mypy
           --no-incremental
-          --exclude '^worldcup_brazil/'
           src/tournament_forecaster
-          scripts/check_english_surface.py
           docs/assets/architecture/generate.py
-      - name: English public surface
-        run: python scripts/check_english_surface.py
       - name: Architecture asset manifest
         run: python docs/assets/architecture/generate.py --check
       - name: Pristine clone make validate

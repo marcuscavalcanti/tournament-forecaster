@@ -58,7 +58,7 @@ def test_preview_odds_validates_and_preserves_only_diagnostic_provenance(
         "https://example.test/path?x=1&client_secret=hunter2&apiKey=value",
         (
             "https://encoded%40user:p%40ss@example.test/path?"
-            "X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2Fscope&"
+            "X-Amz-Credential=example-aws-credential%2Fscope&"
             "AWSAccessKeyId=aws-key&X-Goog-Credential=goog%2Fscope&x=1"
         ),
         (
@@ -77,7 +77,7 @@ def test_redact_url_removes_userinfo_and_all_sensitive_duplicate_values(url: str
     assert "secret" not in redacted.lower().replace("client_secret", "")
     assert "hunter2" not in redacted
     assert "value" not in redacted
-    assert "AKIAIOSFODNN7EXAMPLE" not in redacted
+    assert "example-aws-credential" not in redacted
     assert "aws-key" not in redacted
     assert "goog" not in redacted
     assert "encoded-credential" not in redacted

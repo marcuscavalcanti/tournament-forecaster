@@ -145,7 +145,7 @@
       },
       "additionalProperties": false
     },
-    "legacy_disabled_council": {
+    "disabled_council": {
       "type": "object",
       "required": ["enabled"],
       "properties": {"enabled": {"const": false}},
@@ -267,7 +267,7 @@
     "council": {
       "oneOf": [
         {"$ref": "#/$defs/council"},
-        {"$ref": "#/$defs/legacy_disabled_council"},
+        {"$ref": "#/$defs/disabled_council"},
         {"type": "null"}
       ]
     },

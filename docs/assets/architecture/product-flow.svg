@@ -178,7 +178,7 @@
   <path class="icon-line" d="M708 905 H726 L733 912 V933 H708 Z M726 905 V913 H733"/>
   <text class="card-title" x="753" y="912">Reusable artifacts</text>
   <text class="body" x="753" y="936">JSON, Markdown, SVG,</text>
-  <text class="body" x="753" y="956">and compatibility output.</text>
+  <text class="body" x="753" y="956">and audit-ready output.</text>
 
   <rect class="card" x="982" y="882" width="270" height="112" rx="8"/>
   <circle class="icon-bg" cx="1019" cy="919" r="22"/>

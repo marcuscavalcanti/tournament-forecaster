@@ -575,7 +575,7 @@ def test_schema_resources_reject_adversarial_documents() -> None:
         assert list(forecast_validator.iter_errors(document)), label
 
 
-def test_hatchling_packages_generic_and_legacy_surfaces() -> None:
+def test_hatchling_packages_only_the_generic_surface() -> None:
     repository_root = Path(__file__).parents[2]
     pyproject = tomllib.loads((repository_root / "pyproject.toml").read_text(encoding="utf-8"))
 
@@ -586,13 +586,12 @@ def test_hatchling_packages_generic_and_legacy_surfaces() -> None:
     assert pyproject["project"]["name"] == "tournament-forecaster"
     assert pyproject["project"]["scripts"] == {
         "tournament-forecast": "tournament_forecaster.cli:main",
-        "worldcup-brazil-report": "worldcup_brazil.cli:main",
     }
     wheel = pyproject["tool"]["hatch"]["build"]["targets"]["wheel"]
     assert "packages" not in wheel
     assert wheel["sources"] == ["src"]
     tracked = subprocess.run(
-        ["git", "ls-files", "-z", "src/tournament_forecaster", "worldcup_brazil"],
+        ["git", "ls-files", "-z", "src/tournament_forecaster"],
         cwd=repository_root,
         check=True,
         capture_output=True,
@@ -628,7 +627,6 @@ def test_built_wheel_exposes_packages_scripts_and_schema_resources_in_isolation(
     assert "tournament_forecaster/schemas/backtest.schema.json" in members
     assert "tournament_forecaster/data/presets/synthetic-cup/tournament.json" in members
     assert "tournament_forecaster/data/templates/group-knockout/tournament.json" in members
-    assert "worldcup_brazil/cli.py" in members
 
     venv = tmp_path / "venv"
     create_venv = subprocess.run(
@@ -652,13 +650,11 @@ import json
 from importlib.metadata import entry_points
 from pathlib import Path
 import tournament_forecaster
-import worldcup_brazil
 from tournament_forecaster import list_group_fixtures
 from tournament_forecaster.resources import copy_template, load_bundled_preset, resource_path
 
 source_root = Path({str(repository_root)!r}).resolve()
 assert source_root not in Path(tournament_forecaster.__file__).resolve().parents
-assert source_root not in Path(worldcup_brazil.__file__).resolve().parents
 for filename in (
     "tournament.schema.json",
     "forecast.schema.json",
@@ -674,7 +670,7 @@ assert list_group_fixtures(preset, "group-stage")
 copied = copy_template("group-knockout", Path("copied-group-template"))
 assert tournament_forecaster.load_tournament(copied).id == "group-knockout-template"
 commands = {{entry.name for entry in entry_points(group="console_scripts")}}
-assert {{"tournament-forecast", "worldcup-brazil-report"}} <= commands
+assert "tournament-forecast" in commands
 print("isolated wheel resources verified")
 """
     environment = os.environ.copy()

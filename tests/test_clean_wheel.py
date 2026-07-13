@@ -10,7 +10,6 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).parents[1]
 PROVIDER_VARIABLES = {
     "ANTHROPIC_API_KEY",
-    "CODEX_API_KEY",
     "GEMINI_API_KEY",
     "GOOGLE_API_KEY",
     "OPENAI_API_KEY",

@@ -24,12 +24,11 @@ python -m pip install -e '.[dev]'
 ## Local Checks
 
 ```bash
-ruff check src/tournament_forecaster tests/tournament_forecaster tests/presets tests/examples tests/test_tournament_forecast_cli.py tests/test_clean_wheel.py tests/test_clean_source_install.py tests/test_public_repository_contract.py tests/test_readme_diagrams.py scripts/check_english_surface.py docs/assets/architecture/generate.py --exclude src/tournament_forecaster/compatibility --exclude tests/tournament_forecaster/test_legacy_compatibility.py --select E4,E7,E9,F
-ruff check src/tournament_forecaster/providers/security.py scripts/check_english_surface.py tests/test_clean_wheel.py tests/test_clean_source_install.py tests/test_public_repository_contract.py tests/test_readme_diagrams.py tests/tournament_forecaster/test_results_provider.py tests/tournament_forecaster/test_odds_provider.py docs/assets/architecture/generate.py --select E,F,I,UP,B,SIM
-uv run --locked --extra dev mypy --no-incremental --exclude '^worldcup_brazil/' src/tournament_forecaster scripts/check_english_surface.py docs/assets/architecture/generate.py
+ruff check src/tournament_forecaster tests/tournament_forecaster tests/presets tests/examples tests/test_tournament_forecast_cli.py tests/test_clean_wheel.py tests/test_clean_source_install.py tests/test_public_repository_contract.py tests/test_readme_diagrams.py docs/assets/architecture/generate.py --select E4,E7,E9,F
+ruff check src/tournament_forecaster/providers/security.py tests/test_clean_wheel.py tests/test_clean_source_install.py tests/test_public_repository_contract.py tests/test_readme_diagrams.py tests/tournament_forecaster/test_results_provider.py tests/tournament_forecaster/test_odds_provider.py docs/assets/architecture/generate.py --select E,F,I,UP,B,SIM
+uv run --locked --extra dev mypy --no-incremental src/tournament_forecaster docs/assets/architecture/generate.py
 make complexity
 make coverage
-python scripts/check_english_surface.py
 pytest -q --disable-socket tests/test_public_repository_contract.py tests/presets tests/examples tests/test_clean_wheel.py
 python -m build
 python -m twine check dist/*

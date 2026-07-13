@@ -19,8 +19,8 @@
       "png": "product-flow.png",
       "width": 1600,
       "height": 1100,
-      "svg_sha256": "37c6aa28572338d13ab6d3fe36e1423887ee942041d669f9d6f745687b6ee3db",
-      "png_sha256": "81c520ee827d64a6847ddd29a710688ed6f96d5451b9592d5c87f4e913283776"
+      "svg_sha256": "a6323391301644bf8df554542fbb793c22c55f45cc18bc39391fb0552cc986bd",
+      "png_sha256": "cad00aa3ea10bf0beea0b528d5e9189ad07e0527a133938faf458ed54aa80fa3"
     },
     {
       "id": "technical-architecture",
@@ -28,8 +28,8 @@
       "png": "technical-architecture.png",
       "width": 1920,
       "height": 1280,
-      "svg_sha256": "417912d8df19d6086d817875399869d6a8d587e01d2e44caa5ded7adb455493e",
-      "png_sha256": "a43c1cf26f2c95c8e141f46bd8f8b2c059039fbfb5c872f3aea345dc5a759cc7"
+      "svg_sha256": "6c68b4cf214ebd37521a26feaba8b37daf530a20b328111806296a4377f88b12",
+      "png_sha256": "5a7b86518e76ffe2a5402bbc516d6209abd9df32ec90ffc55f8a7bafd3c2eb46"
     }
   ]
 }

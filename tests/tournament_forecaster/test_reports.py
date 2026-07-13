@@ -118,7 +118,7 @@ def test_forecast_schema_rejects_an_underspecified_council_mapping() -> None:
         Draft202012Validator(schema).validate(document)
 
 
-def test_forecast_schema_accepts_only_the_exact_legacy_disabled_council() -> None:
+def test_forecast_schema_accepts_only_the_exact_disabled_council() -> None:
     from tournament_forecaster.resources import resource_path
 
     with resource_path("schemas", "forecast.schema.json") as schema_path:

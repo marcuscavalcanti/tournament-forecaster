@@ -26,7 +26,6 @@ env/
 .env
 .env.*
 !.env.example
-config/worldcup_brazil.json
 config/*.local.json
 secrets/
 
@@ -40,7 +39,6 @@ data/
 outputs/
 .backups/
 .worktrees/
-.superpowers/
 *.log
 *.tmp
 *.temp

@@ -21,7 +21,7 @@ The diagram is also available as a [PNG export](assets/architecture/technical-ar
 | 4 | Result ledger | Load immutable completed facts and atomically accept reviewed final results | Conflicts never overwrite silently |
 | 5 | Deterministic engine | Simulate all remaining matches and derive standings, qualification, pairings, stage reach, and title probability | Coherence violations invalidate the run |
 | 6 | Optional council | Collect independent opinions, run anonymized peer review, derive a median consensus, and blend 55% deterministic engine with 45% council | It cannot change completed results, tournament topology, legal matchups, or matchup probabilities; below quorum it falls back to the baseline |
-| 7 | Finalizer and reporters | Recheck invariants and atomically write versioned JSON, Markdown, SVG, audit, compatibility, and publishing artifacts | Partial output sets are not published as complete runs |
+| 7 | Finalizer and reporters | Recheck invariants and atomically write versioned JSON, Markdown, SVG, and audit artifacts | Partial output sets are not published as complete runs |
 
 ## Ownership Rules
 
@@ -40,4 +40,4 @@ The diagram is also available as a [PNG export](assets/architecture/technical-ar
 - Expected provider unavailability follows the configured `required`, `cached_with_ttl`, or `best_effort` policy; internal programming errors are never converted into provider downtime.
 - Council failure degrades to the validated deterministic baseline. It never unlocks completed results, changes the stage graph, or invents legal opponents.
 - Model calls use direct HTTPS adapters and environment-only credentials. The generic CLI never executes provider-supplied or configuration-supplied commands.
-- Every accepted external fact records provider provenance and retrieval time. Every artifact records the `run_id`, input provenance, warnings, and compatibility conversions.
+- Every accepted external fact records provider provenance and retrieval time. Every artifact records the `run_id`, input provenance, and warnings.

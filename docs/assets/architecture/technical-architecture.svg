@@ -120,7 +120,7 @@
   <text class="card-title" x="652" y="345" text-anchor="middle">Local results import</text>
   <text class="body" x="652" y="366" text-anchor="middle">normalized JSON or CSV</text>
   <rect class="card" x="784" y="320" width="194" height="62" rx="6"/>
-  <text class="card-title" x="881" y="345" text-anchor="middle">Legacy adapter</text>
+  <text class="card-title" x="881" y="345" text-anchor="middle">Schema adapters</text>
   <text class="body" x="881" y="366" text-anchor="middle">versioned migration</text>
   <rect class="card-green" x="1000" y="316" width="154" height="70" rx="6"/>
   <text class="card-title" x="1077" y="343" text-anchor="middle">Normalized</text>
@@ -155,7 +155,7 @@
 
   <rect class="card" x="92" y="526" width="376" height="66" rx="6"/>
   <text class="card-title" x="280" y="553" text-anchor="middle">Load and normalize schema versions</text>
-  <text class="body" x="280" y="575" text-anchor="middle">stable IDs and compatibility translation</text>
+  <text class="body" x="280" y="575" text-anchor="middle">stable IDs and versioned input handling</text>
   <rect class="card" x="92" y="610" width="376" height="66" rx="6"/>
   <text class="card-title" x="280" y="637" text-anchor="middle">Schema and semantic validation</text>
   <text class="body" x="280" y="659" text-anchor="middle">teams, stages, fixtures, and rules</text>
@@ -265,7 +265,7 @@
   <rect class="card" x="978" y="1190" width="240" height="32" rx="5"/>
   <text class="small" x="1098" y="1211" text-anchor="middle">RUN METADATA</text>
   <rect class="card" x="1278" y="1190" width="240" height="32" rx="5"/>
-  <text class="small" x="1398" y="1211" text-anchor="middle">DEPRECATED COMPATIBILITY</text>
+  <text class="small" x="1398" y="1211" text-anchor="middle">VERSIONED CONTRACTS</text>
   <rect class="card" x="1578" y="1190" width="240" height="32" rx="5"/>
   <text class="small" x="1698" y="1211" text-anchor="middle">FUTURE PUBLISHERS</text>
 
