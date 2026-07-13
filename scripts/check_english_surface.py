@@ -18,6 +18,7 @@ PUBLIC_SINGLE_FILES: Final = {
     Path("CONTRIBUTING.md"),
     Path("CODE_OF_CONDUCT.md"),
     Path(".env.example"),
+    Path(".gitignore"),
     Path("pyproject.toml"),
     Path("tests/test_tournament_forecast_cli.py"),
     Path("tests/test_clean_wheel.py"),
@@ -51,8 +52,11 @@ LOCALIZED_KEYS: Final = {
 PORTUGUESE_WORDS: Final = {
     "agora",
     "ainda",
+    "ambientes",
     "arquivo",
     "arquivos",
+    "artefato",
+    "artefatos",
     "atual",
     "busca",
     "configuracao",
@@ -63,16 +67,21 @@ PORTUGUESE_WORDS: Final = {
     "equipes",
     "fase",
     "fases",
+    "locais",
     "nao",
     "não",
     "para",
     "probabilidade",
+    "concorrente",
     "rodar",
     "saida",
     "saída",
     "somente",
+    "segredos",
+    "sistema",
     "tambem",
     "também",
+    "execução",
 }
 WORD_PATTERN: Final = re.compile(r"[^\W\d_]+", flags=re.UNICODE)
 
@@ -122,6 +131,7 @@ def _content(path: Path) -> str | None:
     if path.suffix.casefold() not in TEXT_SUFFIXES and path.name not in {
         "LICENSE",
         ".env.example",
+        ".gitignore",
     }:
         return None
     try:

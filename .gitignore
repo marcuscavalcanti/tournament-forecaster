@@ -8,7 +8,7 @@ __pycache__/
 coverage.xml
 htmlcov/
 
-# Ambientes locais
+# Local environments
 .venv/
 *.local.json
 attachments/
@@ -22,7 +22,7 @@ build/
 venv/
 env/
 
-# Segredos e configuração local
+# Secrets and local configuration
 .env
 .env.*
 !.env.example
@@ -30,7 +30,7 @@ config/worldcup_brazil.json
 config/*.local.json
 secrets/
 
-# Artefatos de execução
+# Runtime artifacts
 data/
 # Packaged contracts are source data, not runtime output.
 !src/tournament_forecaster/data/
@@ -46,10 +46,10 @@ outputs/
 *.temp
 *.corrupt.*
 
-# lock de run concorrente — artefato de runtime
+# Concurrent-run lock (runtime artifact)
 data/.run.lock
 
-# Sistema/editor
+# Operating system and editor files
 .DS_Store
 .idea/
 .vscode/
