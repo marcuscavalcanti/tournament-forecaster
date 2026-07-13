@@ -1116,6 +1116,160 @@ def test_post_rollback_observation_error_reports_only_current_recovery_paths(
     assert any(path in reported_paths for path in provider_witnesses)
 
 
+@pytest.mark.parametrize("interference", ["delete", "wrong-bytes"])
+def test_witness_writer_failure_reports_only_final_verified_recovery_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    interference: str,
+) -> None:
+    config = _config(tmp_path)
+    preview = preview_results(config, _json_source(tmp_path, [_result()]), format="json")
+    original_bytes = config.read_bytes()
+    original_identity = (config.stat().st_dev, config.stat().st_ino)
+    wrong_bytes = b"injected wrong recovery witness\n"
+    native_move = results_provider._atomic_move_no_replace_at
+    native_fsync = os.fsync
+    native_snapshot = results_provider._snapshot_exchange_entries_between_at
+    native_read = results_provider._read_file_at
+    quarantine_descriptor: int | None = None
+    provider_bytes: bytes | None = None
+    writer_path: Path | None = None
+    injected = False
+    removed_after_rollback = False
+    writer_interfered = False
+
+    def arm_after_quarantine_move(
+        source_descriptor: int,
+        source_name: str,
+        destination_descriptor: int,
+        destination_name: str,
+    ) -> None:
+        nonlocal quarantine_descriptor
+        native_move(
+            source_descriptor,
+            source_name,
+            destination_descriptor,
+            destination_name,
+        )
+        if destination_name == "entry":
+            quarantine_descriptor = destination_descriptor
+
+    def fail_first_quarantine_fsync(descriptor: int) -> None:
+        nonlocal injected
+        if descriptor == quarantine_descriptor and not injected:
+            injected = True
+            raise OSError(errno.EIO, "injected post-move quarantine failure")
+        native_fsync(descriptor)
+
+    def remove_entry_before_rollback_observation(
+        source_descriptor: int,
+        source_name: str,
+        destination_descriptor: int,
+        destination_name: str,
+        phase: str,
+    ) -> results_provider._ExchangeSnapshot:
+        nonlocal provider_bytes, removed_after_rollback
+        if phase == "moved quarantine rolled-back" and not removed_after_rollback:
+            descriptor = os.open(
+                source_name,
+                os.O_RDONLY | os.O_NOFOLLOW,
+                dir_fd=source_descriptor,
+            )
+            with os.fdopen(descriptor, "rb") as handle:
+                provider_bytes = handle.read()
+            os.unlink(source_name, dir_fd=source_descriptor)
+            removed_after_rollback = True
+        return native_snapshot(
+            source_descriptor,
+            source_name,
+            destination_descriptor,
+            destination_name,
+            phase,
+        )
+
+    def interfere_during_writer_verification(
+        parent_descriptor: int,
+        filename: str,
+        canonical_path: Path,
+        label: str,
+    ) -> tuple[results_provider.LocalFileIdentity, bytes]:
+        nonlocal writer_interfered, writer_path
+        if (
+            label == "tournament config recovery"
+            and ".recovery-" in filename
+            and filename.endswith(".json")
+            and not writer_interfered
+        ):
+            writer_path = canonical_path
+            if interference == "delete":
+                os.unlink(filename, dir_fd=parent_descriptor)
+            else:
+                _atomic_install_regular(
+                    parent_descriptor,
+                    filename,
+                    wrong_bytes,
+                    "wrong-witness",
+                )
+            writer_interfered = True
+        return native_read(
+            parent_descriptor,
+            filename,
+            canonical_path,
+            label,
+        )
+
+    monkeypatch.setattr(
+        results_provider,
+        "_atomic_move_no_replace_at",
+        arm_after_quarantine_move,
+    )
+    monkeypatch.setattr(os, "fsync", fail_first_quarantine_fsync)
+    monkeypatch.setattr(
+        results_provider,
+        "_snapshot_exchange_entries_between_at",
+        remove_entry_before_rollback_observation,
+    )
+    monkeypatch.setattr(
+        results_provider,
+        "_read_file_at",
+        interfere_during_writer_verification,
+    )
+
+    with pytest.raises(TournamentValidationError) as captured:
+        apply_results(config, preview)
+
+    assert injected is True
+    assert removed_after_rollback is True
+    assert writer_interfered is True
+    assert config.read_bytes() == original_bytes
+    assert (config.stat().st_dev, config.stat().st_ino) == original_identity
+    assert provider_bytes is not None
+    assert writer_path is not None
+    if interference == "delete":
+        assert not writer_path.exists()
+    else:
+        assert writer_path.read_bytes() == wrong_bytes
+
+    message = str(captured.value)
+    assert str(writer_path) not in message
+    reported_paths = _reported_paths_under(message, tmp_path)
+    assert reported_paths
+    assert all(path.exists() for path in reported_paths)
+    for path in reported_paths:
+        if path.is_file() and path.name != f".{config.name}.lock":
+            assert path.read_bytes() in {original_bytes, provider_bytes}
+
+    causes: list[BaseException] = []
+    current: BaseException | None = captured.value
+    while current is not None:
+        causes.append(current)
+        current = current.__cause__
+    if interference == "delete":
+        assert any(isinstance(cause, FileNotFoundError) for cause in causes)
+    else:
+        assert any("recovery bytes could not be verified" in str(cause) for cause in causes)
+
+
 def test_post_move_rollback_rejection_reports_provider_canonical_truthfully(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

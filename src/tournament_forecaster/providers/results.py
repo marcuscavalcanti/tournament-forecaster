@@ -193,6 +193,17 @@ class _QuarantineOperationError(TournamentValidationError):
         self.state = state
 
 
+@dataclass(frozen=True, slots=True)
+class _RecoveryWriteFailureState:
+    recovery_name: str
+
+
+class _RecoveryWriteOperationError(TournamentValidationError):
+    def __init__(self, message: str, state: _RecoveryWriteFailureState) -> None:
+        super().__init__(message)
+        self.state = state
+
+
 class _NoReplacePreflightError(TournamentValidationError):
     def __init__(
         self,
@@ -1731,9 +1742,9 @@ def _write_recovery_file_at(
         except BaseException as error:
             if descriptor >= 0:
                 os.close(descriptor)
-            raise _error(
-                f"tournament config recovery path was preserved: "
-                f"{parent_path / recovery_name}"
+            raise _RecoveryWriteOperationError(
+                "tournament config recovery witness could not be verified",
+                _RecoveryWriteFailureState(recovery_name=recovery_name),
             ) from error
     raise _error("could not allocate a tournament config recovery path")
 
@@ -1743,6 +1754,8 @@ def _raise_recovery_error(
     detail: str,
     parent_path: Path,
     recovery_names: Collection[str],
+    *,
+    cause: BaseException | None = None,
 ) -> NoReturn:
     message = f"{reason}; {detail}"
     recovery_paths = sorted(
@@ -1750,6 +1763,8 @@ def _raise_recovery_error(
     )
     if recovery_paths:
         message += f"; preserved recovery paths: {', '.join(recovery_paths)}"
+    if cause is not None:
+        raise _error(message) from cause
     raise _error(message)
 
 
@@ -2110,23 +2125,28 @@ def _recover_moved_quarantine_at(
             )
             transition = _classify_exchange_transition(before, after)
         except TournamentValidationError as error:
-            written_witnesses: list[tuple[str, bytes]] = []
+            witness_candidates: list[tuple[str, bytes]] = []
+            witness_failures: list[_RecoveryWriteOperationError] = []
             for identity, content in (
                 (original_identity, original_bytes),
                 (replacement_identity, replacement_bytes),
             ):
-                recovery_name = _ensure_witness_recovery_for_moved_quarantine(
-                    parent_descriptor,
-                    quarantine_descriptor,
-                    parent_path,
-                    target_name,
-                    canonical_path,
-                    state,
-                    identity,
-                    content,
-                )
+                try:
+                    recovery_name = _ensure_witness_recovery_for_moved_quarantine(
+                        parent_descriptor,
+                        quarantine_descriptor,
+                        parent_path,
+                        target_name,
+                        canonical_path,
+                        state,
+                        identity,
+                        content,
+                    )
+                except _RecoveryWriteOperationError as witness_error:
+                    witness_failures.append(witness_error)
+                    recovery_name = witness_error.state.recovery_name
                 if recovery_name is not None:
-                    written_witnesses.append((recovery_name, content))
+                    witness_candidates.append((recovery_name, content))
             final_recovery_names = _quarantine_recovery_names_at(
                 parent_descriptor,
                 quarantine_descriptor,
@@ -2134,7 +2154,7 @@ def _recover_moved_quarantine_at(
             )
             final_recovery_names.extend(
                 recovery_name
-                for recovery_name, content in written_witnesses
+                for recovery_name, content in witness_candidates
                 if _recovery_file_has_bytes_at(
                     parent_descriptor,
                     parent_path,
@@ -2142,13 +2162,19 @@ def _recover_moved_quarantine_at(
                     content,
                 )
             )
+            witness_detail = (
+                "; recovery witness verification failed and was retained as cause"
+                if witness_failures
+                else ""
+            )
             _raise_recovery_error(
                 reason,
                 "post-move rollback could not be observed safely; "
                 f"{_canonical_recovery_state(parent_descriptor, target_name, canonical_path, original_identity, original_bytes, replacement_identity, replacement_bytes).value}; "
-                f"observation error: {error}",
+                f"observation error: {error}{witness_detail}",
                 parent_path,
                 final_recovery_names,
+                cause=witness_failures[0] if witness_failures else None,
             )
 
         recovery_names = _quarantine_recovery_names_at(
@@ -2982,6 +3008,8 @@ def apply_results(
                         reason,
                     )
                 except TournamentValidationError as recovery_error:
+                    if recovery_error.__cause__ is not None:
+                        raise
                     raise recovery_error from error
             reason = f"displaced tournament config could not be quarantined: {error}"
             _recover_atomic_exchange_at(
