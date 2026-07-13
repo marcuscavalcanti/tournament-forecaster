@@ -8,6 +8,10 @@ Providers are acquisition boundaries, not owners of tournament truth. Tournament
 - **Competition and season IDs** identify public datasets and are not secrets. The World Cup example uses competition `17` and season `285023`.
 - **Local bridges** are a reserved future extension and are not implemented by the generic CLI. No public environment variable enables one; any later bridge requires a separate threat model, explicit configuration contract, and security review.
 
+## Platform Boundary
+
+In `v0.1.0`, race-resistant results apply and durable report publication require POSIX file descriptors, no-follow opens, and native rename primitives. They are supported natively on macOS and Linux. Native Windows is not supported; run the CLI inside WSL2 and use Linux paths.
+
 ## Official FIFA Calendar Discovery
 
 FIFA does not provide this project with a stable SDK contract. To locate the calendar request, open the official FIFA competition calendar in a browser, open developer tools, select the **Network** panel, filter Fetch/XHR traffic, and change a date or stage filter. Inspect the official-origin JSON request that carries competition and season parameters. For the checked-in example, verify competition `17` and season `285023`, response status, content type, pagination, stage labels, and retrieval time before normalization.
@@ -30,7 +34,9 @@ The preview separates additions, idempotent facts, conflicts, and unmatched rows
 tournament-forecast update-results --config tournament.json --source normalized-results.json --apply
 ```
 
-Conflict replacement requires the separate `--replace-conflicts` flag. Apply fails closed if the source or destination identity changes after preview, if a symlink substitution is detected, or if validation finds an unknown, malformed, future, or non-final result.
+Conflict replacement requires the separate `--replace-conflicts` flag. Apply fails closed if the source or destination identity changes after preview, if a symlink substitution is detected, or if normalized facts are unknown, malformed, conflicting, or non-final.
+
+The generic preview/apply layer validates only normalized final facts; it does not infer a schedule or decide whether a claimed result is temporally possible. Acquisition adapters must reject non-final results and any result not observed after the authoritative kickoff before producing the local import file. The checked-in FIFA builder implements that temporal guard in `scripts/build_world_cup_2026_example.py` by requiring `retrieved_at` to be after `kickoff_at` before it emits a completed fact.
 
 A successful mutation prints the retained backup path. Treat that path as manual rollback evidence: inspect the canonical config and remove the containing recovery directory only after reconciliation. The adjacent writer-lock file is persistent coordination state. Missing native exchange or directory-descriptor primitives fail before apply setup; a filesystem can still reject a native exchange at runtime, in which case the canonical config is preserved and the error reports every retained candidate, recovery, and lock path known to the operation.
 
@@ -48,4 +54,4 @@ Unknown fields, malformed timestamps, invalid decimal odds, unsafe metadata, and
 
 ## Raw Payload Policy
 
-Never commit raw provider payloads, request headers, cookies, tokens, browser captures, or unredacted URLs. Keep temporary responses under an ignored `raw_provider_payloads/` directory, restrict access, and delete them after producing a minimal normalized artifact. Repository examples may include normalized factual data only when their source, retrieval timestamp, transformation, and redistribution basis are documented.
+Never commit raw provider payloads, request headers, cookies, tokens, browser captures, or unredacted URLs. Credential-shaped query and fragment parameters are redacted before a provider URL is persisted. Keep temporary responses under an ignored `raw_provider_payloads/` directory, restrict access, and delete them after producing a minimal normalized artifact. Repository examples may include normalized factual data only when their source, retrieval timestamp, transformation, and redistribution basis are documented.

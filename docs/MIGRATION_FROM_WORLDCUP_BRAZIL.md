@@ -6,7 +6,7 @@ The `worldcup_brazil` package and `worldcup-brazil-report` command are deprecate
 
 | Legacy concern | Generic replacement |
 | --- | --- |
-| Brazil-specific configuration | Versioned tournament JSON plus `default_focus_team_id` |
+| Brazil-specific configuration | Versioned tournament JSON with nested `tournament.id` and root `focus_team_id` |
 | Daily report entry point | `tournament-forecast simulate` |
 | Brazil-only bracket assumptions | Explicit stage and pairing contracts |
 | Mutable dated output files | Immutable generation plus stable `current` alias |
@@ -18,7 +18,7 @@ The `worldcup_brazil` package and `worldcup-brazil-report` command are deprecate
 
 1. Create a generic tournament configuration from a template.
 2. Move team identities, ratings, fixtures, stages, and completed results into the versioned schema.
-3. Set the desired default focus team or pass `--focus-team` at runtime.
+3. Set the root `focus_team_id` or pass `--focus-team` at runtime.
 4. Validate and compare deterministic stage probabilities against the legacy seeded fixture.
 5. Update automation to consume `forecast.json`, `report.md`, or `bracket.svg` under the stable `current` alias.
 6. Remove legacy command, model-key, and post-template dependencies after one successful release cycle.

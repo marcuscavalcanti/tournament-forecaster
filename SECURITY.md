@@ -14,9 +14,11 @@ Maintainers will acknowledge a complete report, investigate it privately, coordi
 
 - **Trusted configuration:** Tournament JSON, imported result files, templates, and provider metadata are code-like local inputs. Review them before use. Schema validation limits shape; it does not make an untrusted operational policy safe.
 - **Local command boundary:** The generic CLI does not implement local command bridges and does not execute commands declared by tournament or provider data. Any future bridge needs a separate threat model, an explicit enablement design, and security review before public configuration is added.
-- **Symlink and output boundary:** Imports reject unsafe file substitutions, apply verifies file identity, and publication uses atomic immutable generations. Do not place output roots in attacker-controlled directories.
+- **Symlink and output boundary:** Imports reject unsafe file substitutions, apply verifies source and destination identity, and publication uses atomic immutable generations. Output publication fails closed when the lexical path contains an ancestor symlink or junction. Use the canonical path; on macOS that means `/private/tmp/...` instead of the `/tmp/...` alias. Do not place output roots in attacker-controlled directories.
 - **Provider key boundary:** Credentials belong in environment variables or an external secret manager. They must never be written to tournament configuration, provider payloads, logs, reports, or source control.
 - **Data provenance boundary:** Normalized facts retain provider and retrieval metadata. Provenance is evidence about origin, not a guarantee that an external fact is accurate, licensed for every use, or unchanged upstream.
+
+Race-resistant provider apply and durable report publication require POSIX no-follow and directory-descriptor primitives in `v0.1.0`. macOS and Linux are native targets. Native Windows is not supported; Windows operators must use WSL2 and Linux paths.
 
 ## Deployment Assumptions
 

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Turn the merged Brazil-specific repository into an installable, English-first, configuration-driven tournament forecaster whose offline quickstart generates valid JSON, Markdown, and SVG output from a clean wheel.
+**Goal:** Turn the merged Brazil-specific repository into an installable, English-first, configuration-driven tournament forecaster whose installed offline runtime generates valid JSON, Markdown, and SVG output.
 
 **Architecture:** Build a new `src/tournament_forecaster` package that does not import `worldcup_brazil`. The generic core owns schema validation, standings, qualification, typed entrant resolution, one- and two-leg knockout simulation, deterministic Monte Carlo, and reports. `worldcup_brazil` remains a deprecated compatibility integration for one release cycle; it is not the generic engine.
 
@@ -11,6 +11,8 @@
 ## Global Constraints
 
 - The four-line quickstart works from a wheel with no API keys, network, Make, uv, shell profile, browser bridge, or user input.
+- The first source install requires package-index/network access for Hatchling build dependencies; the installed simulation, init, and validation paths are offline.
+- `v0.1.0` supports macOS and Linux natively; Windows support is through WSL2, not native Windows.
 - Public package, CLI, default examples, reports, errors, docs, comments, and tests are English.
 - Stable ASCII IDs own logic; localized names are display data only.
 - Completed results are immutable and keyed by stable `match_id` plus `leg`.
@@ -184,6 +186,7 @@ tournament-forecast presets list
 - [x] Write failing report, CLI, offline-network-block, and clean-wheel tests before implementation.
 - [x] Implement JSON, Markdown, and SVG rendering plus the six CLI surfaces.
 - [x] Build a wheel, install only the wheel into a clean venv, clear provider variables and `PYTHONPATH`, block network, and prove quickstart plus init/validate.
+- [x] Add a clean source-install test for the literal README commands with package-index/build-dependency access.
 - [x] Add `make quickstart` as a convenience without making it part of primary onboarding.
 - [x] Verify CLI tests, wheel test, generic tests, and legacy baseline.
 - [x] Commit `feat: add offline tournament forecast CLI` plus adversarial publication/recovery hardening.
@@ -218,6 +221,7 @@ redact_url(url: str) -> str
 ```
 
 - JSON/CSV result imports are preview-first, idempotent, alias-aware, conflict-rejecting, and atomic on apply.
+- Apply reopens the canonical preview source with no-follow semantics and rejects deletion, replacement, same-bytes/new-inode, or content changes before config mutation.
 - Odds imports preserve provenance and never modify deterministic probabilities.
 - FIFA remains an opt-in, undocumented adapter exercised only through synthetic offline fixtures; UEFA and CONMEBOL make no live-provider claim.
 - Legacy local executable bridges default off, `--no-bridges` is absolute, and no path reads `~/.zshrc` implicitly.
@@ -325,9 +329,10 @@ tournament-forecast backtest --input PATH [--output PATH] [--min-resolved INT]
 - [ ] Run `make validate` and all generic preset contracts.
 - [ ] Run Ruff, mypy, package build, schema validation, and public English scan.
 - [ ] Install the wheel in a new temporary venv and run quickstart with network denied and credentials cleared.
+- [ ] Run the clean source-install quickstart with package-index/build-dependency access on native Linux and macOS.
 - [ ] Verify the three generated outputs are non-empty, coherent, and free of local paths or secrets.
 - [ ] Run `gitleaks git --redact --log-opts="--all"` when the binary is available; otherwise record it as a visibility blocker rather than claiming release-ready.
 - [ ] Dispatch a broad adversarial code review over the complete branch diff and fix every Critical or Important finding.
 - [ ] Confirm the legacy World Cup seeded goldens and 534-test baseline still pass.
 - [ ] Commit fixes as `fix: close productization release findings` when needed.
-- [ ] Push `codex/productized-tournament-forecaster` and open a new implementation PR against `main`.
+- [ ] Leave the structured final-fix commits local; do not push as part of this controller-owned wave.

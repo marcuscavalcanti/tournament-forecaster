@@ -11,6 +11,8 @@ python3 -m venv .venv && . .venv/bin/activate && python -m pip install .
 tournament-forecast simulate --config examples/world-cup-2026-live/tournament.json --iterations 10000 --output-dir outputs
 ```
 
+The first source install requires package-index/network access for build dependencies; Hatchling is not vendored. After installation, `simulate`, `init`, and `validate` run offline without provider credentials or additional downloads.
+
 The checked-in World Cup 2026 example is a normalized snapshot of fixture and result facts from the official FIFA calendar endpoint. Its `retrieved_at` value is `2026-07-13T12:21:03Z`; it contains 100 completed facts. Stage counts are 72 group, 16 R32, 8 R16, 4 QF, 0 SF, and 0 final. The remaining semi-finals are France-Spain and England-Argentina. Its active default focus team is France, and its frozen ratings are a project-authored, cited pre-tournament seed. It is reproducible snapshot data, not a live feed. The command writes:
 
 - `outputs/fifa-world-cup-2026-live/france/forecast.json`
@@ -19,7 +21,9 @@ The checked-in World Cup 2026 example is a normalized snapshot of fixture and re
 
 Each run first creates an immutable generation directory. The CLI labels the stable focus path as the `Current alias`; `outputs/fifa-world-cup-2026-live/france` points to that complete generation, so readers never observe a partially written report.
 
-On Windows, create the environment with `py -m venv .venv`, activate it with `.venv\Scripts\activate`, install with `python -m pip install .`, and then run the same `tournament-forecast` command.
+Output publication fails closed when the lexical output path contains an ancestor symlink or junction. Use a canonical path instead. For example, macOS exposes `/tmp` as a symlink to `/private/tmp`, so use `--output-dir /private/tmp/tournament-forecaster-outputs` rather than a path below `/tmp`.
+
+`v0.1.0` supports macOS and Linux natively. On Windows, use WSL2 and run the four POSIX quickstart commands inside the Linux distribution; native Windows is not supported in `v0.1.0`.
 
 For a fully synthetic offline smoke test after installation:
 

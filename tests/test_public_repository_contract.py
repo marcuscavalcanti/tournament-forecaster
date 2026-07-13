@@ -14,6 +14,10 @@ import zipfile
 from pathlib import Path
 
 import pytest
+from jsonschema import Draft202012Validator
+
+from tournament_forecaster.config import load_tournament_document
+from tournament_forecaster.resources import resource_path
 
 ROOT = Path(__file__).parents[1]
 QUICKSTART = "\n".join(
@@ -69,11 +73,28 @@ TASK6_OVERLAY_PATHS = (
     Path("scripts/check_english_surface.py"),
     Path("tests/test_agents_fallbacks.py"),
     Path("tests/test_clean_wheel.py"),
+    Path("tests/test_clean_source_install.py"),
     Path("tests/test_public_repository_contract.py"),
     Path("tests/test_readme_diagrams.py"),
     Path("tests/tournament_forecaster/test_package_resources.py"),
     Path("uv.lock"),
 )
+
+SUPPORTED_NATIVE_CLASSIFIERS = {
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+}
+DOCUMENTED_TOURNAMENT_FIELDS = {
+    "schema_version",
+    "tournament.id",
+    "tournament.display_name",
+    "tournament.season",
+    "focus_team_id",
+    "teams",
+    "stages",
+    "ratings",
+    "completed_matches",
+}
 
 
 def _tracked_files() -> tuple[Path, ...]:
@@ -104,6 +125,104 @@ def _tracked_package_files() -> set[str]:
     }
 
 
+def _assert_source_install_contract(
+    readme: str,
+    design: str,
+    plan: str,
+    product_flow: str,
+) -> None:
+    required = (
+        "first source install requires package-index/network access for build dependencies",
+        "hatchling is not vendored",
+        "after installation, `simulate`, `init`, and `validate` run offline",
+    )
+    for phrase in required:
+        assert phrase in readme.casefold()
+    assert "source installation requires package-index/network access" in design.casefold()
+    assert "source install requires package-index/network access" in plan.casefold()
+    assert "after installation" in product_flow.casefold()
+    for stale_claim in (
+        "it requires only python 3.11 or newer and the cloned repository",
+        "clean clone reaches valid json, markdown, and svg outputs through the "
+        "documented four-line flow in less than five minutes without keys, network",
+        "clone the repository and generate valid json, markdown, and svg forecasts "
+        "through the documented four-line quick start without credentials, network access",
+    ):
+        assert stale_claim not in design.casefold()
+
+
+def _assert_platform_contract(
+    readme: str,
+    security: str,
+    providers: str,
+    design: str,
+    classifiers: set[str],
+    release_gate: str,
+) -> None:
+    assert "`v0.1.0` supports macos and linux natively" in readme.casefold()
+    assert "on windows, use wsl2" in readme.casefold()
+    assert "native windows is not supported" in readme.casefold()
+    for document in (security, providers):
+        normalized = document.casefold()
+        assert "posix" in normalized
+        assert "wsl2" in normalized
+        assert "native windows" in normalized
+    assert "`v0.1.0` supports macos and linux natively and windows through wsl2" in (
+        design.casefold()
+    )
+    assert classifiers >= SUPPORTED_NATIVE_CLASSIFIERS
+    assert "Operating System :: OS Independent" not in classifiers
+    assert not any("Windows" in classifier for classifier in classifiers)
+    assert "ubuntu-latest" in release_gate
+    assert "macos-latest" in release_gate
+    assert "windows-latest" not in release_gate
+
+
+def _assert_temporal_import_contract(
+    providers: str,
+    adding_provider: str,
+    results_schema: dict[str, object],
+    fifa_builder: str,
+) -> None:
+    normalized_providers = providers.casefold()
+    normalized_adding = adding_provider.casefold()
+    assert "generic preview/apply layer validates only normalized final facts" in (
+        normalized_providers
+    )
+    assert "does not infer a schedule" in normalized_providers
+    assert "authoritative kickoff" in normalized_providers
+    assert "scripts/build_world_cup_2026_example.py" in providers
+    assert "before preview" in normalized_adding
+    assert "authoritative kickoff" in normalized_adding
+    assert "generic apply rejects future" not in normalized_providers
+    assert "apply rejects future" not in normalized_providers
+
+    properties = results_schema["properties"]
+    assert isinstance(properties, dict)
+    results = properties["results"]
+    assert isinstance(results, dict)
+    items = results["items"]
+    assert isinstance(items, dict)
+    row_properties = items["properties"]
+    assert isinstance(row_properties, dict)
+    assert not {"kickoff_at", "observed_at", "result_at"} & set(row_properties)
+    assert "retrieved_at must be after kickoff_at" in fifa_builder
+
+
+def _assert_output_path_contract(readme: str, configuration: str, security: str) -> None:
+    for document in (readme, configuration, security):
+        normalized = document.casefold()
+        assert "ancestor symlink or junction" in normalized
+        assert "canonical path" in normalized
+        assert "/tmp" in document
+        assert "/private/tmp" in document
+
+
+def _documented_core_fields(configuration: str) -> set[str]:
+    section = configuration.split("## Core Fields\n", 1)[1].split("\n## ", 1)[0]
+    return set(re.findall(r"^- `([^`]+)`", section, flags=re.MULTILINE))
+
+
 def test_required_public_repository_files_exist() -> None:
     missing = sorted(path for path in REQUIRED_FILES if not (ROOT / path).is_file())
     assert not missing, f"missing public repository files: {missing}"
@@ -125,6 +244,187 @@ def test_readme_leads_with_exact_working_four_line_quickstart() -> None:
     assert "outputs/fifa-world-cup-2026-live/france/forecast.json" in readme
     assert "outputs/fifa-world-cup-2026-live/france/report.md" in readme
     assert "outputs/fifa-world-cup-2026-live/france/bracket.svg" in readme
+
+
+def test_source_install_and_runtime_offline_contract_is_truthful() -> None:
+    _assert_source_install_contract(
+        (ROOT / "README.md").read_text(encoding="utf-8"),
+        (
+            ROOT
+            / "docs/superpowers/specs/2026-07-10-open-source-tournament-forecaster-design.md"
+        ).read_text(encoding="utf-8"),
+        (
+            ROOT
+            / "docs/superpowers/plans/2026-07-10-tournament-forecaster-productization.md"
+        ).read_text(encoding="utf-8"),
+        (ROOT / "docs/PRODUCT_FLOW.md").read_text(encoding="utf-8"),
+    )
+
+
+def test_source_install_contract_rejects_offline_clone_claim_mutations() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    design = (
+        ROOT
+        / "docs/superpowers/specs/2026-07-10-open-source-tournament-forecaster-design.md"
+    ).read_text(encoding="utf-8")
+    plan = (
+        ROOT / "docs/superpowers/plans/2026-07-10-tournament-forecaster-productization.md"
+    ).read_text(encoding="utf-8")
+    product_flow = (ROOT / "docs/PRODUCT_FLOW.md").read_text(encoding="utf-8")
+
+    with pytest.raises(AssertionError):
+        _assert_source_install_contract(
+            readme.replace(
+                "first source install requires package-index/network access",
+                "first source install is offline",
+            ),
+            design,
+            plan,
+            product_flow,
+        )
+
+
+def test_v0_1_platform_support_is_posix_native_and_windows_via_wsl2() -> None:
+    metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    _assert_platform_contract(
+        (ROOT / "README.md").read_text(encoding="utf-8"),
+        (ROOT / "SECURITY.md").read_text(encoding="utf-8"),
+        (ROOT / "docs/PROVIDERS.md").read_text(encoding="utf-8"),
+        (
+            ROOT
+            / "docs/superpowers/specs/2026-07-10-open-source-tournament-forecaster-design.md"
+        ).read_text(encoding="utf-8"),
+        set(metadata["project"]["classifiers"]),
+        (ROOT / ".github/workflows/release-gate.yml").read_text(encoding="utf-8"),
+    )
+
+
+@pytest.mark.parametrize("mutation", ["metadata", "readme", "release-gate"])
+def test_platform_contract_rejects_native_windows_mutations(mutation: str) -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    security = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
+    providers = (ROOT / "docs/PROVIDERS.md").read_text(encoding="utf-8")
+    design = (
+        ROOT
+        / "docs/superpowers/specs/2026-07-10-open-source-tournament-forecaster-design.md"
+    ).read_text(encoding="utf-8")
+    metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    classifiers = set(metadata["project"]["classifiers"])
+    release_gate = (ROOT / ".github/workflows/release-gate.yml").read_text(
+        encoding="utf-8"
+    )
+    if mutation == "metadata":
+        classifiers.add("Operating System :: OS Independent")
+    elif mutation == "readme":
+        readme = readme.replace("native Windows is not supported", "native Windows is supported")
+    else:
+        release_gate += "\n# windows-latest\n"
+
+    with pytest.raises(AssertionError):
+        _assert_platform_contract(
+            readme,
+            security,
+            providers,
+            design,
+            classifiers,
+            release_gate,
+        )
+
+
+def test_generic_import_contract_does_not_claim_schedule_aware_rejection() -> None:
+    results_schema = json.loads(
+        (
+            ROOT / "src/tournament_forecaster/schemas/results.import.schema.json"
+        ).read_text(encoding="utf-8")
+    )
+    _assert_temporal_import_contract(
+        (ROOT / "docs/PROVIDERS.md").read_text(encoding="utf-8"),
+        (ROOT / "docs/ADDING_A_PROVIDER.md").read_text(encoding="utf-8"),
+        results_schema,
+        (ROOT / "scripts/build_world_cup_2026_example.py").read_text(
+            encoding="utf-8"
+        ),
+    )
+
+
+def test_temporal_import_contract_rejects_generic_apply_claim_mutation() -> None:
+    providers = (ROOT / "docs/PROVIDERS.md").read_text(encoding="utf-8")
+    adding_provider = (ROOT / "docs/ADDING_A_PROVIDER.md").read_text(encoding="utf-8")
+    results_schema = json.loads(
+        (
+            ROOT / "src/tournament_forecaster/schemas/results.import.schema.json"
+        ).read_text(encoding="utf-8")
+    )
+    fifa_builder = (ROOT / "scripts/build_world_cup_2026_example.py").read_text(
+        encoding="utf-8"
+    )
+
+    with pytest.raises(AssertionError):
+        _assert_temporal_import_contract(
+            providers + "\nGeneric apply rejects future results.\n",
+            adding_provider,
+            results_schema,
+            fifa_builder,
+        )
+
+
+def test_documented_tournament_fields_and_json_example_match_schema_and_runtime() -> None:
+    configuration = (ROOT / "docs/CONFIGURATION.md").read_text(encoding="utf-8")
+    migration = (ROOT / "docs/MIGRATION_FROM_WORLDCUP_BRAZIL.md").read_text(
+        encoding="utf-8"
+    )
+    assert _documented_core_fields(configuration) == DOCUMENTED_TOURNAMENT_FIELDS
+    assert "`tournament.id`" in migration
+    assert "root `focus_team_id`" in migration
+    assert "tournament_id" not in migration
+    assert "default_focus_team_id" not in migration
+
+    json_blocks = re.findall(r"```json\n(.*?)```", configuration, flags=re.DOTALL)
+    assert len(json_blocks) == 1
+    example = json.loads(json_blocks[0])
+    with resource_path("schemas", "tournament.schema.json") as schema_path:
+        schema = json.loads(Path(schema_path).read_text(encoding="utf-8"))
+    Draft202012Validator.check_schema(schema)
+    Draft202012Validator(schema).validate(example)
+    tournament = load_tournament_document(example)
+    assert tournament.id == example["tournament"]["id"]
+    assert tournament.focus_team_id == example["focus_team_id"]
+
+    for field in DOCUMENTED_TOURNAMENT_FIELDS:
+        node = schema
+        for segment in field.split("."):
+            properties = node.get("properties")
+            assert isinstance(properties, dict), f"{field} has no schema object at {segment}"
+            assert segment in properties, f"documented field {field} is absent from schema"
+            node = properties[segment]
+
+
+def test_configuration_contract_rejects_stale_field_mutation() -> None:
+    configuration = (ROOT / "docs/CONFIGURATION.md").read_text(encoding="utf-8")
+    mutated = configuration.replace("`focus_team_id`", "`default_focus_team_id`", 1)
+
+    assert _documented_core_fields(mutated) != DOCUMENTED_TOURNAMENT_FIELDS
+
+
+def test_output_directory_symlink_policy_and_canonical_remedy_are_public() -> None:
+    _assert_output_path_contract(
+        (ROOT / "README.md").read_text(encoding="utf-8"),
+        (ROOT / "docs/CONFIGURATION.md").read_text(encoding="utf-8"),
+        (ROOT / "SECURITY.md").read_text(encoding="utf-8"),
+    )
+
+
+def test_output_path_contract_rejects_noncanonical_remedy_mutation() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    configuration = (ROOT / "docs/CONFIGURATION.md").read_text(encoding="utf-8")
+    security = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
+
+    with pytest.raises(AssertionError):
+        _assert_output_path_contract(
+            readme.replace("/private/tmp", "/tmp"),
+            configuration,
+            security,
+        )
 
 
 def test_readme_states_the_real_example_and_backtest_boundaries() -> None:
@@ -368,6 +668,7 @@ def test_workflows_are_offline_scoped_and_do_not_publish() -> None:
         "test_public_repository_contract.py",
         "test_format_contracts.py",
         "test_clean_wheel.py",
+        "test_clean_source_install.py",
         "test_readme_diagrams.py",
         "backtest",
         "--disable-socket",
@@ -383,7 +684,8 @@ def test_workflows_are_offline_scoped_and_do_not_publish() -> None:
     assert "full-history-secret-scan" in gate
     assert "ubuntu-latest" in gate
     assert "macos-latest" in gate
-    assert "windows-latest" in gate
+    assert "windows-latest" not in gate
+    assert "online source-install onboarding" in gate
     assert "tests/test_clean_wheel.py" in gate
     assert "./.github/workflows/release-gate.yml" in release
     assert "github.ref_type" in release

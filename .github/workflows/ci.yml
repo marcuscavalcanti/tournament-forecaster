@@ -59,6 +59,7 @@ jobs:
           tests/examples
           tests/test_tournament_forecast_cli.py
           tests/test_clean_wheel.py
+          tests/test_clean_source_install.py
           tests/test_public_repository_contract.py
           tests/test_readme_diagrams.py
           scripts/check_english_surface.py
@@ -71,6 +72,7 @@ jobs:
           ruff check
           scripts/check_english_surface.py
           tests/test_clean_wheel.py
+          tests/test_clean_source_install.py
           tests/test_public_repository_contract.py
           tests/test_readme_diagrams.py
           docs/assets/architecture/generate.py
@@ -92,6 +94,8 @@ jobs:
         run: >-
           pytest -q
           tests/test_public_repository_contract.py::test_pristine_clone_make_validate_installs_declared_test_dependencies
+      - name: Clean source-install onboarding
+        run: pytest -q tests/test_clean_source_install.py
       - name: Full tracked test baseline
         env:
           TOURNAMENT_FORECASTER_INNER_MAKE_VALIDATE: "1"
