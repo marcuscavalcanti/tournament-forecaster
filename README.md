@@ -1,6 +1,6 @@
 # Tournament Forecaster
 
-Tournament Forecaster is an offline-first, configuration-driven engine for simulating tournament formats and publishing auditable forecasts. The generic product, its schemas, and its CLI are the primary interface.
+Tournament Forecaster is a configuration-driven hybrid engine for simulating tournament formats and publishing auditable forecasts. Its deterministic tournament engine is the source of truth, and a first-class optional multi-LLM council can research, challenge, and debrief the forecast before publication. The generic product, its schemas, and its CLI are the primary interface.
 
 ## Quickstart
 
@@ -31,6 +31,33 @@ For a fully synthetic offline smoke test after installation:
 tournament-forecast quickstart --iterations 10000 --output-dir outputs
 ```
 
+## Multi-LLM Council
+
+The debriefing council is a core product capability but an optional runtime dependency. With no council configuration, every command keeps the zero-key offline behavior above. When enabled, the default policy is **55% deterministic engine / 45% council consensus**. The deterministic engine still owns completed facts, standings, legal opponents, bracket topology, and matchup probabilities.
+
+Start from the credential-free example, choose current provider model IDs, and keep the local copy out of source control:
+
+```bash
+cp examples/council.example.json council.local.json
+tournament-forecast council validate --config council.local.json
+```
+
+Set `enabled` to `true` in `council.local.json`, export only the environment variables named by its `api_key_env` fields, and run:
+
+```bash
+tournament-forecast simulate --config examples/world-cup-2026-live/tournament.json --iterations 10000 --output-dir outputs --council-config council.local.json --council
+```
+
+The default two-pass debrief keeps round one independent and gives valid reviewers anonymized peer positions in round two. Models have equal voting weight; the median valid opinion becomes the council consensus. Model, provider, effort, rounds, failures, and consensus are retained in `forecast.json` and `report.md`. If the council misses quorum or a provider fails, the run falls back to the deterministic baseline and records the reason instead of weakening tournament invariants.
+
+Hard-disable all model calls without changing the saved configuration:
+
+```bash
+tournament-forecast simulate --config examples/world-cup-2026-live/tournament.json --iterations 10000 --output-dir outputs --council-config council.local.json --no-council
+```
+
+Supported adapters are OpenAI Responses, Anthropic Messages, Google Gemini, and HTTPS OpenAI-compatible chat endpoints. Model IDs and reasoning controls remain explicit because provider availability and capabilities change independently of this repository. See [Configuration](docs/CONFIGURATION.md), [Providers](docs/PROVIDERS.md), and [Security](SECURITY.md).
+
 ## Backtesting
 
 Run the checked-in evaluation dataset with:
@@ -49,10 +76,11 @@ Implemented contracts include:
 - league stages with explicit fixtures and qualification bands;
 - fixed, seeded, and open draws;
 - one-leg and two-leg knockout ties;
-- completed-result locking so known matches are never resimulated; and
+- completed-result locking so known matches are never resimulated;
+- an optional, auditable multi-LLM debriefing council with a fixed 55/45 blend and deterministic fallback; and
 - JSON forecast output with rendered Markdown and SVG artifacts.
 
-The engine does not yet infer arbitrary tournament rules from prose, schedule matches, fetch provider data over the network, or run the optional multi-model council through the generic CLI. Provider acquisition is an explicit external step. Unsupported tie-break rules and competition-specific edge cases must be modeled before use, not silently approximated.
+The engine does not infer arbitrary tournament rules from prose, schedule matches, or fetch tournament results and odds implicitly. Data acquisition remains an explicit provider step. The optional council makes direct HTTPS model calls only when it is configured and enabled. Unsupported tie-break rules and competition-specific edge cases must be modeled before use, not silently approximated.
 
 ## Configuration
 
@@ -73,7 +101,7 @@ The CLI consumes validated local JSON or CSV files. Imports are preview-first, c
 
 ## Architecture
 
-The committed diagrams describe the authoritative offline core and clearly mark future extension boundaries. They are custom AWS-style SVG assets with matching PNG exports, not Mermaid diagrams.
+The committed diagrams describe the authoritative offline core, the first-class optional council, and the remaining extension boundaries. They are custom AWS-style SVG assets with matching PNG exports, not Mermaid diagrams.
 
 - [Product flow SVG](docs/assets/architecture/product-flow.svg) ([PNG](docs/assets/architecture/product-flow.png))
 - [Technical architecture SVG](docs/assets/architecture/technical-architecture.svg) ([PNG](docs/assets/architecture/technical-architecture.png))

@@ -18,6 +18,7 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from tournament_forecaster.config import load_tournament_document
+from tournament_forecaster.council.config import load_council_config
 from tournament_forecaster.resources import resource_path
 
 ROOT = Path(__file__).parents[1]
@@ -56,6 +57,7 @@ REQUIRED_FILES = {
     "docs/assets/architecture/README.md",
     "docs/assets/architecture/generate.py",
     "docs/assets/architecture/manifest.json",
+    "examples/council.example.json",
     "scripts/check_english_surface.py",
 }
 
@@ -72,6 +74,7 @@ TASK6_OVERLAY_PATHS = (
     Path("docs/PROVIDERS.md"),
     Path("docs/assets/architecture"),
     Path("docs/knockout-stage-output-contract.md"),
+    Path("examples/council.example.json"),
     Path("docs/superpowers/plans/2026-07-10-tournament-forecaster-productization.md"),
     Path(
         "docs/superpowers/specs/2026-07-10-open-source-tournament-forecaster-design.md"
@@ -761,6 +764,86 @@ def test_readme_states_the_real_example_and_backtest_boundaries() -> None:
         "72",
     ):
         assert phrase in readme
+
+
+def test_multi_llm_council_is_a_documented_first_class_optional_capability() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    normalized_readme = readme.casefold()
+    configuration = (ROOT / "docs/CONFIGURATION.md").read_text(encoding="utf-8")
+    providers = (ROOT / "docs/PROVIDERS.md").read_text(encoding="utf-8")
+    architecture = (ROOT / "docs/ARCHITECTURE.md").read_text(encoding="utf-8")
+    product_flow = (ROOT / "docs/PRODUCT_FLOW.md").read_text(encoding="utf-8")
+    security = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
+    env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
+    council_path = ROOT / "examples/council.example.json"
+
+    for phrase in (
+        "first-class optional multi-llm council",
+        "55% deterministic engine / 45% council consensus",
+        "two-pass debrief",
+        "falls back to the deterministic baseline",
+        "tournament-forecast council validate --config council.local.json",
+        "--council-config council.local.json --council",
+        "--council-config council.local.json --no-council",
+    ):
+        assert phrase in normalized_readme
+    assert "does not yet" not in normalized_readme.split(
+        "## supported formats", maxsplit=1
+    )[1].split("## configuration", maxsplit=1)[0]
+
+    for phrase in (
+        "reasoning_effort",
+        "thinking_budget_tokens",
+        "minimum_valid_agents",
+        "engine_weight",
+        "council_weight",
+    ):
+        assert phrase in configuration
+    for provider in (
+        "openai",
+        "anthropic",
+        "openai-compatible",
+        "google-gemini",
+    ):
+        assert provider in providers.casefold()
+    for phrase in (
+        "55% deterministic engine",
+        "45% council",
+        "cannot change completed results",
+    ):
+        assert phrase in architecture.casefold() + product_flow.casefold()
+    for phrase in (
+        "direct https",
+        "environment variables",
+        "provider errors",
+    ):
+        assert phrase in security.casefold()
+
+    expected_environment_names = {
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "PERPLEXITY_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "GEMINI_API_KEY",
+    }
+    for name in expected_environment_names:
+        assert f"{name}=" in env_example
+    assert not any(
+        line.partition("=")[2].strip()
+        for line in env_example.splitlines()
+        if line.partition("=")[0] in expected_environment_names
+    )
+
+    document = json.loads(council_path.read_text(encoding="utf-8"))
+    with resource_path("schemas", "council.schema.json") as schema_path:
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    Draft202012Validator(schema).validate(document)
+    council = load_council_config(council_path)
+    assert council.enabled is False
+    assert council.engine_weight == pytest.approx(0.55)
+    assert council.council_weight == pytest.approx(0.45)
+    assert council.rounds == 2
+    assert len(council.enabled_agents) >= 3
 
 
 def test_readme_live_simulation_and_backtest_are_socket_denied(

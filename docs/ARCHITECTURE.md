@@ -1,9 +1,9 @@
 # Technical Architecture
 
-- **Status:** Target architecture contract for the open-source migration
+- **Status:** Implemented public architecture contract
 - **Product:** Tournament Forecaster
 
-The architecture keeps tournament rules and probability computation deterministic and offline. Network providers, model providers, local executable bridges, and publishing templates are reserved adapter boundaries, not owners of tournament truth. The current generic CLI implements local normalized-file imports and does not implement model providers, command bridges, or publishing adapters.
+The architecture keeps tournament rules and baseline probability computation deterministic and offline. The generic CLI also implements an optional multi-LLM debriefing council through direct HTTPS model adapters. That council is a first-class product capability, but it is never the owner of tournament truth. Local executable bridges remain outside the generic product.
 
 ## Component Architecture
 
@@ -20,7 +20,7 @@ The diagram is also available as a [PNG export](assets/architecture/technical-ar
 | 3 | Offline validator | Validate schema, stage graph, entrants, aliases, freshness, fixtures, and result conflicts | Structural failures stop before simulation or paid calls |
 | 4 | Result ledger | Load immutable completed facts and atomically accept reviewed final results | Conflicts never overwrite silently |
 | 5 | Deterministic engine | Simulate all remaining matches and derive standings, qualification, pairings, stage reach, and title probability | Coherence violations invalidate the run |
-| 6 | Optional council | Receive the baseline, legal opponents, evidence, and bounds; return bounded context or a degraded no-op | It cannot change completed results or tournament topology |
+| 6 | Optional council | Collect independent opinions, run anonymized peer review, derive a median consensus, and blend 55% deterministic engine with 45% council | It cannot change completed results, tournament topology, legal matchups, or matchup probabilities; below quorum it falls back to the baseline |
 | 7 | Finalizer and reporters | Recheck invariants and atomically write versioned JSON, Markdown, SVG, audit, compatibility, and publishing artifacts | Partial output sets are not published as complete runs |
 
 ## Ownership Rules
@@ -39,4 +39,5 @@ The diagram is also available as a [PNG export](assets/architecture/technical-ar
 - Invalid schemas, impossible stage references, stale required results, and result conflicts fail before simulation or paid model calls.
 - Expected provider unavailability follows the configured `required`, `cached_with_ttl`, or `best_effort` policy; internal programming errors are never converted into provider downtime.
 - Council failure degrades to the validated deterministic baseline. It never unlocks completed results, changes the stage graph, or invents legal opponents.
+- Model calls use direct HTTPS adapters and environment-only credentials. The generic CLI never executes provider-supplied or configuration-supplied commands.
 - Every accepted external fact records provider provenance and retrieval time. Every artifact records the `run_id`, input provenance, warnings, and compatibility conversions.

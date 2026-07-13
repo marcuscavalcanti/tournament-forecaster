@@ -40,7 +40,8 @@ def test_readme_links_current_english_architecture_contract() -> None:
 
     for phrase in (
         "authoritative offline core",
-        "future extension boundaries",
+        "first-class optional council",
+        "remaining extension boundaries",
         "custom aws-style svg assets",
         "matching png exports",
         "not mermaid diagrams",
@@ -53,6 +54,30 @@ def test_readme_links_current_english_architecture_contract() -> None:
         assert phrase in normalized
 
     assert "target architecture diagrams" not in normalized
+
+
+def test_architecture_diagrams_show_the_implemented_bounded_council() -> None:
+    product = (ASSET_DIRECTORY / "product-flow.svg").read_text(encoding="utf-8")
+    technical = (ASSET_DIRECTORY / "technical-architecture.svg").read_text(
+        encoding="utf-8"
+    )
+    combined = (product + technical).casefold()
+
+    for phrase in (
+        "multi-llm council",
+        "two-pass debrief",
+        "55% engine",
+        "45% council",
+        "direct https",
+        "deterministic fallback",
+    ):
+        assert phrase in combined
+    for stale in (
+        "future council",
+        "not implemented by the generic cli",
+        "not in generic cli",
+    ):
+        assert stale not in combined
 
 
 def test_architecture_manifest_approves_and_reproduces_svg_png_pairs() -> None:

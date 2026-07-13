@@ -136,7 +136,7 @@
   <text class="body" x="1307" y="366" text-anchor="middle">structured evidence</text>
   <rect class="card-blue" x="1400" y="320" width="150" height="62" rx="6"/>
   <text class="card-title" x="1475" y="345" text-anchor="middle">Model adapters</text>
-  <text class="body" x="1475" y="366" text-anchor="middle">future extension</text>
+  <text class="body" x="1475" y="366" text-anchor="middle">direct HTTPS</text>
   <rect class="card-blue" x="1568" y="320" width="150" height="62" rx="6"/>
   <text class="card-title" x="1643" y="345" text-anchor="middle">Local bridges</text>
   <text class="body" x="1643" y="366" text-anchor="middle">future extension</text>
@@ -218,26 +218,26 @@
   <!-- Optional intelligence -->
   <circle cx="1408" cy="477" r="16" fill="#ff9900"/>
   <text class="step-text" x="1408" y="477">5</text>
-  <text class="zone-title" x="1436" y="484">Future extension boundary</text>
+  <text class="zone-title" x="1436" y="484">Optional multi-LLM council</text>
   <text class="small" x="1750" y="484" text-anchor="middle" fill="#ffffff">NEVER OWNS TOPOLOGY</text>
 
   <rect class="card-blue" x="1432" y="526" width="396" height="62" rx="6"/>
-  <text class="card-title" x="1630" y="552" text-anchor="middle">Credential redaction and bridge policy</text>
-  <text class="body" x="1630" y="573" text-anchor="middle">disabled until separately implemented</text>
+  <text class="card-title" x="1630" y="552" text-anchor="middle">Direct HTTPS and credential redaction</text>
+  <text class="body" x="1630" y="573" text-anchor="middle">environment keys only | no local commands</text>
   <rect class="card-blue" x="1432" y="610" width="396" height="62" rx="6"/>
-  <text class="card-title" x="1630" y="636" text-anchor="middle">Proposed evidence interface</text>
-  <text class="body" x="1630" y="657" text-anchor="middle">bounded context outside tournament truth</text>
+  <text class="card-title" x="1630" y="636" text-anchor="middle">Two-pass debrief and quorum</text>
+  <text class="body" x="1630" y="657" text-anchor="middle">independent opinions | anonymized peer review</text>
   <rect class="card-blue" x="1432" y="694" width="190" height="72" rx="6"/>
-  <text class="card-title" x="1527" y="721" text-anchor="middle">Path room</text>
-  <text class="body" x="1527" y="742" text-anchor="middle">opponents by stage</text>
+  <text class="card-title" x="1527" y="721" text-anchor="middle">Engine bounds</text>
+  <text class="body" x="1527" y="742" text-anchor="middle">legal stages and paths</text>
   <rect class="card-blue" x="1638" y="694" width="190" height="72" rx="6"/>
-  <text class="card-title" x="1733" y="721" text-anchor="middle">Future council</text>
-  <text class="body" x="1733" y="742" text-anchor="middle">not in generic CLI</text>
+  <text class="card-title" x="1733" y="721" text-anchor="middle">Median consensus</text>
+  <text class="body" x="1733" y="742" text-anchor="middle">55% engine | 45% council</text>
   <rect class="card-blue" x="1432" y="810" width="396" height="72" rx="6"/>
-  <text class="card-title" x="1630" y="837" text-anchor="middle">Extension validation contract</text>
-  <text class="body" x="1630" y="858" text-anchor="middle">must preserve deterministic invariants</text>
+  <text class="card-title" x="1630" y="837" text-anchor="middle">Deterministic fallback and audit</text>
+  <text class="body" x="1630" y="858" text-anchor="middle">provider failure never weakens invariants</text>
   <rect class="card-orange" x="1516" y="902" width="228" height="36" rx="18"/>
-  <text class="small" x="1630" y="925" text-anchor="middle" fill="#232f3e">BOUNDED CONTEXT ONLY</text>
+  <text class="small" x="1630" y="925" text-anchor="middle" fill="#232f3e">FIRST-CLASS OPTIONAL</text>
   <path class="flow-optional" d="M1630 588 V610"/>
   <path class="flow-optional" d="M1630 672 V684 H1527 V694"/>
   <path class="flow-optional" d="M1630 672 V684 H1733 V694"/>
