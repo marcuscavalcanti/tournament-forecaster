@@ -73,12 +73,11 @@ TASK6_OVERLAY_PATHS = (
     Path("docs/MIGRATION_FROM_WORLDCUP_BRAZIL.md"),
     Path("docs/PROVIDERS.md"),
     Path("docs/assets/architecture"),
+    Path("docs/decisions/README.md"),
+    Path("docs/decisions/2026-07-10-open-source-product-design.md"),
+    Path("docs/decisions/2026-07-13-multi-llm-council.md"),
     Path("docs/knockout-stage-output-contract.md"),
     Path("examples/council.example.json"),
-    Path("docs/superpowers/plans/2026-07-10-tournament-forecaster-productization.md"),
-    Path(
-        "docs/superpowers/specs/2026-07-10-open-source-tournament-forecaster-design.md"
-    ),
     Path("pyproject.toml"),
     Path("scripts/check_english_surface.py"),
     Path("src/tournament_forecaster/domain.py"),
@@ -113,8 +112,7 @@ LEGACY_POLICY_PATHS = (
     Path("README.md"),
     Path("SECURITY.md"),
     Path("docs/MIGRATION_FROM_WORLDCUP_BRAZIL.md"),
-    Path("docs/superpowers/specs/2026-07-10-open-source-tournament-forecaster-design.md"),
-    Path("docs/superpowers/plans/2026-07-10-tournament-forecaster-productization.md"),
+    Path("docs/decisions/2026-07-10-open-source-product-design.md"),
 )
 MYPY_STEP_NAME = "Package-wide strict Mypy for public package"
 MYPY_COMMAND = (
@@ -302,7 +300,6 @@ def _tracked_package_files() -> set[str]:
 def _assert_source_install_contract(
     readme: str,
     design: str,
-    plan: str,
     product_flow: str,
 ) -> None:
     required = (
@@ -312,8 +309,7 @@ def _assert_source_install_contract(
     )
     for phrase in required:
         assert phrase in readme.casefold()
-    assert "source installation requires package-index/network access" in design.casefold()
-    assert "source install requires package-index/network access" in plan.casefold()
+    assert "first source installation requires package-index/network access" in design.casefold()
     assert "after installation" in product_flow.casefold()
     for stale_claim in (
         "it requires only python 3.11 or newer and the cloned repository",
@@ -425,11 +421,7 @@ def test_source_install_and_runtime_offline_contract_is_truthful() -> None:
         (ROOT / "README.md").read_text(encoding="utf-8"),
         (
             ROOT
-            / "docs/superpowers/specs/2026-07-10-open-source-tournament-forecaster-design.md"
-        ).read_text(encoding="utf-8"),
-        (
-            ROOT
-            / "docs/superpowers/plans/2026-07-10-tournament-forecaster-productization.md"
+            / "docs/decisions/2026-07-10-open-source-product-design.md"
         ).read_text(encoding="utf-8"),
         (ROOT / "docs/PRODUCT_FLOW.md").read_text(encoding="utf-8"),
     )
@@ -439,10 +431,7 @@ def test_source_install_contract_rejects_offline_clone_claim_mutations() -> None
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     design = (
         ROOT
-        / "docs/superpowers/specs/2026-07-10-open-source-tournament-forecaster-design.md"
-    ).read_text(encoding="utf-8")
-    plan = (
-        ROOT / "docs/superpowers/plans/2026-07-10-tournament-forecaster-productization.md"
+        / "docs/decisions/2026-07-10-open-source-product-design.md"
     ).read_text(encoding="utf-8")
     product_flow = (ROOT / "docs/PRODUCT_FLOW.md").read_text(encoding="utf-8")
 
@@ -453,7 +442,6 @@ def test_source_install_contract_rejects_offline_clone_claim_mutations() -> None
                 "first source install is offline",
             ),
             design,
-            plan,
             product_flow,
         )
 
@@ -466,7 +454,7 @@ def test_v0_1_platform_support_is_posix_native_and_windows_via_wsl2() -> None:
         (ROOT / "docs/PROVIDERS.md").read_text(encoding="utf-8"),
         (
             ROOT
-            / "docs/superpowers/specs/2026-07-10-open-source-tournament-forecaster-design.md"
+            / "docs/decisions/2026-07-10-open-source-product-design.md"
         ).read_text(encoding="utf-8"),
         set(metadata["project"]["classifiers"]),
         (ROOT / ".github/workflows/release-gate.yml").read_text(encoding="utf-8"),
@@ -480,7 +468,7 @@ def test_platform_contract_rejects_native_windows_mutations(mutation: str) -> No
     providers = (ROOT / "docs/PROVIDERS.md").read_text(encoding="utf-8")
     design = (
         ROOT
-        / "docs/superpowers/specs/2026-07-10-open-source-tournament-forecaster-design.md"
+        / "docs/decisions/2026-07-10-open-source-product-design.md"
     ).read_text(encoding="utf-8")
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     classifiers = set(metadata["project"]["classifiers"])
@@ -1421,6 +1409,9 @@ def test_package_build_targets_use_exact_tracked_file_allowlists() -> None:
         "/README.md",
         "/LICENSE",
         "/NOTICE.md",
+        "/docs/decisions/README.md",
+        "/docs/decisions/2026-07-10-open-source-product-design.md",
+        "/docs/decisions/2026-07-13-multi-llm-council.md",
         "/docs/PROVIDERS.md",
         "/examples/world-cup-2026-live/tournament.json",
     ):
@@ -1428,7 +1419,6 @@ def test_package_build_targets_use_exact_tracked_file_allowlists() -> None:
     for forbidden in (
         "/.github",
         "/.superpowers",
-        "/docs/superpowers",
         "/outputs",
         "/raw_provider_payloads",
         "/scripts",
@@ -1582,11 +1572,12 @@ def test_contaminated_package_trees_cannot_enter_sdist_or_wheel(
         assert "C:\\Users\\" not in archive_text
 
 
-def test_internal_docs_are_unshipped_and_knockout_contract_is_public_english() -> None:
+def test_decision_records_and_knockout_contract_are_public_english() -> None:
     scanner = runpy.run_path(str(ROOT / "scripts/check_english_surface.py"))
     assert scanner["_is_public"](Path("docs/knockout-stage-output-contract.md"))
-    assert scanner["_is_internal"](Path("docs/superpowers/plans/internal.md"))
-    assert not scanner["_is_public"](Path("docs/superpowers/plans/internal.md"))
+    assert scanner["_is_public"](Path("docs/decisions/README.md"))
+    assert scanner["_is_internal"](Path(".superpowers/plans/internal.md"))
+    assert not scanner["_is_public"](Path(".superpowers/plans/internal.md"))
 
     contract = (ROOT / "docs/knockout-stage-output-contract.md").read_text(
         encoding="utf-8"
