@@ -13,6 +13,8 @@ import tomllib
 import zipfile
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).parents[1]
 QUICKSTART = "\n".join(
     (
@@ -417,6 +419,52 @@ def test_ci_mypy_gate_types_imported_public_bases() -> None:
         "scripts/check_english_surface.py",
         "docs/assets/architecture/generate.py",
     ]
+
+    metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    mypy_config = metadata.get("tool", {}).get("mypy")
+    assert isinstance(mypy_config, dict), "missing [tool.mypy] configuration"
+    assert mypy_config.get("strict") is True, "[tool.mypy] strict must be true"
+    assert mypy_config.get("follow_imports", "normal") == "normal", (
+        "[tool.mypy] follow_imports must be absent or normal"
+    )
+
+
+@pytest.mark.parametrize(
+    ("mypy_settings", "expected_message"),
+    [
+        ("strict = false\n", r"\[tool\.mypy\] strict must be true"),
+        (
+            'strict = true\nfollow_imports = "skip"\n',
+            r"\[tool\.mypy\] follow_imports must be absent or normal",
+        ),
+        (
+            'strict = true\nfollow_imports = "silent"\n',
+            r"\[tool\.mypy\] follow_imports must be absent or normal",
+        ),
+        (
+            'strict = true\nfollow_imports = "error"\n',
+            r"\[tool\.mypy\] follow_imports must be absent or normal",
+        ),
+    ],
+)
+def test_ci_mypy_gate_rejects_unsafe_configuration_mutations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mypy_settings: str,
+    expected_message: str,
+) -> None:
+    workflow_source = ROOT / ".github/workflows/ci.yml"
+    workflow_copy = tmp_path / ".github/workflows/ci.yml"
+    workflow_copy.parent.mkdir(parents=True)
+    shutil.copyfile(workflow_source, workflow_copy)
+    (tmp_path / "pyproject.toml").write_text(
+        f"[tool.mypy]\n{mypy_settings}",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(sys.modules[__name__], "ROOT", tmp_path)
+
+    with pytest.raises(AssertionError, match=expected_message):
+        test_ci_mypy_gate_types_imported_public_bases()
 
 
 def test_workflow_actions_are_pinned_to_immutable_commits() -> None:
