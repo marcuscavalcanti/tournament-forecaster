@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tournament-forecaster.example/schemas/council.schema.json",
+  "title": "Tournament Forecaster multi-LLM council configuration",
+  "$defs": {
+    "agent": {
+      "type": "object",
+      "required": ["id", "display_name", "provider", "model", "api_key_env"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+        },
+        "display_name": {"type": "string", "minLength": 1},
+        "provider": {
+          "enum": ["openai", "anthropic", "openai-compatible", "google-gemini"]
+        },
+        "model": {"type": "string", "minLength": 1},
+        "api_key_env": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$"
+        },
+        "endpoint": {
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "enabled": {"type": "boolean"},
+        "reasoning_effort": {
+          "enum": ["none", "minimal", "low", "medium", "high", "xhigh"]
+        },
+        "thinking_budget_tokens": {"type": "integer", "minimum": 1},
+        "max_output_tokens": {"type": "integer", "minimum": 128},
+        "temperature": {"type": "number", "minimum": 0, "maximum": 2}
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {"provider": {"const": "openai-compatible"}},
+            "required": ["provider"]
+          },
+          "then": {"required": ["endpoint"]}
+        }
+      ]
+    }
+  },
+  "type": "object",
+  "required": ["schema_version", "enabled", "agents"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "enabled": {"type": "boolean"},
+    "engine_weight": {"type": "number", "minimum": 0, "maximum": 1},
+    "council_weight": {"type": "number", "minimum": 0, "maximum": 1},
+    "rounds": {"type": "integer", "minimum": 1, "maximum": 3},
+    "minimum_valid_agents": {"type": "integer", "minimum": 1},
+    "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 3600},
+    "max_attempts": {"type": "integer", "minimum": 1, "maximum": 5},
+    "agents": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/agent"}
+    }
+  },
+  "additionalProperties": false
+}
