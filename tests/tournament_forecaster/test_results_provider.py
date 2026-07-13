@@ -130,6 +130,93 @@ def _patch_final_transition(
     monkeypatch.setattr(os, "replace", replace_with_injection)
 
 
+def _marked_config_bytes(config: Path, marker: str) -> bytes:
+    document = json.loads(config.read_text(encoding="utf-8"))
+    document["metadata"]["concurrent_edit"] = marker
+    return (json.dumps(document, indent=2, sort_keys=True) + "\n").encode()
+
+
+def _atomic_install_regular(
+    parent_descriptor: int,
+    destination_name: str,
+    content: bytes,
+    label: str,
+) -> tuple[int, int]:
+    temporary_name = f".{destination_name}.{label}.tmp"
+    descriptor = os.open(
+        temporary_name,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        0o600,
+        dir_fd=parent_descriptor,
+    )
+    try:
+        os.write(descriptor, content)
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    os.replace(
+        temporary_name,
+        destination_name,
+        src_dir_fd=parent_descriptor,
+        dst_dir_fd=parent_descriptor,
+    )
+    installed = os.stat(
+        destination_name,
+        dir_fd=parent_descriptor,
+        follow_symlinks=False,
+    )
+    return installed.st_dev, installed.st_ino
+
+
+def _atomic_install_non_regular(
+    parent_descriptor: int,
+    destination_name: str,
+    entry_kind: str,
+    symlink_target: Path,
+) -> tuple[int, int]:
+    temporary_name = f".{destination_name}.injected-{entry_kind}"
+    if entry_kind == "symlink":
+        os.symlink(str(symlink_target), temporary_name, dir_fd=parent_descriptor)
+    else:
+        os.mkfifo(temporary_name, 0o600, dir_fd=parent_descriptor)
+    os.replace(
+        temporary_name,
+        destination_name,
+        src_dir_fd=parent_descriptor,
+        dst_dir_fd=parent_descriptor,
+    )
+    installed = os.stat(
+        destination_name,
+        dir_fd=parent_descriptor,
+        follow_symlinks=False,
+    )
+    return installed.st_dev, installed.st_ino
+
+
+def _paths_with_identity(parent: Path, identity: tuple[int, int]) -> list[Path]:
+    matches: list[Path] = []
+    for candidate in parent.iterdir():
+        try:
+            candidate_stat = candidate.lstat()
+        except FileNotFoundError:
+            continue
+        if (candidate_stat.st_dev, candidate_stat.st_ino) == identity:
+            matches.append(candidate)
+    return matches
+
+
+def _regular_paths_with_bytes(parent: Path, content: bytes) -> list[Path]:
+    matches: list[Path] = []
+    for candidate in parent.iterdir():
+        try:
+            candidate_stat = candidate.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISREG(candidate_stat.st_mode) and candidate.read_bytes() == content:
+            matches.append(candidate)
+    return matches
+
+
 def test_preview_apply_and_repreview_classify_addition_then_idempotent(
     tmp_path: Path,
 ) -> None:
@@ -440,6 +527,140 @@ def test_apply_atomic_destination_replacement_inside_final_transition_survives(
         "preserved"
     )
     assert not list(tmp_path.glob(".tournament.json.*.tmp"))
+
+
+@pytest.mark.parametrize("entry_role", ["destination", "prepared"])
+@pytest.mark.parametrize("entry_kind", ["symlink", "fifo"])
+def test_apply_recovers_non_regular_entry_installed_inside_exchange(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    entry_role: str,
+    entry_kind: str,
+) -> None:
+    config = _config(tmp_path)
+    preview = preview_results(config, _json_source(tmp_path, [_result()]), format="json")
+    original_bytes = config.read_bytes()
+    sentinel = tmp_path / "symlink-target.txt"
+    sentinel.write_text("sentinel stays untouched\n", encoding="utf-8")
+    original_exchange = results_provider._atomic_exchange_at
+    exchange_calls = 0
+    injected_identity: tuple[int, int] | None = None
+
+    def exchange_with_non_regular_entry(
+        parent_descriptor: int,
+        source_name: str,
+        destination_name: str,
+    ) -> None:
+        nonlocal exchange_calls, injected_identity
+        if exchange_calls == 0:
+            victim_name = (
+                destination_name if entry_role == "destination" else source_name
+            )
+            injected_identity = _atomic_install_non_regular(
+                parent_descriptor,
+                victim_name,
+                entry_kind,
+                sentinel,
+            )
+        exchange_calls += 1
+        original_exchange(parent_descriptor, source_name, destination_name)
+
+    monkeypatch.setattr(
+        results_provider,
+        "_atomic_exchange_at",
+        exchange_with_non_regular_entry,
+    )
+
+    with pytest.raises(TournamentValidationError) as captured:
+        apply_results(config, preview)
+
+    assert injected_identity is not None
+    assert exchange_calls >= 2
+    assert sentinel.read_text(encoding="utf-8") == "sentinel stays untouched\n"
+    injected_paths = _paths_with_identity(tmp_path, injected_identity)
+    assert injected_paths
+    original_paths = _regular_paths_with_bytes(tmp_path, original_bytes)
+    assert original_paths
+    if entry_role == "destination":
+        assert (config.lstat().st_dev, config.lstat().st_ino) == injected_identity
+    else:
+        assert config.read_bytes() == original_bytes
+    recovery_paths = {
+        path
+        for path in (*injected_paths, *original_paths)
+        if path != config
+    }
+    assert recovery_paths
+    message = str(captured.value)
+    for recovery_path in recovery_paths:
+        assert str(recovery_path) in message
+
+
+def test_rollback_restores_newer_destination_and_reports_every_recovery_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    preview = preview_results(config, _json_source(tmp_path, [_result()]), format="json")
+    edit_c_bytes = _marked_config_bytes(config, "C-before-commit")
+    edit_d_bytes = _marked_config_bytes(config, "D-before-rollback")
+    original_exchange = results_provider._atomic_exchange_at
+    exchange_calls = 0
+    edit_c_identity: tuple[int, int] | None = None
+    edit_d_identity: tuple[int, int] | None = None
+
+    def exchange_with_two_destination_edits(
+        parent_descriptor: int,
+        source_name: str,
+        destination_name: str,
+    ) -> None:
+        nonlocal edit_c_identity, edit_d_identity, exchange_calls
+        if exchange_calls == 0:
+            edit_c_identity = _atomic_install_regular(
+                parent_descriptor,
+                destination_name,
+                edit_c_bytes,
+                "edit-c",
+            )
+        elif exchange_calls == 1:
+            edit_d_identity = _atomic_install_regular(
+                parent_descriptor,
+                destination_name,
+                edit_d_bytes,
+                "edit-d",
+            )
+        exchange_calls += 1
+        original_exchange(parent_descriptor, source_name, destination_name)
+
+    monkeypatch.setattr(
+        results_provider,
+        "_atomic_exchange_at",
+        exchange_with_two_destination_edits,
+    )
+
+    with pytest.raises(TournamentValidationError) as captured:
+        apply_results(config, preview)
+
+    assert edit_c_identity is not None
+    assert edit_d_identity is not None
+    assert exchange_calls >= 3
+    assert config.read_bytes() == edit_d_bytes
+    assert (config.stat().st_dev, config.stat().st_ino) == edit_d_identity
+    edit_c_paths = _paths_with_identity(tmp_path, edit_c_identity)
+    assert edit_c_paths
+    message = str(captured.value)
+    for recovery_path in edit_c_paths:
+        assert recovery_path != config
+        assert str(recovery_path) in message
+    hidden_paths = [
+        path
+        for path in tmp_path.iterdir()
+        if path.name.startswith(f".{config.name}.")
+        and path.name != f".{config.name}.lock"
+    ]
+    assert hidden_paths
+    for recovery_path in hidden_paths:
+        assert str(recovery_path) in message
 
 
 def test_apply_parent_swap_inside_final_transition_cannot_return_success(
