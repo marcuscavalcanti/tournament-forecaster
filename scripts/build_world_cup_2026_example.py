@@ -20,10 +20,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
-from tournament_forecaster.atomic_io import atomic_write_json, atomic_write_text
-from tournament_forecaster.backtest import evaluate_backtest, ratings_sha256
-from tournament_forecaster.errors import TournamentValidationError
-from tournament_forecaster.group_fixtures import generate_group_fixture_specs
+from tournament_forecaster.atomic_io import atomic_write_json, atomic_write_text  # noqa: E402
+from tournament_forecaster.backtest import evaluate_backtest, ratings_sha256  # noqa: E402
+from tournament_forecaster.errors import TournamentValidationError  # noqa: E402
+from tournament_forecaster.group_fixtures import generate_group_fixture_specs  # noqa: E402
 
 
 FIFA_ENDPOINT = "https://api.fifa.com/api/v3/calendar/matches"
@@ -47,6 +47,15 @@ _STAGE_IDS = {
     "final": "final",
     "play-off for third place": "third-place",
 }
+_STAGE_CAPACITIES = {
+    "group-stage": 72,
+    "round-of-32": 16,
+    "round-of-16": 8,
+    "quarter-finals": 4,
+    "semi-finals": 2,
+    "final": 1,
+}
+_COMPLETION_STAGE_ORDER = tuple(_STAGE_CAPACITIES)
 _RATINGS_BY_CODE = {
     "MEX": 1690.0, "RSA": 1470.0, "KOR": 1630.0, "CZE": 1580.0,
     "CAN": 1585.0, "BIH": 1560.0, "QAT": 1500.0, "SUI": 1710.0,
@@ -67,6 +76,32 @@ _RATINGS_BY_CODE = {
 class NormalizedFixture:
     completed: tuple[Mapping[str, object], ...]
     pending: tuple[Mapping[str, object], ...]
+
+
+def _validate_stage_completion_frontier(stage_counts: Mapping[str, int]) -> None:
+    """Require completed knockout facts to form one chronological frontier."""
+
+    for stage_id, capacity in _STAGE_CAPACITIES.items():
+        count = stage_counts.get(stage_id, 0)
+        if count < 0 or count > capacity:
+            raise TournamentValidationError(
+                f"invalid completed count for {stage_id}: {count}/{capacity}"
+            )
+    for stage_id in ("group-stage", "round-of-32", "round-of-16"):
+        if stage_counts.get(stage_id, 0) != _STAGE_CAPACITIES[stage_id]:
+            raise TournamentValidationError(
+                f"live snapshot requires all {stage_id} results before publication"
+            )
+    frontier_open = False
+    for stage_id in ("quarter-finals", "semi-finals", "final"):
+        count = stage_counts.get(stage_id, 0)
+        capacity = _STAGE_CAPACITIES[stage_id]
+        if frontier_open and count:
+            raise TournamentValidationError(
+                "completed matches cross the chronological completion frontier"
+            )
+        if count < capacity:
+            frontier_open = True
 
 
 def _localized(value: object) -> str:
@@ -345,9 +380,7 @@ def build_documents(
         )
         for stage_id in _STAGE_IDS.values()
     }
-    expected_total = {"group-stage": 72, "round-of-32": 16, "round-of-16": 8,
-                      "quarter-finals": 4, "semi-finals": 2, "final": 1}
-    for stage_id, count in expected_total.items():
+    for stage_id, count in _STAGE_CAPACITIES.items():
         if len(rows_by_stage[stage_id]) != count:
             raise TournamentValidationError(
                 f"FIFA fixture must contain {count} rows for {stage_id}"
@@ -475,17 +508,9 @@ def build_documents(
         completed_matches.append(match)
     stage_counts = {
         stage_id: sum(match["stage_id"] == stage_id for match in completed_matches)
-        for stage_id in ("group-stage", "round-of-32", "round-of-16", "quarter-finals")
+        for stage_id in _COMPLETION_STAGE_ORDER
     }
-    if stage_counts != {
-        "group-stage": 72,
-        "round-of-32": 16,
-        "round-of-16": 8,
-        "quarter-finals": 2,
-    }:
-        raise TournamentValidationError(
-            f"retrieval boundary does not match the 2026-07-11 snapshot: {stage_counts}"
-        )
+    _validate_stage_completion_frontier(stage_counts)
 
     ratings = {code_to_id[code]: rating for code, rating in _RATINGS_BY_CODE.items()}
     rating_hash = ratings_sha256(ratings)
@@ -593,12 +618,24 @@ observed class has the unique highest model probability. The uniform baseline us
 """
 
 
-def _readme(retrieved_at: str) -> str:
+def _readme(
+    retrieved_at: str,
+    *,
+    completed_fact_count: int,
+    stage_counts: Mapping[str, int],
+) -> str:
     return f"""# FIFA World Cup 2026 Live Snapshot
 
 This reproducible example starts from the official state retrieved at `{retrieved_at}`.
-It retains all 48 teams, all 72 completed group matches, 16 completed Round of 32
-matches, eight completed Round of 16 matches, and the two completed quarter-finals.
+It retains all 48 teams and {completed_fact_count} completed match facts:
+
+- `72/72` group-stage matches
+- `16/16` Round of 32 matches
+- `8/8` Round of 16 matches
+- `{stage_counts['quarter-finals']}/4` quarter-finals
+- `{stage_counts['semi-finals']}/2` semi-finals
+- `{stage_counts['final']}/1` final
+
 France is the default focus team and is already locked into the semi-finals.
 
 Run offline after installing the package:
@@ -614,7 +651,13 @@ entrant. Runtime forecast output directories are intentionally not checked in.
 """
 
 
-def _data_sources(retrieved_at: str, rating_hash: str) -> str:
+def _data_sources(
+    retrieved_at: str,
+    rating_hash: str,
+    *,
+    completed_fact_count: int,
+    stage_counts: Mapping[str, int],
+) -> str:
     return f"""# Data Sources
 
 ## Results and bracket
@@ -627,8 +670,10 @@ def _data_sources(retrieved_at: str, rating_hash: str) -> str:
 - Final result types accepted: `1`, `2`, and `3`; type `3` is completed extra time
 - Singular FIFA stage label `Quarter-final` maps to `quarter-finals`
 
-The snapshot has 98 completed facts. Norway–England and Argentina–Switzerland were
-not final at retrieval and are bracket fixtures, not completed results.
+The snapshot has {completed_fact_count} completed facts. At retrieval,
+`{stage_counts['quarter-finals']}/4` quarter-finals,
+`{stage_counts['semi-finals']}/2` semi-finals, and
+`{stage_counts['final']}/1` final were complete.
 
 ## Ratings
 
@@ -661,14 +706,37 @@ def write_example(
     *,
     retrieved_at: str,
 ) -> None:
+    completed_matches = tournament.get("completed_matches")
+    if not isinstance(completed_matches, Sequence):
+        raise TournamentValidationError("example tournament requires completed_matches")
+    stage_counts = {
+        stage_id: sum(
+            isinstance(match, Mapping) and match.get("stage_id") == stage_id
+            for match in completed_matches
+        )
+        for stage_id in _COMPLETION_STAGE_ORDER
+    }
+    completed_fact_count = len(completed_matches)
     atomic_write_json(output_dir / "tournament.json", tournament)
     atomic_write_json(output_dir / "backtest.json", backtest)
     atomic_write_json(output_dir / "backtest-report.json", report)
     atomic_write_text(output_dir / "backtest-report.md", _report_markdown(report))
-    atomic_write_text(output_dir / "README.md", _readme(retrieved_at))
+    atomic_write_text(
+        output_dir / "README.md",
+        _readme(
+            retrieved_at,
+            completed_fact_count=completed_fact_count,
+            stage_counts=stage_counts,
+        ),
+    )
     atomic_write_text(
         output_dir / "DATA_SOURCES.md",
-        _data_sources(retrieved_at, str(report["ratings_sha256"])),
+        _data_sources(
+            retrieved_at,
+            str(report["ratings_sha256"]),
+            completed_fact_count=completed_fact_count,
+            stage_counts=stage_counts,
+        ),
     )
 
 

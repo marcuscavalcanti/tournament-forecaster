@@ -1389,6 +1389,26 @@
       "winner_team_id": "france"
     },
     {
+      "away_team_id": "switzerland",
+      "home_team_id": "argentina",
+      "match_id": "400021537",
+      "metadata": {
+        "fifa_away_team_id": "switzerland",
+        "fifa_home_team_id": "argentina",
+        "kickoff_at": "2026-07-12T01:00:00Z",
+        "result_type": 3,
+        "source": "FIFA calendar API",
+        "source_id": "400021537",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021537"
+      },
+      "score": {
+        "away": 1,
+        "home": 3
+      },
+      "stage_id": "quarter-finals",
+      "winner_team_id": "argentina"
+    },
+    {
       "away_team_id": "belgium",
       "home_team_id": "spain",
       "match_id": "400021538",
@@ -1407,6 +1427,26 @@
       },
       "stage_id": "quarter-finals",
       "winner_team_id": "spain"
+    },
+    {
+      "away_team_id": "england",
+      "home_team_id": "norway",
+      "match_id": "400021539",
+      "metadata": {
+        "fifa_away_team_id": "england",
+        "fifa_home_team_id": "norway",
+        "kickoff_at": "2026-07-11T21:00:00Z",
+        "result_type": 3,
+        "source": "FIFA calendar API",
+        "source_id": "400021539",
+        "source_url": "https://api.fifa.com/api/v3/calendar/matches#400021539"
+      },
+      "score": {
+        "away": 2,
+        "home": 1
+      },
+      "stage_id": "quarter-finals",
+      "winner_team_id": "england"
     },
     {
       "away_team_id": "egypt",
@@ -1899,13 +1939,13 @@
       "source": "project-authored pre-tournament seed"
     },
     "snapshot": {
-      "completed_fact_count": 98,
+      "completed_fact_count": 100,
       "endpoint": "https://api.fifa.com/api/v3/calendar/matches",
       "parameters": {
         "idCompetition": "17",
         "idSeason": "285023"
       },
-      "retrieved_at": "2026-07-11T19:54:25Z",
+      "retrieved_at": "2026-07-13T12:21:03Z",
       "source": "official FIFA calendar API"
     }
   },

@@ -6,7 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from scripts.build_world_cup_2026_example import normalize_fifa_fixture
+from scripts.build_world_cup_2026_example import (
+    _validate_stage_completion_frontier,
+    normalize_fifa_fixture,
+)
 from tournament_forecaster.backtest import evaluate_backtest
 from tournament_forecaster.config import load_tournament
 from tournament_forecaster.domain import SimulationOptions
@@ -107,19 +110,55 @@ def test_pending_bracket_row_reads_top_level_winner_placeholders() -> None:
     assert fixture.pending[0]["away_code"] == "W102"
 
 
-def test_checked_live_example_has_98_facts_and_simulates_full_path() -> None:
+@pytest.mark.parametrize(
+    "late_stage_counts",
+    [
+        {"quarter-finals": 2, "semi-finals": 0, "final": 0},
+        {"quarter-finals": 4, "semi-finals": 0, "final": 0},
+        {"quarter-finals": 4, "semi-finals": 1, "final": 0},
+        {"quarter-finals": 4, "semi-finals": 2, "final": 1},
+    ],
+)
+def test_live_builder_accepts_a_progressive_completion_frontier(
+    late_stage_counts: dict[str, int],
+) -> None:
+    _validate_stage_completion_frontier(
+        {
+            "group-stage": 72,
+            "round-of-32": 16,
+            "round-of-16": 8,
+            **late_stage_counts,
+        }
+    )
+
+
+def test_live_builder_rejects_completed_later_stage_with_incomplete_parent() -> None:
+    with pytest.raises(TournamentValidationError, match="completion frontier"):
+        _validate_stage_completion_frontier(
+            {
+                "group-stage": 72,
+                "round-of-32": 16,
+                "round-of-16": 8,
+                "quarter-finals": 3,
+                "semi-finals": 1,
+                "final": 0,
+            }
+        )
+
+
+def test_checked_live_example_has_100_facts_and_simulates_full_path() -> None:
     tournament = load_tournament(EXAMPLE / "tournament.json")
     counts: dict[str, int] = {}
     for match in tournament.completed_matches:
         counts[match.stage_id] = counts.get(match.stage_id, 0) + 1
 
     assert len(tournament.teams) == 48
-    assert len(tournament.completed_matches) == 98
+    assert len(tournament.completed_matches) == 100
     assert counts == {
         "group-stage": 72,
         "round-of-32": 16,
         "round-of-16": 8,
-        "quarter-finals": 2,
+        "quarter-finals": 4,
     }
     assert tournament.focus_team_id == "france"
     assert {match.match_id for match in tournament.completed_matches} >= {
@@ -127,6 +166,8 @@ def test_checked_live_example_has_98_facts_and_simulates_full_path() -> None:
         "400021521",
         "400021536",
         "400021538",
+        "400021537",
+        "400021539",
     }
     forecast = simulate_tournament(
         tournament,

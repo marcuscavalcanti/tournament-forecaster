@@ -4,14 +4,16 @@
 
 - Source: official FIFA calendar API `https://api.fifa.com/api/v3/calendar/matches`
 - Parameters: `idCompetition=17`, `idSeason=285023`, `language=en`, `count=500`
-- Retrieved at: `2026-07-11T19:54:25Z`
+- Retrieved at: `2026-07-13T12:21:03Z`
 - Checked-in data: normalized match facts, source IDs, schedule IDs, and team IDs only
 - Raw API response: never checked in
 - Final result types accepted: `1`, `2`, and `3`; type `3` is completed extra time
 - Singular FIFA stage label `Quarter-final` maps to `quarter-finals`
 
-The snapshot has 98 completed facts. Norway–England and Argentina–Switzerland were
-not final at retrieval and are bracket fixtures, not completed results.
+The snapshot has 100 completed facts. At retrieval,
+`4/4` quarter-finals,
+`0/2` semi-finals, and
+`0/1` final were complete.
 
 ## Ratings
 
