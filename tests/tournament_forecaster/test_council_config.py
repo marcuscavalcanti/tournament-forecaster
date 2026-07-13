@@ -150,6 +150,18 @@ def test_rejects_unsafe_or_incoherent_council_configuration(
         load_council_document(document)
 
 
+def test_rejects_a_custom_blend_policy_even_when_weights_sum_to_one() -> None:
+    document = _document()
+    document["engine_weight"] = 0.6
+    document["council_weight"] = 0.4
+
+    with pytest.raises(
+        TournamentValidationError,
+        match="council blend policy must be exactly 0.55 engine and 0.45 council",
+    ):
+        load_council_document(document)
+
+
 def test_rejects_unknown_properties_instead_of_silently_ignoring_typos() -> None:
     document = _document()
     document["council_weigth"] = 0.45

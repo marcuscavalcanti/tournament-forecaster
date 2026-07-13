@@ -118,6 +118,23 @@ def test_forecast_schema_rejects_an_underspecified_council_mapping() -> None:
         Draft202012Validator(schema).validate(document)
 
 
+def test_forecast_schema_accepts_only_the_exact_legacy_disabled_council() -> None:
+    from tournament_forecaster.resources import resource_path
+
+    with resource_path("schemas", "forecast.schema.json") as schema_path:
+        schema = json.loads(Path(schema_path).read_text(encoding="utf-8"))
+    validator = Draft202012Validator(schema)
+
+    validator.validate(replace(_forecast(), council={"enabled": False}).to_dict())
+    with pytest.raises(ValidationError):
+        validator.validate(
+            replace(
+                _forecast(),
+                council={"enabled": False, "unexpected": "unbounded"},
+            ).to_dict()
+        )
+
+
 def test_report_bundle_is_one_versioned_generation_at_stable_public_paths(
     tmp_path: Path,
 ) -> None:

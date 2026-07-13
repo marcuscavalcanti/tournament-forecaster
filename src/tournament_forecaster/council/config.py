@@ -29,6 +29,8 @@ _DEFAULT_ENDPOINTS = {
         "{model}:generateContent"
     ),
 }
+ENGINE_WEIGHT = 0.55
+COUNCIL_WEIGHT = 0.45
 _ROOT_PROPERTIES = frozenset(
     {
         "schema_version",
@@ -242,13 +244,13 @@ def load_council_document(value: object) -> CouncilConfig:
         maximum=1,
     )
     engine_weight = _finite_number(
-        document.get("engine_weight", 0.55),
+        document.get("engine_weight", ENGINE_WEIGHT),
         "council engine_weight",
         minimum=0.0,
         maximum=1.0,
     )
     council_weight = _finite_number(
-        document.get("council_weight", 0.45),
+        document.get("council_weight", COUNCIL_WEIGHT),
         "council council_weight",
         minimum=0.0,
         maximum=1.0,
@@ -256,6 +258,14 @@ def load_council_document(value: object) -> CouncilConfig:
     if not math.isclose(engine_weight + council_weight, 1.0, abs_tol=1e-9):
         raise TournamentValidationError(
             "council engine_weight and council_weight must sum to 1"
+        )
+    if not math.isclose(engine_weight, ENGINE_WEIGHT, abs_tol=1e-9) or not math.isclose(
+        council_weight,
+        COUNCIL_WEIGHT,
+        abs_tol=1e-9,
+    ):
+        raise TournamentValidationError(
+            "council blend policy must be exactly 0.55 engine and 0.45 council"
         )
     raw_agents = document.get("agents")
     if not isinstance(raw_agents, list):

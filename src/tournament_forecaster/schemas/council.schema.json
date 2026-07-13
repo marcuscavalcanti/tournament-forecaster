@@ -49,8 +49,8 @@
   "properties": {
     "schema_version": {"const": 1},
     "enabled": {"type": "boolean"},
-    "engine_weight": {"type": "number", "minimum": 0, "maximum": 1},
-    "council_weight": {"type": "number", "minimum": 0, "maximum": 1},
+    "engine_weight": {"const": 0.55},
+    "council_weight": {"const": 0.45},
     "rounds": {"type": "integer", "minimum": 1, "maximum": 3},
     "minimum_valid_agents": {"type": "integer", "minimum": 1},
     "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 3600},
