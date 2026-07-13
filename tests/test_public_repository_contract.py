@@ -1203,7 +1203,7 @@ def test_makefile_help_is_english_and_scanned() -> None:
     assert scanner["_is_public"](Path("Makefile"))
 
     completed = subprocess.run(
-        ["make", "help"],
+        ["make", "--no-print-directory", "help"],
         cwd=ROOT,
         text=True,
         capture_output=True,
