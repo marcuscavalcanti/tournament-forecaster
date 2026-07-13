@@ -129,14 +129,13 @@ def _redact_parameters(parameters: str) -> str:
 
 
 def _redact_fragment(fragment: str) -> str:
-    if "=" not in fragment:
-        return fragment
     query_marker = fragment.find("?")
-    first_assignment = fragment.find("=")
-    if 0 <= query_marker < first_assignment:
+    if query_marker >= 0 and "=" in fragment[query_marker + 1 :]:
         return fragment[: query_marker + 1] + _redact_parameters(
             fragment[query_marker + 1 :]
         )
+    if "=" not in fragment:
+        return fragment
     return _redact_parameters(fragment)
 
 

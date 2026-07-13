@@ -140,6 +140,15 @@ def test_redact_url_preserves_fragment_routes_while_redacting_route_parameters()
     assert redacted.endswith("access_token=REDACTED&view=summary")
 
 
+def test_redact_url_preserves_route_assignments_before_fragment_query_credentials() -> None:
+    url = "https://example.test/#/route=compact?access_token=fragment-secret"
+
+    redacted = redact_url(url)
+
+    assert redacted == "https://example.test/#/route=compact?access_token=REDACTED"
+    assert "fragment-secret" not in redacted
+
+
 def test_preview_odds_never_persists_oauth_fragment_secrets(tmp_path: Path) -> None:
     source = _odds_source(
         tmp_path,

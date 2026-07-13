@@ -152,6 +152,34 @@ def test_update_market_odds_without_api_key_is_optional_unless_required(tmp_path
     assert updated["market_outright_odds"] == []
 
 
+def test_update_market_odds_redacts_generic_credentials_from_persisted_api_provenance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config_path = _config_path(tmp_path)
+    source_url = (
+        "https://user:pass@odds.example.test/v4/odds?API_KEY=case-secret&"
+        "provider_token=alias-secret#/route=compact?access_token=fragment-secret&view=summary"
+    )
+
+    monkeypatch.setattr(
+        market_odds,
+        "_odds_api_text_from_url",
+        lambda _url: (source_url, json.dumps(_odds_payload())),
+    )
+
+    assert market_odds.main(["--config", str(config_path), "--from-the-odds-api", "--apply"]) == 0
+
+    persisted = config_path.read_text(encoding="utf-8")
+    summary = capsys.readouterr().out
+    for secret in ("user", "pass", "case-secret", "alias-secret", "fragment-secret"):
+        assert secret not in persisted
+        assert secret not in summary
+    assert "REDACTED" in persisted
+    assert "REDACTED" in summary
+
+
 @pytest.mark.parametrize(
     ("option", "content"),
     [
