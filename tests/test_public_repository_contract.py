@@ -995,6 +995,18 @@ def test_workflows_are_offline_scoped_and_do_not_publish() -> None:
     assert "publish" not in release
 
 
+def test_ci_pytest_targets_exist_in_the_repository() -> None:
+    ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    targets = re.findall(
+        r"(?m)^\s+(tests/[A-Za-z0-9_./-]+\.py)(?:::[A-Za-z0-9_]+)?\s*$",
+        ci,
+    )
+
+    assert targets
+    missing = sorted(path for path in targets if not (ROOT / path).is_file())
+    assert not missing, f"CI references missing pytest target(s): {missing}"
+
+
 def test_ci_quality_gates_compile_and_type_check_the_entire_public_package() -> None:
     _assert_quality_gate_contract(
         (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"),

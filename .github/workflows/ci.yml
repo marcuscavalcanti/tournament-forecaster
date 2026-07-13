@@ -36,7 +36,7 @@ jobs:
           tests/test_public_repository_contract.py
           tests/test_readme_diagrams.py
           tests/presets/test_format_contracts.py
-          tests/examples/test_world_cup_2026_live.py
+          tests/examples/test_openfootball_world_cup_2026.py
           tests/test_tournament_forecast_cli.py
 
   quality-and-wheel:
