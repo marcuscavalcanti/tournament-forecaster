@@ -10,6 +10,14 @@ htmlcov/
 
 # Ambientes locais
 .venv/
+*.local.json
+attachments/
+raw_provider_payloads/
+provider_raw/
+*.raw-provider.json
+dist/
+build/
+*.egg-info/
 .venv_check/
 venv/
 env/
@@ -32,6 +40,7 @@ data/
 outputs/
 .backups/
 .worktrees/
+.superpowers/
 *.log
 *.tmp
 *.temp

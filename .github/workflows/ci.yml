@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  TOURNAMENT_FORECAST_OFFLINE: "1"
+
+jobs:
+  offline-product:
+    name: Offline product / Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e '.[dev]'
+      - name: Public contract, schemas, presets, example, and backtest tests
+        run: >-
+          pytest -q --disable-socket
+          tests/test_public_repository_contract.py
+          tests/presets/test_format_contracts.py
+          tests/examples/test_world_cup_2026_live.py
+          tests/test_tournament_forecast_cli.py
+      - name: Run the checked-in backtest offline
+        run: tournament-forecast backtest --input examples/world-cup-2026-live/backtest.json
+
+  quality-and-wheel:
+    name: Scoped quality and clean wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e '.[dev]'
+      - name: Ruff public package and generic tests
+        run: >-
+          ruff check
+          src/tournament_forecaster
+          tests/tournament_forecaster
+          tests/presets
+          tests/examples
+          tests/test_tournament_forecast_cli.py
+          tests/test_clean_wheel.py
+          tests/test_public_repository_contract.py
+          scripts/check_english_surface.py
+          --exclude src/tournament_forecaster/compatibility
+          --exclude tests/tournament_forecaster/test_legacy_compatibility.py
+          --select E4,E7,E9,F
+      - name: Strict Ruff for the public repository gate
+        run: >-
+          ruff check
+          scripts/check_english_surface.py
+          tests/test_public_repository_contract.py
+          --select E,F,I,UP,B,SIM
+      - name: Mypy public package and English scanner
+        run: >-
+          mypy
+          src/tournament_forecaster/config.py
+          src/tournament_forecaster/resources.py
+          src/tournament_forecaster/providers/results.py
+          src/tournament_forecaster/backtest.py
+          scripts/check_english_surface.py
+          --follow-imports=skip
+      - name: English public surface
+        run: python scripts/check_english_surface.py
+      - name: Build and inspect clean wheel
+        run: pytest -q tests/test_clean_wheel.py
+      - name: Build distributions
+        run: python -m build
+      - name: Check distribution metadata
+        run: python -m twine check dist/*
