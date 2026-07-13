@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import tomllib
@@ -94,6 +95,53 @@ def test_makefile_advertises_only_generic_public_commands() -> None:
     assert completed.stdout.startswith("Main commands:\n")
     for command in ("quickstart", "validate", "coverage", "complexity", "diagrams"):
         assert f"make {command}" in completed.stdout
+
+
+def test_pristine_clone_make_validate_installs_declared_test_dependencies(
+    tmp_path: Path,
+) -> None:
+    if os.environ.get("TOURNAMENT_FORECASTER_INNER_MAKE_VALIDATE") == "1":
+        return
+
+    clone = tmp_path / "pristine-clone"
+    cloned = subprocess.run(
+        ["git", "clone", "--local", "--no-hardlinks", "--quiet", str(ROOT), str(clone)],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+    )
+    assert cloned.returncode == 0, cloned.stderr
+
+    patch = subprocess.run(
+        ["git", "diff", "--binary", "HEAD"],
+        cwd=ROOT,
+        text=False,
+        capture_output=True,
+        check=True,
+    ).stdout
+    if patch:
+        applied = subprocess.run(
+            ["git", "apply", "--whitespace=nowarn", "-"],
+            cwd=clone,
+            input=patch,
+            capture_output=True,
+        )
+        assert applied.returncode == 0, applied.stderr.decode("utf-8")
+
+    environment = os.environ.copy()
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    environment["TOURNAMENT_FORECASTER_INNER_MAKE_VALIDATE"] = "1"
+    for key in tuple(environment):
+        if key.endswith("_API_KEY"):
+            environment.pop(key)
+    validated = subprocess.run(
+        ["make", "validate"],
+        cwd=clone,
+        env=environment,
+        text=True,
+        capture_output=True,
+    )
+    assert validated.returncode == 0, validated.stdout + validated.stderr
 
 
 def test_workflow_actions_are_pinned_and_release_scans_full_history() -> None:
