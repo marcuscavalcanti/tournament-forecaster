@@ -195,7 +195,7 @@ def _atomic_install_non_regular(
 
 def _paths_with_identity(parent: Path, identity: tuple[int, int]) -> list[Path]:
     matches: list[Path] = []
-    for candidate in parent.iterdir():
+    for candidate in parent.rglob("*"):
         try:
             candidate_stat = candidate.lstat()
         except FileNotFoundError:
@@ -207,7 +207,7 @@ def _paths_with_identity(parent: Path, identity: tuple[int, int]) -> list[Path]:
 
 def _regular_paths_with_bytes(parent: Path, content: bytes) -> list[Path]:
     matches: list[Path] = []
-    for candidate in parent.iterdir():
+    for candidate in parent.rglob("*"):
         try:
             candidate_stat = candidate.lstat()
         except FileNotFoundError:
@@ -543,7 +543,7 @@ def test_apply_recovers_non_regular_entry_installed_inside_exchange(
     sentinel = tmp_path / "symlink-target.txt"
     sentinel.write_text("sentinel stays untouched\n", encoding="utf-8")
     original_exchange = results_provider._atomic_exchange_at
-    exchange_calls = 0
+    original_entry_identity = results_provider._entry_identity_at
     injected_identity: tuple[int, int] | None = None
 
     def exchange_with_non_regular_entry(
@@ -551,8 +551,17 @@ def test_apply_recovers_non_regular_entry_installed_inside_exchange(
         source_name: str,
         destination_name: str,
     ) -> None:
-        nonlocal exchange_calls, injected_identity
-        if exchange_calls == 0:
+        nonlocal injected_identity
+        destination_identity = original_entry_identity(
+            parent_descriptor,
+            destination_name,
+            "test commit destination",
+        )
+        if (
+            injected_identity is None
+            and (destination_identity.device, destination_identity.inode)
+            == (preview.config_identity.device, preview.config_identity.inode)
+        ):
             victim_name = (
                 destination_name if entry_role == "destination" else source_name
             )
@@ -562,7 +571,6 @@ def test_apply_recovers_non_regular_entry_installed_inside_exchange(
                 entry_kind,
                 sentinel,
             )
-        exchange_calls += 1
         original_exchange(parent_descriptor, source_name, destination_name)
 
     monkeypatch.setattr(
@@ -575,7 +583,6 @@ def test_apply_recovers_non_regular_entry_installed_inside_exchange(
         apply_results(config, preview)
 
     assert injected_identity is not None
-    assert exchange_calls >= 2
     assert sentinel.read_text(encoding="utf-8") == "sentinel stays untouched\n"
     injected_paths = _paths_with_identity(tmp_path, injected_identity)
     assert injected_paths
@@ -596,6 +603,139 @@ def test_apply_recovers_non_regular_entry_installed_inside_exchange(
         assert str(recovery_path) in message
 
 
+@pytest.mark.parametrize("entry_kind", ["regular", "symlink", "fifo"])
+def test_cleanup_quarantines_entry_substituted_after_exact_role_check(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    entry_kind: str,
+) -> None:
+    config = _config(tmp_path)
+    preview = preview_results(config, _json_source(tmp_path, [_result()]), format="json")
+    original_bytes = config.read_bytes()
+    concurrent_bytes = _marked_config_bytes(config, f"cleanup-{entry_kind}")
+    sentinel = tmp_path / "cleanup-symlink-target.txt"
+    sentinel.write_text("sentinel stays untouched\n", encoding="utf-8")
+    original_exact_check = results_provider._entry_is_exact_regular_file_at
+    original_unlink = os.unlink
+    original_rename = os.rename
+    cleanup_armed = False
+    exchange_name: str | None = None
+    injected_identity: tuple[int, int] | None = None
+
+    def exact_check_then_arm_cleanup(
+        parent_descriptor: int,
+        filename: str,
+        canonical_path: Path,
+        expected_identity: object,
+        expected_bytes: bytes,
+    ) -> bool:
+        nonlocal cleanup_armed, exchange_name
+        exact = original_exact_check(
+            parent_descriptor,
+            filename,
+            canonical_path,
+            expected_identity,
+            expected_bytes,
+        )
+        if (
+            exact
+            and expected_identity == preview.config_identity
+            and filename != config.name
+        ):
+            cleanup_armed = True
+            exchange_name = filename
+        return exact
+
+    def inject_substitute(parent_descriptor: int, filename: str) -> None:
+        nonlocal injected_identity
+        if injected_identity is not None:
+            return
+        if entry_kind == "regular":
+            injected_identity = _atomic_install_regular(
+                parent_descriptor,
+                filename,
+                concurrent_bytes,
+                "cleanup-substitute",
+            )
+        else:
+            injected_identity = _atomic_install_non_regular(
+                parent_descriptor,
+                filename,
+                entry_kind,
+                sentinel,
+            )
+
+    def unlink_after_substitution(
+        path: str | os.PathLike[str],
+        *,
+        dir_fd: int | None = None,
+    ) -> None:
+        if (
+            cleanup_armed
+            and exchange_name is not None
+            and os.fspath(path) == exchange_name
+            and dir_fd is not None
+        ):
+            inject_substitute(dir_fd, exchange_name)
+        original_unlink(path, dir_fd=dir_fd)
+
+    def rename_after_substitution(
+        source: str | os.PathLike[str],
+        destination: str | os.PathLike[str],
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+    ) -> None:
+        if (
+            cleanup_armed
+            and exchange_name is not None
+            and os.fspath(source) == exchange_name
+            and src_dir_fd is not None
+        ):
+            inject_substitute(src_dir_fd, exchange_name)
+        original_rename(
+            source,
+            destination,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+        )
+
+    monkeypatch.setattr(
+        results_provider,
+        "_entry_is_exact_regular_file_at",
+        exact_check_then_arm_cleanup,
+    )
+    monkeypatch.setattr(os, "unlink", unlink_after_substitution)
+    monkeypatch.setattr(os, "rename", rename_after_substitution)
+    supported_dir_fd = set(os.supports_dir_fd)
+    supported_dir_fd.discard(original_unlink)
+    supported_dir_fd.discard(original_rename)
+    supported_dir_fd.update({unlink_after_substitution, rename_after_substitution})
+    monkeypatch.setattr(os, "supports_dir_fd", supported_dir_fd)
+
+    with pytest.raises(TournamentValidationError) as captured:
+        apply_results(config, preview)
+
+    assert injected_identity is not None
+    assert config.read_bytes() == original_bytes
+    assert json.loads(config.read_bytes())["completed_matches"] == []
+    assert sentinel.read_text(encoding="utf-8") == "sentinel stays untouched\n"
+    injected_paths = _paths_with_identity(tmp_path, injected_identity)
+    assert injected_paths
+    message = str(captured.value)
+    for recovery_path in injected_paths:
+        assert recovery_path != config
+        assert str(recovery_path) in message
+    hidden_paths = [
+        path
+        for path in tmp_path.iterdir()
+        if path.name.startswith(f".{config.name}.")
+        and path.name != f".{config.name}.lock"
+    ]
+    for recovery_path in hidden_paths:
+        assert str(recovery_path) in message
+
+
 def test_rollback_restores_newer_destination_and_reports_every_recovery_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -605,7 +745,7 @@ def test_rollback_restores_newer_destination_and_reports_every_recovery_path(
     edit_c_bytes = _marked_config_bytes(config, "C-before-commit")
     edit_d_bytes = _marked_config_bytes(config, "D-before-rollback")
     original_exchange = results_provider._atomic_exchange_at
-    exchange_calls = 0
+    original_entry_identity = results_provider._entry_identity_at
     edit_c_identity: tuple[int, int] | None = None
     edit_d_identity: tuple[int, int] | None = None
 
@@ -614,22 +754,36 @@ def test_rollback_restores_newer_destination_and_reports_every_recovery_path(
         source_name: str,
         destination_name: str,
     ) -> None:
-        nonlocal edit_c_identity, edit_d_identity, exchange_calls
-        if exchange_calls == 0:
+        nonlocal edit_c_identity, edit_d_identity
+        destination_identity = original_entry_identity(
+            parent_descriptor,
+            destination_name,
+            "test recovery destination",
+        )
+        if (
+            edit_c_identity is None
+            and (destination_identity.device, destination_identity.inode)
+            == (preview.config_identity.device, preview.config_identity.inode)
+        ):
             edit_c_identity = _atomic_install_regular(
                 parent_descriptor,
                 destination_name,
                 edit_c_bytes,
                 "edit-c",
             )
-        elif exchange_calls == 1:
-            edit_d_identity = _atomic_install_regular(
+        elif edit_c_identity is not None and edit_d_identity is None:
+            source_identity = original_entry_identity(
                 parent_descriptor,
-                destination_name,
-                edit_d_bytes,
-                "edit-d",
+                source_name,
+                "test rollback source",
             )
-        exchange_calls += 1
+            if (source_identity.device, source_identity.inode) == edit_c_identity:
+                edit_d_identity = _atomic_install_regular(
+                    parent_descriptor,
+                    destination_name,
+                    edit_d_bytes,
+                    "edit-d",
+                )
         original_exchange(parent_descriptor, source_name, destination_name)
 
     monkeypatch.setattr(
@@ -643,7 +797,6 @@ def test_rollback_restores_newer_destination_and_reports_every_recovery_path(
 
     assert edit_c_identity is not None
     assert edit_d_identity is not None
-    assert exchange_calls >= 3
     assert config.read_bytes() == edit_d_bytes
     assert (config.stat().st_dev, config.stat().st_ino) == edit_d_identity
     edit_c_paths = _paths_with_identity(tmp_path, edit_c_identity)
@@ -659,6 +812,97 @@ def test_rollback_restores_newer_destination_and_reports_every_recovery_path(
         and path.name != f".{config.name}.lock"
     ]
     assert hidden_paths
+    for recovery_path in hidden_paths:
+        assert str(recovery_path) in message
+
+
+def test_destination_installed_after_rollback_remains_canonical(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    preview = preview_results(config, _json_source(tmp_path, [_result()]), format="json")
+    original_bytes = config.read_bytes()
+    edit_c_bytes = _marked_config_bytes(config, "C-before-commit")
+    edit_d_bytes = _marked_config_bytes(config, "D-after-rollback")
+    original_exchange = results_provider._atomic_exchange_at
+    original_entry_identity = results_provider._entry_identity_at
+    edit_c_identity: tuple[int, int] | None = None
+    edit_d_identity: tuple[int, int] | None = None
+
+    def exchange_with_initial_destination_edit(
+        parent_descriptor: int,
+        source_name: str,
+        destination_name: str,
+    ) -> None:
+        nonlocal edit_c_identity
+        destination_identity = original_entry_identity(
+            parent_descriptor,
+            destination_name,
+            "test destination",
+        )
+        if (
+            edit_c_identity is None
+            and (destination_identity.device, destination_identity.inode)
+            == (preview.config_identity.device, preview.config_identity.inode)
+        ):
+            edit_c_identity = _atomic_install_regular(
+                parent_descriptor,
+                destination_name,
+                edit_c_bytes,
+                "edit-c-before-commit",
+            )
+        original_exchange(parent_descriptor, source_name, destination_name)
+
+    def observe_with_post_rollback_destination(
+        parent_descriptor: int,
+        filename: str,
+        label: str,
+    ) -> object:
+        nonlocal edit_d_identity
+        if label == "rolled-back source" and edit_d_identity is None:
+            edit_d_identity = _atomic_install_regular(
+                parent_descriptor,
+                config.name,
+                edit_d_bytes,
+                "edit-d-after-rollback",
+            )
+        return original_entry_identity(parent_descriptor, filename, label)
+
+    monkeypatch.setattr(
+        results_provider,
+        "_atomic_exchange_at",
+        exchange_with_initial_destination_edit,
+    )
+    monkeypatch.setattr(
+        results_provider,
+        "_entry_identity_at",
+        observe_with_post_rollback_destination,
+    )
+
+    with pytest.raises(TournamentValidationError) as captured:
+        apply_results(config, preview)
+
+    assert edit_c_identity is not None
+    assert edit_d_identity is not None
+    assert config.read_bytes() == edit_d_bytes
+    assert (config.stat().st_dev, config.stat().st_ino) == edit_d_identity
+    assert json.loads(config.read_bytes())["metadata"]["concurrent_edit"] == (
+        "D-after-rollback"
+    )
+    original_paths = _regular_paths_with_bytes(tmp_path, original_bytes)
+    assert original_paths
+    message = str(captured.value)
+    assert "installed after rollback remains canonical" in message
+    for recovery_path in original_paths:
+        assert recovery_path != config
+        assert str(recovery_path) in message
+    hidden_paths = [
+        path
+        for path in tmp_path.iterdir()
+        if path.name.startswith(f".{config.name}.")
+        and path.name != f".{config.name}.lock"
+    ]
     for recovery_path in hidden_paths:
         assert str(recovery_path) in message
 
