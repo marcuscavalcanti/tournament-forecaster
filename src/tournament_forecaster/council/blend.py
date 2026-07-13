@@ -102,7 +102,7 @@ def _conditional_intervals(
             else consensus_stages.get(stage_id)
         )
         if council_probability is None:
-            intervals[stage_id] = tuple(bounds)
+            intervals[stage_id] = (float(bounds[0]), float(bounds[1]))
             continue
         intervals[stage_id] = (
             config.engine_weight * bounds[0]
@@ -122,6 +122,13 @@ def apply_council(
 
     run_id = _derived_run_id(baseline, config, run)
     generated_at = datetime.now(UTC).isoformat()
+    if run.status == "disabled":
+        return replace(
+            baseline,
+            run_id=run_id,
+            generated_at=generated_at,
+            council=_metadata(baseline, config, run, status="disabled"),
+        )
     if run.status != "consensus" or run.consensus is None:
         reason = run.reason or "council did not produce a usable consensus"
         return replace(

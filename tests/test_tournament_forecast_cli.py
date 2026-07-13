@@ -8,8 +8,49 @@ from pathlib import Path
 
 import pytest
 
+from tournament_forecaster.council.models import CouncilOpinion
+from tournament_forecaster.council.runner import CouncilRun
+
 
 REPOSITORY_ROOT = Path(__file__).parents[1]
+
+
+def _write_council_config(tmp_path: Path, *, enabled: bool = True) -> Path:
+    path = tmp_path / "council.local.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "enabled": enabled,
+                "engine_weight": 0.55,
+                "council_weight": 0.45,
+                "rounds": 2,
+                "minimum_valid_agents": 2,
+                "timeout_seconds": 30,
+                "max_attempts": 1,
+                "agents": [
+                    {
+                        "id": "agent-a",
+                        "display_name": "Agent A",
+                        "provider": "openai",
+                        "model": "model-a",
+                        "api_key_env": "A_API_KEY",
+                        "reasoning_effort": "high",
+                    },
+                    {
+                        "id": "agent-b",
+                        "display_name": "Agent B",
+                        "provider": "anthropic",
+                        "model": "model-b",
+                        "api_key_env": "B_API_KEY",
+                        "thinking_budget_tokens": 4096,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
 
 
 def _run_cli(tmp_path: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
@@ -302,3 +343,135 @@ def test_validate_does_not_simulate_or_open_a_socket(
         monkeypatch.setattr("socket.socket.bind", forbidden)
 
         assert cli.main(["validate", "--config", str(config_path)]) == 0
+
+
+def test_council_config_can_be_validated_and_hard_disabled_without_network(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from tournament_forecaster import cli
+    from tournament_forecaster.resources import resource_path
+
+    council = _write_council_config(tmp_path, enabled=True)
+    assert cli.main(["council", "validate", "--config", str(council)]) == 0
+    assert "Valid council: 2 enabled model(s); blend 55% engine / 45% council" in (
+        capsys.readouterr().out
+    )
+
+    def forbidden(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("--no-council attempted an agent call")
+
+    monkeypatch.setattr(cli, "run_council", forbidden)
+    with resource_path("data", "presets", "synthetic-cup", "tournament.json") as config:
+        result = cli.main(
+            [
+                "simulate",
+                "--config",
+                str(config),
+                "--iterations",
+                "20",
+                "--output-dir",
+                str(tmp_path / "outputs"),
+                "--council-config",
+                str(council),
+                "--no-council",
+            ]
+        )
+
+    assert result == 0
+    document = json.loads(
+        (
+            tmp_path
+            / "outputs"
+            / "synthetic-cup"
+            / "north-city"
+            / "forecast.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert document["council"]["status"] == "disabled"
+    assert "Council: disabled" in capsys.readouterr().out
+
+
+def test_simulate_applies_injected_council_consensus_with_55_45_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from tournament_forecaster import cli
+    from tournament_forecaster.resources import resource_path
+
+    council = _write_council_config(tmp_path, enabled=False)
+
+    def consensus(forecast: object, _tournament: object, _config: object) -> CouncilRun:
+        stage_probabilities = dict(forecast.stage_probabilities)  # type: ignore[attr-defined]
+        return CouncilRun(
+            status="consensus",
+            rounds=(),
+            consensus=CouncilOpinion(
+                agent_id="consensus",
+                round_number=2,
+                stage_probabilities=stage_probabilities,
+                championship_probability=forecast.championship_probability,  # type: ignore[attr-defined]
+                confidence=0.8,
+                summary="Consensus retained the engine baseline.",
+                key_factors=("completed results", "legal bracket"),
+            ),
+            reason=None,
+        )
+
+    monkeypatch.setattr(cli, "run_council", consensus)
+    with resource_path("data", "presets", "synthetic-cup", "tournament.json") as config:
+        result = cli.main(
+            [
+                "simulate",
+                "--config",
+                str(config),
+                "--iterations",
+                "20",
+                "--output-dir",
+                str(tmp_path / "outputs"),
+                "--council-config",
+                str(council),
+                "--council",
+            ]
+        )
+
+    assert result == 0
+    document = json.loads(
+        (
+            tmp_path
+            / "outputs"
+            / "synthetic-cup"
+            / "north-city"
+            / "forecast.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert document["council"]["status"] == "applied"
+    assert document["council"]["engine_weight"] == 0.55
+    assert document["council"]["council_weight"] == 0.45
+    assert "Council: applied (55% engine / 45% council)" in capsys.readouterr().out
+
+
+def test_council_enable_flag_requires_a_config_before_any_simulation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from tournament_forecaster import cli
+
+    def forbidden(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("simulation ran before council configuration validation")
+
+    monkeypatch.setattr(cli, "simulate_tournament", forbidden)
+    result = cli.main(
+        [
+            "simulate",
+            "--config",
+            str(tmp_path / "missing.json"),
+            "--council",
+        ]
+    )
+
+    assert result == 2
+    assert "--council requires --council-config" in capsys.readouterr().err

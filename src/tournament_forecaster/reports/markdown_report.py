@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from html import escape
 import re
 
@@ -39,6 +40,134 @@ def _display_team(forecast: Forecast, team_id: str) -> str:
 
 def _percent(probability: float) -> str:
     return f"{probability:.1%}"
+
+
+def _council_lines(forecast: Forecast) -> list[str]:
+    council = forecast.council
+    if not isinstance(council, Mapping):
+        return []
+    status = str(council.get("status", "unknown"))
+    lines = ["", "## Multi-LLM Council Debrief", "", f"**Status:** {_markdown_text(status)}"]
+    engine_weight = council.get("engine_weight")
+    council_weight = council.get("council_weight")
+    if isinstance(engine_weight, (int, float)) and isinstance(
+        council_weight, (int, float)
+    ):
+        lines.append(
+            f"**Blend policy:** {float(engine_weight):.0%} deterministic engine / "
+            f"{float(council_weight):.0%} council consensus"
+        )
+    reason = council.get("reason")
+    if isinstance(reason, str) and reason.strip():
+        lines.append(f"**Decision detail:** {_markdown_text(reason)}")
+
+    participants = council.get("participants")
+    if (
+        isinstance(participants, Sequence)
+        and not isinstance(participants, (str, bytes, bytearray))
+        and participants
+    ):
+        lines.extend(
+            [
+                "",
+                "### Configured participants",
+                "",
+                "| Model slot | Provider / model | Effort |",
+                "| --- | --- | --- |",
+            ]
+        )
+        for participant in participants:
+            if not isinstance(participant, Mapping):
+                continue
+            name = _markdown_text(str(participant.get("display_name", "unknown")))
+            provider = _markdown_text(str(participant.get("provider", "unknown")))
+            model = _markdown_text(str(participant.get("model", "unknown")))
+            effort_value = participant.get("reasoning_effort")
+            if isinstance(effort_value, str):
+                effort = f"reasoning effort: {_markdown_text(effort_value)}"
+            elif isinstance(participant.get("thinking_budget_tokens"), int):
+                effort = (
+                    "thinking budget: "
+                    + str(participant["thinking_budget_tokens"])
+                    + " tokens"
+                )
+            else:
+                effort = "provider default"
+            lines.append(f"| {name} | {provider} / {model} | {effort} |")
+
+    consensus = council.get("consensus")
+    if isinstance(consensus, Mapping):
+        lines.extend(["", "### Consensus", ""])
+        summary = consensus.get("summary")
+        if isinstance(summary, str):
+            lines.append(_markdown_text(summary))
+        championship = consensus.get("championship_probability")
+        if isinstance(championship, (int, float)):
+            lines.append(
+                f"Council-only championship position: **{_percent(float(championship))}**."
+            )
+        factors = consensus.get("key_factors")
+        if isinstance(factors, Sequence) and not isinstance(
+            factors, (str, bytes, bytearray)
+        ):
+            lines.extend(
+                f"- {_markdown_text(str(factor))}"
+                for factor in factors
+                if isinstance(factor, str)
+            )
+
+    rounds = council.get("rounds")
+    if isinstance(rounds, Sequence) and not isinstance(
+        rounds, (str, bytes, bytearray)
+    ):
+        for round_value in rounds:
+            if not isinstance(round_value, Mapping):
+                continue
+            lines.extend(
+                [
+                    "",
+                    f"### Debate round {round_value.get('round', '?')}",
+                    "",
+                ]
+            )
+            opinions = round_value.get("opinions")
+            if isinstance(opinions, Sequence) and not isinstance(
+                opinions, (str, bytes, bytearray)
+            ):
+                for opinion in opinions:
+                    if not isinstance(opinion, Mapping):
+                        continue
+                    label = _markdown_text(str(opinion.get("agent_id", "participant")))
+                    summary = _markdown_text(str(opinion.get("summary", "No summary")))
+                    title = opinion.get("championship_probability")
+                    title_text = (
+                        _percent(float(title))
+                        if isinstance(title, (int, float))
+                        else "not supplied"
+                    )
+                    lines.append(f"- **{label}:** title {title_text}. {summary}")
+            failures = round_value.get("failures")
+            if isinstance(failures, Sequence) and not isinstance(
+                failures, (str, bytes, bytearray)
+            ):
+                for failure in failures:
+                    if not isinstance(failure, Mapping):
+                        continue
+                    label = _markdown_text(str(failure.get("agent_id", "participant")))
+                    category = _markdown_text(str(failure.get("category", "failure")))
+                    detail = _markdown_text(str(failure.get("detail", "no detail")))
+                    lines.append(f"- **{label}:** {category}. {detail}")
+
+    lines.extend(
+        [
+            "",
+            "Matchup probabilities remain engine-only because the council cannot "
+            "rewrite legal opponents or bracket topology.",
+            "Published confidence intervals carry engine sampling uncertainty only; "
+            "council consensus is treated as fixed for those intervals.",
+        ]
+    )
+    return lines
 
 
 def render_markdown_report(forecast: Forecast) -> str:
@@ -100,6 +229,8 @@ def render_markdown_report(forecast: Forecast) -> str:
             )
     else:
         lines.append("No focus-team matchup probabilities were produced.")
+
+    lines.extend(_council_lines(forecast))
 
     if forecast.warnings:
         lines.extend(["", "## Warnings", ""])

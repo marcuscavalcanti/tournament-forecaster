@@ -6,12 +6,16 @@ import argparse
 import json
 import sys
 import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 
 from .atomic_io import atomic_write_json, atomic_write_text
 from .backtest import evaluate_backtest, load_backtest
 from .config import load_tournament
+from .council.blend import apply_council
+from .council.config import CouncilConfig, load_council_config
+from .council.runner import CouncilRun, run_council
 from .domain import Forecast, SimulationOptions, Tournament
 from .errors import TournamentValidationError
 from .reports import write_rendered_reports, write_report_bundle
@@ -65,6 +69,23 @@ def _print_probability_summary(forecast: Forecast) -> None:
         probability = forecast.stage_probabilities[stage_id]
         print(f"  {stage_id}: {probability:.1%}")
     print(f"  championship: {forecast.championship_probability:.1%}")
+    if isinstance(forecast.council, Mapping):
+        status = forecast.council.get("status")
+        if status == "applied":
+            raw_engine_weight = forecast.council.get("engine_weight")
+            raw_council_weight = forecast.council.get("council_weight")
+            if not isinstance(raw_engine_weight, (int, float)) or not isinstance(
+                raw_council_weight, (int, float)
+            ):
+                raise ValueError("applied council metadata must contain numeric weights")
+            engine_weight = float(raw_engine_weight)
+            council_weight = float(raw_council_weight)
+            print(
+                "Council: applied "
+                f"({engine_weight:.0%} engine / {council_weight:.0%} council)"
+            )
+        elif isinstance(status, str):
+            print(f"Council: {status}")
 
 
 def _print_artifacts(paths: Sequence[Path], current: Path) -> None:
@@ -100,13 +121,51 @@ def _simulate(
     )
 
 
+def _council_config(arguments: argparse.Namespace) -> CouncilConfig | None:
+    path: Path | None = arguments.council_config
+    override: bool | None = arguments.council
+    if override is True and path is None:
+        raise ValueError("--council requires --council-config")
+    if path is None:
+        return None
+    config = load_council_config(path)
+    if override is not None and override != config.enabled:
+        config = replace(config, enabled=override)
+    return config
+
+
+def _apply_optional_council(
+    baseline: Forecast,
+    tournament: Tournament,
+    config: CouncilConfig | None,
+) -> Forecast:
+    if config is None:
+        return baseline
+    run = (
+        run_council(baseline, tournament, config)
+        if config.enabled
+        else CouncilRun(
+            "disabled",
+            (),
+            None,
+            "council disabled by configuration or CLI override",
+        )
+    )
+    return apply_council(baseline, config, run)
+
+
 def _run_quickstart(arguments: argparse.Namespace) -> int:
     tournament = load_bundled_preset("synthetic-cup")
-    forecast = _simulate(
+    baseline = _simulate(
         tournament,
         focus_team_id=None,
         seed=arguments.seed,
         iterations=arguments.iterations,
+    )
+    forecast = _apply_optional_council(
+        baseline,
+        tournament,
+        _council_config(arguments),
     )
     paths = write_report_bundle(
         forecast,
@@ -139,13 +198,15 @@ def _run_validate(arguments: argparse.Namespace) -> int:
 
 
 def _run_simulate(arguments: argparse.Namespace) -> int:
+    council_config = _council_config(arguments)
     tournament = load_tournament(arguments.config)
-    forecast = _simulate(
+    baseline = _simulate(
         tournament,
         focus_team_id=arguments.focus_team,
         seed=arguments.seed,
         iterations=arguments.iterations,
     )
+    forecast = _apply_optional_council(baseline, tournament, council_config)
     paths = write_report_bundle(
         forecast,
         _artifact_directory(arguments.output_dir, forecast),
@@ -198,6 +259,39 @@ def _run_presets_list(_arguments: argparse.Namespace) -> int:
     for name in list_bundled_presets():
         print(name)
     return 0
+
+
+def _run_council_validate(arguments: argparse.Namespace) -> int:
+    config = load_council_config(arguments.config)
+    print(
+        f"Valid council: {len(config.enabled_agents)} enabled model(s); "
+        f"blend {config.engine_weight:.0%} engine / {config.council_weight:.0%} council"
+    )
+    for agent in config.agents:
+        state = "enabled" if agent.enabled else "disabled"
+        effort = agent.reasoning_effort or (
+            f"thinking-budget-{agent.thinking_budget_tokens}"
+            if agent.thinking_budget_tokens is not None
+            else "provider-default"
+        )
+        print(
+            f"  {agent.id}: {agent.provider}/{agent.model}; {state}; effort={effort}"
+        )
+    return 0
+
+
+def _add_council_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--council-config",
+        type=Path,
+        help="optional multi-LLM council JSON configuration",
+    )
+    parser.add_argument(
+        "--council",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="enable or hard-disable the configured multi-LLM council",
+    )
 
 
 def _run_update_results(arguments: argparse.Namespace) -> int:
@@ -283,6 +377,7 @@ def _build_parser() -> argparse.ArgumentParser:
         type=_positive_integer,
         default=DEFAULT_ITERATIONS,
     )
+    _add_council_arguments(quickstart)
     quickstart.set_defaults(handler=_run_quickstart)
 
     initialize = commands.add_parser(
@@ -313,6 +408,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_ITERATIONS,
     )
     simulate.add_argument("--output-dir", type=Path, default=Path("outputs"))
+    _add_council_arguments(simulate)
     simulate.set_defaults(handler=_run_simulate)
 
     report = commands.add_parser(
@@ -333,6 +429,18 @@ def _build_parser() -> argparse.ArgumentParser:
     preset_commands = presets.add_subparsers(dest="presets_command", required=True)
     preset_list = preset_commands.add_parser("list", help="list bundled preset names")
     preset_list.set_defaults(handler=_run_presets_list)
+
+    council = commands.add_parser(
+        "council",
+        help="validate optional multi-LLM council configuration",
+    )
+    council_commands = council.add_subparsers(dest="council_command", required=True)
+    council_validate = council_commands.add_parser(
+        "validate",
+        help="validate models, effort, quorum, and blend without network calls",
+    )
+    council_validate.add_argument("--config", type=Path, required=True)
+    council_validate.set_defaults(handler=_run_council_validate)
 
     update_results = commands.add_parser(
         "update-results",

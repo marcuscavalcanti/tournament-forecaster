@@ -50,6 +50,153 @@
       },
       "additionalProperties": false
     },
+    "council_opinion": {
+      "type": "object",
+      "required": [
+        "agent_id",
+        "round",
+        "stage_probabilities",
+        "championship_probability",
+        "confidence",
+        "summary",
+        "key_factors"
+      ],
+      "properties": {
+        "agent_id": {"$ref": "#/$defs/stable_id"},
+        "round": {"type": "integer", "minimum": 1, "maximum": 3},
+        "stage_probabilities": {
+          "type": "object",
+          "propertyNames": {"$ref": "#/$defs/stable_id"},
+          "additionalProperties": {"$ref": "#/$defs/probability"}
+        },
+        "championship_probability": {"$ref": "#/$defs/probability"},
+        "confidence": {"$ref": "#/$defs/probability"},
+        "summary": {"type": "string", "minLength": 1},
+        "key_factors": {
+          "type": "array",
+          "maxItems": 12,
+          "items": {"type": "string", "minLength": 1}
+        }
+      },
+      "additionalProperties": false
+    },
+    "council_failure": {
+      "type": "object",
+      "required": ["agent_id", "category", "detail"],
+      "properties": {
+        "agent_id": {"$ref": "#/$defs/stable_id"},
+        "category": {"type": "string", "minLength": 1},
+        "detail": {"type": "string", "minLength": 1, "maxLength": 600}
+      },
+      "additionalProperties": false
+    },
+    "council_round": {
+      "type": "object",
+      "required": ["round", "opinions", "failures"],
+      "properties": {
+        "round": {"type": "integer", "minimum": 1, "maximum": 3},
+        "opinions": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/council_opinion"}
+        },
+        "failures": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/council_failure"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "council_participant": {
+      "type": "object",
+      "required": [
+        "id",
+        "display_name",
+        "provider",
+        "model",
+        "reasoning_effort",
+        "thinking_budget_tokens",
+        "max_output_tokens"
+      ],
+      "properties": {
+        "id": {"$ref": "#/$defs/stable_id"},
+        "display_name": {"type": "string", "minLength": 1},
+        "provider": {"type": "string", "minLength": 1},
+        "model": {"type": "string", "minLength": 1},
+        "reasoning_effort": {
+          "oneOf": [{"type": "string", "minLength": 1}, {"type": "null"}]
+        },
+        "thinking_budget_tokens": {
+          "oneOf": [{"type": "integer", "minimum": 1}, {"type": "null"}]
+        },
+        "max_output_tokens": {"type": "integer", "minimum": 128}
+      },
+      "additionalProperties": false
+    },
+    "council_baseline": {
+      "type": "object",
+      "required": ["stage_probabilities", "championship_probability"],
+      "properties": {
+        "stage_probabilities": {
+          "type": "object",
+          "propertyNames": {"$ref": "#/$defs/stable_id"},
+          "additionalProperties": {"$ref": "#/$defs/probability"}
+        },
+        "championship_probability": {"$ref": "#/$defs/probability"}
+      },
+      "additionalProperties": false
+    },
+    "council": {
+      "type": "object",
+      "required": [
+        "status",
+        "reason",
+        "engine_weight",
+        "council_weight",
+        "rounds_configured",
+        "rounds_completed",
+        "minimum_valid_agents",
+        "participants",
+        "engine_baseline",
+        "consensus",
+        "rounds",
+        "matchup_probabilities_basis",
+        "uncertainty_basis"
+      ],
+      "properties": {
+        "status": {"enum": ["applied", "fallback", "disabled"]},
+        "reason": {
+          "oneOf": [{"type": "string", "minLength": 1}, {"type": "null"}]
+        },
+        "engine_weight": {"$ref": "#/$defs/probability"},
+        "council_weight": {"$ref": "#/$defs/probability"},
+        "rounds_configured": {"type": "integer", "minimum": 1, "maximum": 3},
+        "rounds_completed": {"type": "integer", "minimum": 0, "maximum": 3},
+        "minimum_valid_agents": {"type": "integer", "minimum": 1},
+        "participants": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/council_participant"}
+        },
+        "engine_baseline": {"$ref": "#/$defs/council_baseline"},
+        "consensus": {
+          "oneOf": [{"$ref": "#/$defs/council_opinion"}, {"type": "null"}]
+        },
+        "rounds": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/council_round"}
+        },
+        "matchup_probabilities_basis": {"const": "engine_only"},
+        "uncertainty_basis": {
+          "const": "engine_sampling_with_fixed_council_consensus"
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "applied"}}},
+          "then": {"properties": {"consensus": {"$ref": "#/$defs/council_opinion"}}}
+        }
+      ]
+    },
     "simulation": {
       "type": "object",
       "required": ["seed", "iterations", "confidence_level"],
@@ -113,7 +260,7 @@
     },
     "council": {
       "oneOf": [
-        {"$ref": "#/$defs/metadata"},
+        {"$ref": "#/$defs/council"},
         {"type": "null"}
       ]
     },
