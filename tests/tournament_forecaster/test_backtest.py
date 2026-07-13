@@ -101,6 +101,14 @@ def test_backtest_rejects_ratings_hash_drift() -> None:
         evaluate_backtest(document)
 
 
+def test_backtest_rejects_an_unsupported_model_version() -> None:
+    document = _document()
+    document["model_version"] = "future-model-that-is-not-implemented"
+
+    with pytest.raises(TournamentValidationError, match="unsupported model_version"):
+        evaluate_backtest(document)
+
+
 def test_top_pick_accuracy_does_not_award_a_tied_maximum() -> None:
     document = _document()
     ratings = {"alpha": 1500.0, "bravo": 1500.0}

@@ -54,7 +54,7 @@
   ],
   "properties": {
     "schema_version": {"const": 1},
-    "model_version": {"type": "string", "minLength": 1},
+    "model_version": {"enum": ["poisson-elo-v1"]},
     "home_advantage_rating_points": {"type": "number"},
     "ratings": {
       "type": "object",

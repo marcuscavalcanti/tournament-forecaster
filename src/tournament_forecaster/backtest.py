@@ -16,6 +16,7 @@ from .probabilities import predict_match_outcomes
 
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_SUPPORTED_MODEL_VERSIONS = frozenset({"poisson-elo-v1"})
 _ROOT_PROPERTIES = frozenset(
     {
         "schema_version",
@@ -166,6 +167,8 @@ def evaluate_backtest(
     if root.get("schema_version") != 1:
         raise TournamentValidationError("unsupported backtest schema version")
     model_version = _text(root.get("model_version"), "model_version")
+    if model_version not in _SUPPORTED_MODEL_VERSIONS:
+        raise TournamentValidationError(f"unsupported model_version: {model_version}")
     home_advantage = _finite_number(
         root.get("home_advantage_rating_points", 0.0),
         "home_advantage_rating_points",
