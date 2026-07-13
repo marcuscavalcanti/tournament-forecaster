@@ -162,11 +162,48 @@ class _ExchangeTransition(Enum):
     AMBIGUOUS = "ambiguous"
 
 
+class _CanonicalRecoveryState(Enum):
+    ORIGINAL = "the original config is canonical"
+    PROVIDER = "the provider config remains canonical"
+    CONCURRENT = "an unverified concurrent entry is canonical"
+
+
 @dataclass(frozen=True, slots=True)
 class _QuarantinedEntry:
     relative_path: str
     identity: LocalEntryIdentity
     matches_expected: bool | None
+
+
+@dataclass(frozen=True, slots=True)
+class _QuarantineFailureState:
+    source_name: str
+    directory_name: str
+    entry_name: str
+    relative_path: str
+    directory_device: int
+    directory_inode: int
+    moved: bool
+    entry_identity: LocalEntryIdentity | None
+
+
+class _QuarantineOperationError(TournamentValidationError):
+    def __init__(self, message: str, state: _QuarantineFailureState) -> None:
+        super().__init__(message)
+        self.state = state
+
+
+class _NoReplacePreflightError(TournamentValidationError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        candidate_name: str | None,
+        existing_names: tuple[str, ...],
+    ) -> None:
+        super().__init__(message)
+        self.candidate_name = candidate_name
+        self.existing_names = existing_names
 
 
 @dataclass(frozen=True, slots=True)
@@ -417,10 +454,24 @@ def _atomic_exchange_at(
     source_name: str,
     destination_name: str,
 ) -> None:
-    _atomic_rename_at(
+    _atomic_exchange_between_at(
         parent_descriptor,
         source_name,
         parent_descriptor,
+        destination_name,
+    )
+
+
+def _atomic_exchange_between_at(
+    source_descriptor: int,
+    source_name: str,
+    destination_descriptor: int,
+    destination_name: str,
+) -> None:
+    _atomic_rename_at(
+        source_descriptor,
+        source_name,
+        destination_descriptor,
         destination_name,
         flags=_RENAME_EXCHANGE,
         operation="exchange",
@@ -697,6 +748,16 @@ def _entry_identity_at(
     )
 
 
+def _entry_identity_if_present_at(
+    parent_descriptor: int,
+    filename: str,
+) -> LocalEntryIdentity | None:
+    try:
+        return _entry_identity_at(parent_descriptor, filename, "provider recovery")
+    except TournamentValidationError:
+        return None
+
+
 def _entry_is_exact_regular_file_at(
     parent_descriptor: int,
     filename: str,
@@ -736,14 +797,30 @@ def _snapshot_exchange_entries_at(
     destination_name: str,
     phase: str,
 ) -> _ExchangeSnapshot:
+    return _snapshot_exchange_entries_between_at(
+        parent_descriptor,
+        source_name,
+        parent_descriptor,
+        destination_name,
+        phase,
+    )
+
+
+def _snapshot_exchange_entries_between_at(
+    source_descriptor: int,
+    source_name: str,
+    destination_descriptor: int,
+    destination_name: str,
+    phase: str,
+) -> _ExchangeSnapshot:
     return _ExchangeSnapshot(
         source=_entry_identity_at(
-            parent_descriptor,
+            source_descriptor,
             source_name,
             f"{phase} source",
         ),
         destination=_entry_identity_at(
-            parent_descriptor,
+            destination_descriptor,
             destination_name,
             f"{phase} destination",
         ),
@@ -763,6 +840,64 @@ def _classify_exchange_transition(
     if source_received_destination:
         return _ExchangeTransition.DESTINATION_INSTALLED_AFTER
     return _ExchangeTransition.AMBIGUOUS
+
+
+def _directory_descriptor_is_bound_at(
+    parent_descriptor: int,
+    directory_name: str,
+    directory_descriptor: int,
+    *,
+    expected_device: int,
+    expected_inode: int,
+) -> bool:
+    try:
+        path_stat = os.stat(
+            directory_name,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+        descriptor_stat = os.fstat(directory_descriptor)
+    except OSError:
+        return False
+    return (
+        stat.S_ISDIR(path_stat.st_mode)
+        and stat.S_ISDIR(descriptor_stat.st_mode)
+        and (path_stat.st_dev, path_stat.st_ino)
+        == (expected_device, expected_inode)
+        == (descriptor_stat.st_dev, descriptor_stat.st_ino)
+    )
+
+
+def _open_quarantine_failure_directory_at(
+    parent_descriptor: int,
+    state: _QuarantineFailureState,
+) -> int:
+    flags = (
+        os.O_RDONLY
+        | os.O_DIRECTORY
+        | os.O_NOFOLLOW
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            state.directory_name,
+            flags,
+            dir_fd=parent_descriptor,
+        )
+        if not _directory_descriptor_is_bound_at(
+            parent_descriptor,
+            state.directory_name,
+            descriptor,
+            expected_device=state.directory_device,
+            expected_inode=state.directory_inode,
+        ):
+            raise _error("quarantine recovery directory identity changed")
+        return descriptor
+    except BaseException:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise
 
 
 def _open_quarantine_directory_at(
@@ -842,7 +977,9 @@ def _quarantine_entry_at(
     )
     entry_name = "entry"
     relative_path = str(Path(directory_name) / entry_name)
+    directory_stat = os.fstat(quarantine_descriptor)
     moved = False
+    entry_identity: LocalEntryIdentity | None = None
     try:
         _atomic_move_no_replace_at(
             parent_descriptor,
@@ -851,12 +988,12 @@ def _quarantine_entry_at(
             entry_name,
         )
         moved = True
-        os.fsync(quarantine_descriptor)
         entry_identity = _entry_identity_at(
             quarantine_descriptor,
             entry_name,
             "quarantined tournament config",
         )
+        os.fsync(quarantine_descriptor)
         matches_expected = None
         if expected_identity is not None and expected_bytes is not None:
             matches_expected = bool(
@@ -869,15 +1006,15 @@ def _quarantine_entry_at(
                     expected_bytes,
                 )
             )
-        directory_stat = os.stat(
+        directory_path_stat = os.stat(
             directory_name,
             dir_fd=parent_descriptor,
             follow_symlinks=False,
         )
         descriptor_stat = os.fstat(quarantine_descriptor)
         if (
-            not stat.S_ISDIR(directory_stat.st_mode)
-            or (directory_stat.st_dev, directory_stat.st_ino)
+            not stat.S_ISDIR(directory_path_stat.st_mode)
+            or (directory_path_stat.st_dev, directory_path_stat.st_ino)
             != (descriptor_stat.st_dev, descriptor_stat.st_ino)
         ):
             raise _error("tournament config quarantine path changed")
@@ -888,17 +1025,42 @@ def _quarantine_entry_at(
             matches_expected=matches_expected,
         )
     except (OSError, TournamentValidationError) as error:
-        destination_path = parent_path / relative_path
-        preservation_detail = (
-            f"tournament config entry was preserved at {destination_path}"
-            if moved
-            else f"tournament config source remains at {parent_path / source_name}; "
-            f"quarantine destination path: {destination_path}"
+        if entry_identity is None:
+            entry_identity = _entry_identity_if_present_at(
+                quarantine_descriptor,
+                entry_name,
+            )
+        state = _QuarantineFailureState(
+            source_name=source_name,
+            directory_name=directory_name,
+            entry_name=entry_name,
+            relative_path=relative_path,
+            directory_device=directory_stat.st_dev,
+            directory_inode=directory_stat.st_ino,
+            moved=moved,
+            entry_identity=entry_identity,
         )
-        raise _error(
-            f"{preservation_detail}; "
-            f"quarantine directory: {parent_path / directory_name}; {error}"
-        ) from error
+        retained_paths: list[Path] = []
+        if not moved and _entry_identity_if_present_at(
+            parent_descriptor,
+            source_name,
+        ) is not None:
+            retained_paths.append(parent_path / source_name)
+        if _directory_descriptor_is_bound_at(
+            parent_descriptor,
+            directory_name,
+            quarantine_descriptor,
+            expected_device=directory_stat.st_dev,
+            expected_inode=directory_stat.st_ino,
+        ):
+            retained_paths.append(parent_path / directory_name)
+            if entry_identity is not None:
+                retained_paths.append(parent_path / relative_path)
+        path_detail = ", ".join(str(path) for path in retained_paths)
+        message = f"quarantine operation failed with moved={moved}: {error}"
+        if path_detail:
+            message += f"; retained paths: {path_detail}"
+        raise _QuarantineOperationError(message, state) from error
     finally:
         os.close(quarantine_descriptor)
 
@@ -1373,6 +1535,126 @@ def _write_temp_at(
     raise _error("could not allocate a secure temporary results file")
 
 
+def _allocate_no_replace_probe_name_at(
+    parent_descriptor: int,
+    target_name: str,
+) -> str:
+    for _ in range(128):
+        probe_name = f".{target_name}.{secrets.token_hex(12)}.noreplace-probe"
+        try:
+            os.stat(
+                probe_name,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            return probe_name
+        except OSError as error:
+            raise _error("no-replace probe path could not be inspected") from error
+    raise _error("could not allocate a no-replace capability probe name")
+
+
+def _raise_no_replace_preflight_error(
+    parent_descriptor: int,
+    parent_path: Path,
+    candidate_names: tuple[str, str],
+    canonical_path: Path,
+    prepared_identity: LocalFileIdentity,
+    prepared_bytes: bytes,
+    error: BaseException,
+) -> NoReturn:
+    existing_names = tuple(
+        name
+        for name in candidate_names
+        if _entry_identity_if_present_at(parent_descriptor, name) is not None
+    )
+    exact_candidates = tuple(
+        name
+        for name in candidate_names
+        if _entry_is_exact_regular_file_at(
+            parent_descriptor,
+            name,
+            canonical_path,
+            prepared_identity,
+            prepared_bytes,
+        )
+    )
+    candidate_name = exact_candidates[0] if len(exact_candidates) == 1 else None
+    retained_paths = ", ".join(
+        str(parent_path / name) for name in existing_names
+    )
+    message = f"no-replace capability preflight failed: {error}"
+    if retained_paths:
+        message += f"; retained paths: {retained_paths}"
+    if candidate_name is not None:
+        message += f"; prepared provider candidate: {parent_path / candidate_name}"
+    raise _NoReplacePreflightError(
+        message,
+        candidate_name=candidate_name,
+        existing_names=existing_names,
+    ) from error
+
+
+def _preflight_no_replace_at(
+    parent_descriptor: int,
+    parent_path: Path,
+    target_name: str,
+    temporary_name: str,
+    canonical_path: Path,
+    prepared_identity: LocalFileIdentity,
+    prepared_bytes: bytes,
+) -> str:
+    probe_name = _allocate_no_replace_probe_name_at(
+        parent_descriptor,
+        target_name,
+    )
+    names = (temporary_name, probe_name)
+    try:
+        _atomic_move_no_replace_at(
+            parent_descriptor,
+            temporary_name,
+            parent_descriptor,
+            probe_name,
+        )
+        os.fsync(parent_descriptor)
+        if not _entry_is_exact_regular_file_at(
+            parent_descriptor,
+            probe_name,
+            canonical_path,
+            prepared_identity,
+            prepared_bytes,
+        ):
+            raise _error("prepared provider candidate changed during no-replace probe")
+        _atomic_move_no_replace_at(
+            parent_descriptor,
+            probe_name,
+            parent_descriptor,
+            temporary_name,
+        )
+        os.fsync(parent_descriptor)
+        if not _entry_is_exact_regular_file_at(
+            parent_descriptor,
+            temporary_name,
+            canonical_path,
+            prepared_identity,
+            prepared_bytes,
+        ):
+            raise _error("prepared provider candidate changed after no-replace probe")
+        if _entry_identity_if_present_at(parent_descriptor, probe_name) is not None:
+            raise _error("no-replace probe path was concurrently repopulated")
+    except (OSError, TournamentValidationError) as error:
+        _raise_no_replace_preflight_error(
+            parent_descriptor,
+            parent_path,
+            names,
+            canonical_path,
+            prepared_identity,
+            prepared_bytes,
+            error,
+        )
+    return temporary_name
+
+
 def _quarantine_temp_at(
     parent_descriptor: int,
     parent_path: Path,
@@ -1527,8 +1809,24 @@ def _preserve_exchange_entry_at(
             expected_identity=expected_identity,
             expected_bytes=expected_bytes,
         )
+    except _QuarantineOperationError as error:
+        if not error.state.moved and _entry_identity_if_present_at(
+            parent_descriptor,
+            exchange_name,
+        ) is not None:
+            recovery_names.append(exchange_name)
+        _raise_recovery_error(
+            reason,
+            f"exchange entry could not be quarantined: {error}",
+            parent_path,
+            recovery_names,
+        )
     except TournamentValidationError as error:
-        recovery_names.append(exchange_name)
+        if _entry_identity_if_present_at(
+            parent_descriptor,
+            exchange_name,
+        ) is not None:
+            recovery_names.append(exchange_name)
         _raise_recovery_error(
             reason,
             f"exchange entry could not be quarantined: {error}",
@@ -1584,6 +1882,312 @@ def _recover_failed_exchange_at(
         parent_path,
         recovery_names,
     )
+
+
+def _canonical_recovery_state(
+    parent_descriptor: int,
+    target_name: str,
+    canonical_path: Path,
+    original_identity: LocalFileIdentity,
+    original_bytes: bytes,
+    replacement_identity: LocalFileIdentity,
+    replacement_bytes: bytes,
+) -> _CanonicalRecoveryState:
+    if _entry_is_exact_regular_file_at(
+        parent_descriptor,
+        target_name,
+        canonical_path,
+        original_identity,
+        original_bytes,
+    ):
+        return _CanonicalRecoveryState.ORIGINAL
+    if _entry_is_exact_regular_file_at(
+        parent_descriptor,
+        target_name,
+        canonical_path,
+        replacement_identity,
+        replacement_bytes,
+    ):
+        return _CanonicalRecoveryState.PROVIDER
+    return _CanonicalRecoveryState.CONCURRENT
+
+
+def _quarantine_recovery_names_at(
+    parent_descriptor: int,
+    quarantine_descriptor: int,
+    state: _QuarantineFailureState,
+) -> list[str]:
+    if not _directory_descriptor_is_bound_at(
+        parent_descriptor,
+        state.directory_name,
+        quarantine_descriptor,
+        expected_device=state.directory_device,
+        expected_inode=state.directory_inode,
+    ):
+        return []
+    names = [state.directory_name]
+    if _entry_identity_if_present_at(
+        quarantine_descriptor,
+        state.entry_name,
+    ) is not None:
+        names.append(state.relative_path)
+    return names
+
+
+def _ensure_witness_recovery_for_moved_quarantine(
+    parent_descriptor: int,
+    quarantine_descriptor: int,
+    parent_path: Path,
+    target_name: str,
+    canonical_path: Path,
+    state: _QuarantineFailureState,
+    expected_identity: LocalFileIdentity,
+    expected_bytes: bytes,
+    recovery_names: list[str],
+) -> None:
+    if _entry_is_exact_regular_file_at(
+        parent_descriptor,
+        target_name,
+        canonical_path,
+        expected_identity,
+        expected_bytes,
+    ) or _entry_is_exact_regular_file_at(
+        quarantine_descriptor,
+        state.entry_name,
+        canonical_path,
+        expected_identity,
+        expected_bytes,
+    ):
+        return
+    recovery_names.append(
+        _write_recovery_file_at(
+            parent_descriptor,
+            target_name,
+            parent_path,
+            expected_bytes,
+        )
+    )
+
+
+def _recover_moved_quarantine_at(
+    parent_descriptor: int,
+    parent_path: Path,
+    target_name: str,
+    canonical_path: Path,
+    failure: _QuarantineOperationError,
+    original_identity: LocalFileIdentity,
+    original_bytes: bytes,
+    replacement_identity: LocalFileIdentity,
+    replacement_bytes: bytes,
+    reason: str,
+) -> NoReturn:
+    state = failure.state
+    if not state.moved:
+        raise _error("moved quarantine recovery requires moved state")
+    try:
+        quarantine_descriptor = _open_quarantine_failure_directory_at(
+            parent_descriptor,
+            state,
+        )
+    except (OSError, TournamentValidationError) as error:
+        recovery_names = []
+        for identity, content in (
+            (original_identity, original_bytes),
+            (replacement_identity, replacement_bytes),
+        ):
+            if not _entry_is_exact_regular_file_at(
+                parent_descriptor,
+                target_name,
+                canonical_path,
+                identity,
+                content,
+            ):
+                recovery_names.append(
+                    _write_recovery_file_at(
+                        parent_descriptor,
+                        target_name,
+                        parent_path,
+                        content,
+                    )
+                )
+        _raise_recovery_error(
+            reason,
+            "the descriptor-bound quarantine directory could not be reopened; "
+            f"{_canonical_recovery_state(parent_descriptor, target_name, canonical_path, original_identity, original_bytes, replacement_identity, replacement_bytes).value}; "
+            f"reopen error: {error}",
+            parent_path,
+            recovery_names,
+        )
+
+    try:
+        recovery_names = _quarantine_recovery_names_at(
+            parent_descriptor,
+            quarantine_descriptor,
+            state,
+        )
+        quarantine_has_original = _entry_is_exact_regular_file_at(
+            quarantine_descriptor,
+            state.entry_name,
+            canonical_path,
+            original_identity,
+            original_bytes,
+        )
+        canonical_has_provider = _entry_is_exact_regular_file_at(
+            parent_descriptor,
+            target_name,
+            canonical_path,
+            replacement_identity,
+            replacement_bytes,
+        )
+        if not quarantine_has_original or not canonical_has_provider:
+            for identity, content in (
+                (original_identity, original_bytes),
+                (replacement_identity, replacement_bytes),
+            ):
+                _ensure_witness_recovery_for_moved_quarantine(
+                    parent_descriptor,
+                    quarantine_descriptor,
+                    parent_path,
+                    target_name,
+                    canonical_path,
+                    state,
+                    identity,
+                    content,
+                    recovery_names,
+                )
+            _raise_recovery_error(
+                reason,
+                "post-move entries changed before rollback; no exchange was attempted; "
+                f"{_canonical_recovery_state(parent_descriptor, target_name, canonical_path, original_identity, original_bytes, replacement_identity, replacement_bytes).value}",
+                parent_path,
+                recovery_names,
+            )
+
+        before = _snapshot_exchange_entries_between_at(
+            quarantine_descriptor,
+            state.entry_name,
+            parent_descriptor,
+            target_name,
+            "moved quarantine rollback",
+        )
+        transition_error: BaseException | None = None
+        try:
+            _atomic_exchange_between_at(
+                quarantine_descriptor,
+                state.entry_name,
+                parent_descriptor,
+                target_name,
+            )
+            os.fsync(quarantine_descriptor)
+            os.fsync(parent_descriptor)
+        except (OSError, TournamentValidationError) as error:
+            transition_error = error
+
+        try:
+            after = _snapshot_exchange_entries_between_at(
+                quarantine_descriptor,
+                state.entry_name,
+                parent_descriptor,
+                target_name,
+                "moved quarantine rolled-back",
+            )
+            transition = _classify_exchange_transition(before, after)
+        except TournamentValidationError as error:
+            for identity, content in (
+                (original_identity, original_bytes),
+                (replacement_identity, replacement_bytes),
+            ):
+                _ensure_witness_recovery_for_moved_quarantine(
+                    parent_descriptor,
+                    quarantine_descriptor,
+                    parent_path,
+                    target_name,
+                    canonical_path,
+                    state,
+                    identity,
+                    content,
+                    recovery_names,
+                )
+            _raise_recovery_error(
+                reason,
+                "post-move rollback could not be observed safely; "
+                f"{_canonical_recovery_state(parent_descriptor, target_name, canonical_path, original_identity, original_bytes, replacement_identity, replacement_bytes).value}; "
+                f"observation error: {error}",
+                parent_path,
+                _quarantine_recovery_names_at(
+                    parent_descriptor,
+                    quarantine_descriptor,
+                    state,
+                )
+                + recovery_names,
+            )
+
+        recovery_names = _quarantine_recovery_names_at(
+            parent_descriptor,
+            quarantine_descriptor,
+            state,
+        )
+        for identity, content in (
+            (original_identity, original_bytes),
+            (replacement_identity, replacement_bytes),
+        ):
+            _ensure_witness_recovery_for_moved_quarantine(
+                parent_descriptor,
+                quarantine_descriptor,
+                parent_path,
+                target_name,
+                canonical_path,
+                state,
+                identity,
+                content,
+                recovery_names,
+            )
+        canonical_state = _canonical_recovery_state(
+            parent_descriptor,
+            target_name,
+            canonical_path,
+            original_identity,
+            original_bytes,
+            replacement_identity,
+            replacement_bytes,
+        )
+        if (
+            transition is _ExchangeTransition.EXACT_SWAP
+            and canonical_state is _CanonicalRecoveryState.ORIGINAL
+        ):
+            quarantine_has_provider = _entry_is_exact_regular_file_at(
+                quarantine_descriptor,
+                state.entry_name,
+                canonical_path,
+                replacement_identity,
+                replacement_bytes,
+            )
+            detail = "post-move rollback restored the original config; "
+            detail += (
+                "the provider candidate remains at the actual quarantine path"
+                if quarantine_has_provider
+                else "the quarantine path contains a changed concurrent entry"
+            )
+        elif canonical_state is _CanonicalRecoveryState.PROVIDER:
+            detail = (
+                "post-move rollback did not complete; the provider config remains "
+                "canonical and the original is preserved separately"
+            )
+        else:
+            detail = (
+                f"post-move rollback transition was {transition.value}; "
+                f"{canonical_state.value}"
+            )
+        if transition_error is not None:
+            detail += f"; transition error: {transition_error}"
+        _raise_recovery_error(
+            reason,
+            detail,
+            parent_path,
+            recovery_names,
+        )
+    finally:
+        os.close(quarantine_descriptor)
 
 
 def _recover_atomic_exchange_at(
@@ -2079,6 +2683,7 @@ def apply_results(
     temporary_name: str | None = None
     lock_descriptor = -1
     commit_guard_descriptor = -1
+    retained_paths: list[Path] = []
     try:
         lock_descriptor = _acquire_config_writer_lock(
             parent_descriptor,
@@ -2129,6 +2734,24 @@ def apply_results(
         )
         if prepared_bytes != replacement_bytes:
             raise _error("prepared tournament config could not be verified")
+
+        try:
+            temporary_name = _preflight_no_replace_at(
+                parent_descriptor,
+                preview.config_parent_identity.path,
+                canonical.name,
+                temporary_name,
+                canonical,
+                replacement_identity,
+                replacement_bytes,
+            )
+        except _NoReplacePreflightError as error:
+            retained_paths.extend(
+                preview.config_parent_identity.path / name
+                for name in error.existing_names
+            )
+            temporary_name = None
+            raise
 
         _verify_parent_identity(parent_descriptor, preview.config_parent_identity)
         commit_guard_descriptor, commit_identity, commit_bytes = _open_file_at(
@@ -2307,6 +2930,42 @@ def apply_results(
                 expected_identity=commit_identity,
                 expected_bytes=commit_bytes,
             )
+        except _QuarantineOperationError as error:
+            if error.state.moved:
+                reason = (
+                    "displaced tournament config quarantine failed after the "
+                    "no-replace move"
+                )
+                if error.__cause__ is not None:
+                    reason += f": {error.__cause__}"
+                try:
+                    _recover_moved_quarantine_at(
+                        parent_descriptor,
+                        preview.config_parent_identity.path,
+                        canonical.name,
+                        canonical,
+                        error,
+                        commit_identity,
+                        commit_bytes,
+                        replacement_identity,
+                        replacement_bytes,
+                        reason,
+                    )
+                except TournamentValidationError as recovery_error:
+                    raise recovery_error from error
+            reason = f"displaced tournament config could not be quarantined: {error}"
+            _recover_atomic_exchange_at(
+                parent_descriptor,
+                preview.config_parent_identity.path,
+                exchange_name,
+                canonical.name,
+                canonical,
+                commit_identity,
+                commit_bytes,
+                replacement_identity,
+                replacement_bytes,
+                reason,
+            )
         except TournamentValidationError as error:
             _recover_atomic_exchange_at(
                 parent_descriptor,
@@ -2362,7 +3021,6 @@ def apply_results(
             ),
         )
     except BaseException as error:
-        retained_paths: list[Path] = []
         cleanup_error: BaseException | None = None
         if temporary_name is not None:
             try:

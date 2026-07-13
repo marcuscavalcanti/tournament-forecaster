@@ -5,12 +5,14 @@ import errno
 import fcntl
 import json
 import os
+import re
 import stat
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
+import tournament_forecaster.providers as providers_facade
 from tournament_forecaster.cli import main
 from tournament_forecaster.config import load_tournament
 from tournament_forecaster.errors import TournamentValidationError
@@ -230,6 +232,11 @@ def _provider_artifact_paths(parent: Path, target_name: str) -> list[Path]:
     return sorted(paths)
 
 
+def _reported_paths_under(message: str, parent: Path) -> list[Path]:
+    pattern = re.compile(re.escape(str(parent)) + r"/[^,;]+")
+    return [Path(match.group(0).rstrip(". )")) for match in pattern.finditer(message)]
+
+
 def test_preview_apply_and_repreview_classify_addition_then_idempotent(
     tmp_path: Path,
 ) -> None:
@@ -265,6 +272,11 @@ def test_preview_apply_and_repreview_classify_addition_then_idempotent(
     assert repeated_receipt.changed is False
     assert repeated_receipt.backup_path is None
     assert config.read_bytes() == before
+
+
+def test_provider_facade_exports_apply_result() -> None:
+    assert providers_facade.ApplyResult is results_provider.ApplyResult
+    assert "ApplyResult" in providers_facade.__all__
 
 
 def test_csv_preview_resolves_unique_aliases_and_infers_configured_fixture_id(
@@ -780,7 +792,8 @@ def test_quarantine_no_replace_preserves_injected_destination_and_source(
             destination_descriptor: int,
             destination_name: str,
         ) -> None:
-            inject_destination(destination_descriptor, destination_name)
+            if destination_name == "entry":
+                inject_destination(destination_descriptor, destination_name)
             native_move(
                 source_descriptor,
                 source_name,
@@ -836,6 +849,257 @@ def test_quarantine_no_replace_preserves_injected_destination_and_source(
     artifacts = _provider_artifact_paths(tmp_path, config.name)
     for artifact in artifacts:
         assert str(artifact) in message
+
+
+def test_no_replace_preflight_collision_preserves_both_entries_before_exchange(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    preview = preview_results(config, _json_source(tmp_path, [_result()]), format="json")
+    original_bytes = config.read_bytes()
+    original_identity = (config.stat().st_dev, config.stat().st_ino)
+    injected_bytes = b"same-user preflight destination\n"
+    injected_identity: tuple[int, int] | None = None
+    provider_identity: tuple[int, int] | None = None
+    exchange_called = False
+    native_move = results_provider._atomic_move_no_replace_at
+    native_exchange = results_provider._atomic_exchange_at
+
+    def move_with_collision(
+        source_descriptor: int,
+        source_name: str,
+        destination_descriptor: int,
+        destination_name: str,
+    ) -> None:
+        nonlocal injected_identity, provider_identity
+        if destination_name != "entry" and injected_identity is None:
+            source_stat = os.stat(
+                source_name,
+                dir_fd=source_descriptor,
+                follow_symlinks=False,
+            )
+            provider_identity = (source_stat.st_dev, source_stat.st_ino)
+            injected_identity = _atomic_install_regular(
+                destination_descriptor,
+                destination_name,
+                injected_bytes,
+                "preflight-destination",
+            )
+        native_move(
+            source_descriptor,
+            source_name,
+            destination_descriptor,
+            destination_name,
+        )
+
+    def track_exchange(
+        parent_descriptor: int,
+        source_name: str,
+        destination_name: str,
+    ) -> None:
+        nonlocal exchange_called
+        exchange_called = True
+        native_exchange(parent_descriptor, source_name, destination_name)
+
+    monkeypatch.setattr(
+        results_provider,
+        "_atomic_move_no_replace_at",
+        move_with_collision,
+    )
+    monkeypatch.setattr(results_provider, "_atomic_exchange_at", track_exchange)
+
+    with pytest.raises(TournamentValidationError) as captured:
+        apply_results(config, preview)
+
+    assert exchange_called is False
+    assert config.read_bytes() == original_bytes
+    assert (config.stat().st_dev, config.stat().st_ino) == original_identity
+    assert injected_identity is not None
+    assert provider_identity is not None
+    injected_paths = _paths_with_identity(tmp_path, injected_identity)
+    provider_paths = _paths_with_identity(tmp_path, provider_identity)
+    assert injected_paths
+    assert provider_paths
+    message = str(captured.value)
+    for path in (*injected_paths, *provider_paths):
+        assert str(path) in message
+    reported_paths = _reported_paths_under(message, tmp_path)
+    assert reported_paths
+    assert all(path.exists() for path in reported_paths)
+
+
+def test_post_move_quarantine_failure_restores_original_from_actual_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    preview = preview_results(config, _json_source(tmp_path, [_result()]), format="json")
+    original_bytes = config.read_bytes()
+    original_identity = (config.stat().st_dev, config.stat().st_ino)
+    native_move = results_provider._atomic_move_no_replace_at
+    native_fsync = os.fsync
+    quarantine_descriptor: int | None = None
+    vanished_exchange_name: str | None = None
+    injected = False
+
+    def arm_after_quarantine_move(
+        source_descriptor: int,
+        source_name: str,
+        destination_descriptor: int,
+        destination_name: str,
+    ) -> None:
+        nonlocal quarantine_descriptor, vanished_exchange_name
+        native_move(
+            source_descriptor,
+            source_name,
+            destination_descriptor,
+            destination_name,
+        )
+        if destination_name == "entry":
+            quarantine_descriptor = destination_descriptor
+            vanished_exchange_name = source_name
+
+    def fail_first_quarantine_fsync(descriptor: int) -> None:
+        nonlocal injected
+        if descriptor == quarantine_descriptor and not injected:
+            injected = True
+            raise OSError(errno.EIO, "injected post-move quarantine failure")
+        native_fsync(descriptor)
+
+    monkeypatch.setattr(
+        results_provider,
+        "_atomic_move_no_replace_at",
+        arm_after_quarantine_move,
+    )
+    monkeypatch.setattr(os, "fsync", fail_first_quarantine_fsync)
+
+    with pytest.raises(TournamentValidationError) as captured:
+        apply_results(config, preview)
+
+    assert injected is True
+    assert config.read_bytes() == original_bytes
+    assert (config.stat().st_dev, config.stat().st_ino) == original_identity
+    assert json.loads(config.read_bytes())["completed_matches"] == []
+    assert vanished_exchange_name is not None
+    vanished_path = tmp_path / vanished_exchange_name
+    assert not vanished_path.exists()
+    message = str(captured.value)
+    assert str(vanished_path) not in message
+    reported_paths = _reported_paths_under(message, tmp_path)
+    assert reported_paths
+    assert all(path.exists() for path in reported_paths)
+
+    structured_type = getattr(results_provider, "_QuarantineOperationError", None)
+    assert structured_type is not None
+    current: BaseException | None = captured.value
+    structured_error: BaseException | None = None
+    while current is not None:
+        if isinstance(current, structured_type):
+            structured_error = current
+            break
+        current = current.__cause__
+    assert structured_error is not None
+    state = structured_error.state
+    assert state.moved is True
+    actual_quarantine_path = tmp_path / state.relative_path
+    assert actual_quarantine_path.exists()
+    quarantined_document = json.loads(actual_quarantine_path.read_bytes())
+    assert len(quarantined_document["completed_matches"]) == 1
+
+
+def test_post_move_rollback_rejection_reports_provider_canonical_truthfully(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    preview = preview_results(config, _json_source(tmp_path, [_result()]), format="json")
+    original_bytes = config.read_bytes()
+    native_move = results_provider._atomic_move_no_replace_at
+    native_fsync = os.fsync
+    native_rename = results_provider._atomic_rename_at
+    quarantine_descriptor: int | None = None
+    vanished_exchange_name: str | None = None
+    injected = False
+    rollback_rejected = False
+
+    def arm_after_quarantine_move(
+        source_descriptor: int,
+        source_name: str,
+        destination_descriptor: int,
+        destination_name: str,
+    ) -> None:
+        nonlocal quarantine_descriptor, vanished_exchange_name
+        native_move(
+            source_descriptor,
+            source_name,
+            destination_descriptor,
+            destination_name,
+        )
+        if destination_name == "entry":
+            quarantine_descriptor = destination_descriptor
+            vanished_exchange_name = source_name
+
+    def fail_first_quarantine_fsync(descriptor: int) -> None:
+        nonlocal injected
+        if descriptor == quarantine_descriptor and not injected:
+            injected = True
+            raise OSError(errno.EIO, "injected post-move quarantine failure")
+        native_fsync(descriptor)
+
+    def reject_cross_directory_exchange(
+        source_descriptor: int,
+        source_name: str,
+        destination_descriptor: int,
+        destination_name: str,
+        *,
+        flags: int,
+        operation: str,
+    ) -> None:
+        nonlocal rollback_rejected
+        if (
+            flags == results_provider._RENAME_EXCHANGE
+            and source_descriptor != destination_descriptor
+        ):
+            rollback_rejected = True
+            raise TournamentValidationError("injected cross-directory exchange rejection")
+        native_rename(
+            source_descriptor,
+            source_name,
+            destination_descriptor,
+            destination_name,
+            flags=flags,
+            operation=operation,
+        )
+
+    monkeypatch.setattr(
+        results_provider,
+        "_atomic_move_no_replace_at",
+        arm_after_quarantine_move,
+    )
+    monkeypatch.setattr(os, "fsync", fail_first_quarantine_fsync)
+    monkeypatch.setattr(
+        results_provider,
+        "_atomic_rename_at",
+        reject_cross_directory_exchange,
+    )
+
+    with pytest.raises(TournamentValidationError) as captured:
+        apply_results(config, preview)
+
+    assert injected is True
+    assert rollback_rejected is True
+    assert len(json.loads(config.read_bytes())["completed_matches"]) == 1
+    assert _regular_paths_with_bytes(tmp_path, original_bytes)
+    assert vanished_exchange_name is not None
+    vanished_path = tmp_path / vanished_exchange_name
+    assert not vanished_path.exists()
+    message = str(captured.value)
+    assert "provider config remains canonical" in message
+    assert str(vanished_path) not in message
+    reported_paths = _reported_paths_under(message, tmp_path)
+    assert reported_paths
+    assert all(path.exists() for path in reported_paths)
 
 
 def test_rollback_restores_newer_destination_and_reports_every_recovery_path(
@@ -1115,6 +1379,55 @@ def test_apply_fails_closed_before_mutation_without_no_replace_move(
 
     assert config.read_bytes() == before
     assert not (tmp_path / f".{config.name}.lock").exists()
+
+
+def test_runtime_no_replace_rejection_happens_before_canonical_exchange(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    preview = preview_results(config, _json_source(tmp_path, [_result()]), format="json")
+    original_bytes = config.read_bytes()
+    original_identity = (config.stat().st_dev, config.stat().st_ino)
+    native_rename = results_provider._atomic_exchange_function
+    assert native_rename is not None
+    observed_flags: list[int] = []
+
+    def reject_no_replace_on_filesystem(
+        source_descriptor: int,
+        source_name: bytes,
+        destination_descriptor: int,
+        destination_name: bytes,
+        flags: int,
+    ) -> int:
+        observed_flags.append(flags)
+        if flags == results_provider._RENAME_NO_REPLACE:
+            ctypes.set_errno(errno.EOPNOTSUPP)
+            return -1
+        return native_rename(
+            source_descriptor,
+            source_name,
+            destination_descriptor,
+            destination_name,
+            flags,
+        )
+
+    monkeypatch.setattr(
+        results_provider,
+        "_atomic_exchange_function",
+        reject_no_replace_on_filesystem,
+    )
+
+    with pytest.raises(TournamentValidationError, match="no-replace") as captured:
+        apply_results(config, preview)
+
+    assert observed_flags
+    assert results_provider._RENAME_EXCHANGE not in observed_flags
+    assert config.read_bytes() == original_bytes
+    assert (config.stat().st_dev, config.stat().st_ino) == original_identity
+    reported_paths = _reported_paths_under(str(captured.value), tmp_path)
+    assert reported_paths
+    assert all(path.exists() for path in reported_paths)
 
 
 def test_first_native_exchange_runtime_rejection_reports_retained_artifacts(
