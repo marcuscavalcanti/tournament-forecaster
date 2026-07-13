@@ -465,6 +465,35 @@ def test_codex_browser_command_gets_fresh_process_environment(
     assert env["OPENAI_API_KEY"] == "keep-openai-key"
 
 
+def test_codex_browser_command_does_not_inherit_unrelated_secrets(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "keep-openai-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "do-not-leak-provider-key")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "do-not-leak-cloud-key")
+    monkeypatch.setenv("GH_TOKEN", "do-not-leak-github-token")
+    monkeypatch.setenv("DATABASE_URL", "do-not-leak-database-url")
+
+    env = _browser_command_env(["codex", "exec"])
+
+    assert env["OPENAI_API_KEY"] == "keep-openai-key"
+    assert "ANTHROPIC_API_KEY" not in env
+    assert "AWS_SECRET_ACCESS_KEY" not in env
+    assert "GH_TOKEN" not in env
+    assert "DATABASE_URL" not in env
+
+
+def test_custom_browser_command_receives_only_its_declared_provider_key(monkeypatch) -> None:
+    monkeypatch.setenv("PERPLEXITY_API_KEY", "keep-declared-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "do-not-leak-other-provider")
+
+    env = _browser_command_env(
+        ["custom-perplexity-bridge", "--json"],
+        allowed_secret_names=("PERPLEXITY_API_KEY",),
+    )
+
+    assert env["PERPLEXITY_API_KEY"] == "keep-declared-key"
+    assert "OPENAI_API_KEY" not in env
+
+
 def test_gemini_browser_command_also_gets_fresh_process_environment(
     monkeypatch,
     tmp_path,
@@ -899,6 +928,55 @@ def test_post_json_once_preserves_http_error_body(monkeypatch) -> None:
 
     assert exc_info.value.fp is not None
     assert "prepayment credits are depleted" in exc_info.value.fp.read().decode("utf-8")
+
+
+def test_post_json_once_rejects_plain_http_for_remote_hosts(monkeypatch) -> None:
+    class UnexpectedConnection:
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("remote HTTP must be rejected before opening a connection")
+
+    monkeypatch.setattr("worldcup_brazil.agents.http.client.HTTPConnection", UnexpectedConnection)
+
+    with pytest.raises(urllib.error.URLError, match="HTTPS"):
+        _post_json_once("http://api.example.test/v1/messages", {}, b"{}", timeout=3)
+
+
+def test_post_json_once_allows_plain_http_for_loopback(monkeypatch) -> None:
+    class FakeResponse:
+        status = 200
+        reason = "OK"
+        headers = {}
+
+        def read(self):
+            return b'{"ok": true}'
+
+    class FakeConnection:
+        def __init__(self, host, port=None, *, timeout=None):
+            assert host == "127.0.0.1"
+            assert port == 8765
+            assert timeout is not None
+            self.sock = None
+
+        def connect(self):
+            return None
+
+        def request(self, method, path, *, body, headers):
+            assert method == "POST"
+            assert path == "/bridge"
+            assert body == b"{}"
+            assert headers == {}
+
+        def getresponse(self):
+            return FakeResponse()
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr("worldcup_brazil.agents.http.client.HTTPConnection", FakeConnection)
+
+    result = _post_json_once("http://127.0.0.1:8765/bridge", {}, b"{}", timeout=3)
+
+    assert result == {"ok": True}
 
 
 def test_call_agent_hard_timeout_returns_operational_fallback(monkeypatch) -> None:

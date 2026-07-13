@@ -32,6 +32,7 @@ dev = [
   "mypy>=1.13,<2",
   "Pillow>=11,<13",
   "pytest>=8.3,<10",
+  "pytest-cov>=6,<8",
   "pytest-socket>=0.7,<1",
   "ruff>=0.9,<1",
   "twine>=6,<7",
@@ -59,6 +60,13 @@ include = [
   "/src/tournament_forecaster/compatibility/__init__.py",
   "/src/tournament_forecaster/compatibility/worldcup_brazil.py",
   "/src/tournament_forecaster/config.py",
+  "/src/tournament_forecaster/council/__init__.py",
+  "/src/tournament_forecaster/council/blend.py",
+  "/src/tournament_forecaster/council/config.py",
+  "/src/tournament_forecaster/council/models.py",
+  "/src/tournament_forecaster/council/prompts.py",
+  "/src/tournament_forecaster/council/providers.py",
+  "/src/tournament_forecaster/council/runner.py",
   "/src/tournament_forecaster/data/presets/champions-league-style/tournament.json",
   "/src/tournament_forecaster/data/presets/libertadores-style/tournament.json",
   "/src/tournament_forecaster/data/presets/synthetic-cup/tournament.json",
@@ -86,6 +94,7 @@ include = [
   "/src/tournament_forecaster/reports/publication.py",
   "/src/tournament_forecaster/resources.py",
   "/src/tournament_forecaster/schemas/backtest.schema.json",
+  "/src/tournament_forecaster/schemas/council.schema.json",
   "/src/tournament_forecaster/schemas/forecast.schema.json",
   "/src/tournament_forecaster/schemas/odds.import.schema.json",
   "/src/tournament_forecaster/schemas/results.import.schema.json",
@@ -153,6 +162,7 @@ include = [
   "/examples/world-cup-2026-live/backtest-report.md",
   "/examples/world-cup-2026-live/backtest.json",
   "/examples/world-cup-2026-live/tournament.json",
+  "/examples/council.example.json",
   "/presets/champions-league-style/DATA_SOURCES.md",
   "/presets/champions-league-style/tournament.json",
   "/presets/libertadores-style/DATA_SOURCES.md",
@@ -170,6 +180,13 @@ include = [
   "/src/tournament_forecaster/compatibility/__init__.py",
   "/src/tournament_forecaster/compatibility/worldcup_brazil.py",
   "/src/tournament_forecaster/config.py",
+  "/src/tournament_forecaster/council/__init__.py",
+  "/src/tournament_forecaster/council/blend.py",
+  "/src/tournament_forecaster/council/config.py",
+  "/src/tournament_forecaster/council/models.py",
+  "/src/tournament_forecaster/council/prompts.py",
+  "/src/tournament_forecaster/council/providers.py",
+  "/src/tournament_forecaster/council/runner.py",
   "/src/tournament_forecaster/data/presets/champions-league-style/tournament.json",
   "/src/tournament_forecaster/data/presets/libertadores-style/tournament.json",
   "/src/tournament_forecaster/data/presets/synthetic-cup/tournament.json",
@@ -197,6 +214,7 @@ include = [
   "/src/tournament_forecaster/reports/publication.py",
   "/src/tournament_forecaster/resources.py",
   "/src/tournament_forecaster/schemas/backtest.schema.json",
+  "/src/tournament_forecaster/schemas/council.schema.json",
   "/src/tournament_forecaster/schemas/forecast.schema.json",
   "/src/tournament_forecaster/schemas/odds.import.schema.json",
   "/src/tournament_forecaster/schemas/results.import.schema.json",
@@ -261,6 +279,9 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 45
 
 [tool.mypy]
 python_version = "3.11"

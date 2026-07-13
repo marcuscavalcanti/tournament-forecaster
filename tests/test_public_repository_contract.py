@@ -18,6 +18,7 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from tournament_forecaster.config import load_tournament_document
+from tournament_forecaster.council.config import load_council_config
 from tournament_forecaster.resources import resource_path
 
 ROOT = Path(__file__).parents[1]
@@ -56,6 +57,7 @@ REQUIRED_FILES = {
     "docs/assets/architecture/README.md",
     "docs/assets/architecture/generate.py",
     "docs/assets/architecture/manifest.json",
+    "examples/council.example.json",
     "scripts/check_english_surface.py",
 }
 
@@ -72,12 +74,14 @@ TASK6_OVERLAY_PATHS = (
     Path("docs/PROVIDERS.md"),
     Path("docs/assets/architecture"),
     Path("docs/knockout-stage-output-contract.md"),
+    Path("examples/council.example.json"),
     Path("docs/superpowers/plans/2026-07-10-tournament-forecaster-productization.md"),
     Path(
         "docs/superpowers/specs/2026-07-10-open-source-tournament-forecaster-design.md"
     ),
     Path("pyproject.toml"),
     Path("scripts/check_english_surface.py"),
+    Path("src/tournament_forecaster/domain.py"),
     Path("tests/test_agents_fallbacks.py"),
     Path("tests/test_clean_wheel.py"),
     Path("tests/test_clean_source_install.py"),
@@ -85,6 +89,7 @@ TASK6_OVERLAY_PATHS = (
     Path("tests/test_readme_diagrams.py"),
     Path("tests/tournament_forecaster/test_package_resources.py"),
     Path("uv.lock"),
+    Path("worldcup_brazil/agents.py"),
 )
 
 SUPPORTED_NATIVE_CLASSIFIERS = {
@@ -133,6 +138,8 @@ MYPY_STALE_DEBT_PHRASES = (
     "no new suppressions",
 )
 STRICT_RUFF_STEP_NAME = "Strict Ruff for green release and provider contract targets"
+COVERAGE_STEP_NAME = "Full tracked test baseline with public-core branch coverage"
+COMPLEXITY_STEP_NAME = "Public-core complexity ceiling"
 STRICT_RUFF_TARGETS = (
     "src/tournament_forecaster/providers/security.py",
     "scripts/check_english_surface.py",
@@ -169,6 +176,7 @@ def _workflow_job(workflow: str, job_name: str) -> str:
 def _workflow_step_command(workflow: str, step_name: str) -> list[str]:
     match = re.search(
         rf"^      - name: {re.escape(step_name)}\n"
+        r"(?:        env:\n(?: {10}.*\n)+)?"
         r"        run: >-\n"
         r"(?P<body>(?: {10}.*\n)+)",
         workflow,
@@ -758,6 +766,86 @@ def test_readme_states_the_real_example_and_backtest_boundaries() -> None:
         assert phrase in readme
 
 
+def test_multi_llm_council_is_a_documented_first_class_optional_capability() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    normalized_readme = readme.casefold()
+    configuration = (ROOT / "docs/CONFIGURATION.md").read_text(encoding="utf-8")
+    providers = (ROOT / "docs/PROVIDERS.md").read_text(encoding="utf-8")
+    architecture = (ROOT / "docs/ARCHITECTURE.md").read_text(encoding="utf-8")
+    product_flow = (ROOT / "docs/PRODUCT_FLOW.md").read_text(encoding="utf-8")
+    security = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
+    env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
+    council_path = ROOT / "examples/council.example.json"
+
+    for phrase in (
+        "first-class optional multi-llm council",
+        "55% deterministic engine / 45% council consensus",
+        "two-pass debrief",
+        "falls back to the deterministic baseline",
+        "tournament-forecast council validate --config council.local.json",
+        "--council-config council.local.json --council",
+        "--council-config council.local.json --no-council",
+    ):
+        assert phrase in normalized_readme
+    assert "does not yet" not in normalized_readme.split(
+        "## supported formats", maxsplit=1
+    )[1].split("## configuration", maxsplit=1)[0]
+
+    for phrase in (
+        "reasoning_effort",
+        "thinking_budget_tokens",
+        "minimum_valid_agents",
+        "engine_weight",
+        "council_weight",
+    ):
+        assert phrase in configuration
+    for provider in (
+        "openai",
+        "anthropic",
+        "openai-compatible",
+        "google-gemini",
+    ):
+        assert provider in providers.casefold()
+    for phrase in (
+        "55% deterministic engine",
+        "45% council",
+        "cannot change completed results",
+    ):
+        assert phrase in architecture.casefold() + product_flow.casefold()
+    for phrase in (
+        "direct https",
+        "environment variables",
+        "provider errors",
+    ):
+        assert phrase in security.casefold()
+
+    expected_environment_names = {
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "PERPLEXITY_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "GEMINI_API_KEY",
+    }
+    for name in expected_environment_names:
+        assert f"{name}=" in env_example
+    assert not any(
+        line.partition("=")[2].strip()
+        for line in env_example.splitlines()
+        if line.partition("=")[0] in expected_environment_names
+    )
+
+    document = json.loads(council_path.read_text(encoding="utf-8"))
+    with resource_path("schemas", "council.schema.json") as schema_path:
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    Draft202012Validator(schema).validate(document)
+    council = load_council_config(council_path)
+    assert council.enabled is False
+    assert council.engine_weight == pytest.approx(0.55)
+    assert council.council_weight == pytest.approx(0.45)
+    assert council.rounds == 2
+    assert len(council.enabled_agents) >= 3
+
+
 def test_readme_live_simulation_and_backtest_are_socket_denied(
     tmp_path: Path,
     monkeypatch,
@@ -1019,13 +1107,58 @@ def test_ci_quality_gates_compile_and_type_check_the_entire_public_package() -> 
     )
 
 
+def test_public_core_branch_coverage_is_measured_and_gated() -> None:
+    ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+    dev_dependencies = metadata["project"]["optional-dependencies"]["dev"]
+    assert any(dependency.startswith("pytest-cov") for dependency in dev_dependencies)
+
+    command = _workflow_step_command(ci, COVERAGE_STEP_NAME)
+    assert "--cov=tournament_forecaster" in command
+    assert "--cov-branch" in command
+    assert "--cov=worldcup_brazil" not in command
+    threshold_argument = next(
+        argument for argument in command if argument.startswith("--cov-fail-under=")
+    )
+    assert int(threshold_argument.partition("=")[2]) >= 70
+
+    assert "COVERAGE_MIN ?=" in makefile
+    assert "--cov=tournament_forecaster" in makefile
+    assert "--cov-branch" in makefile
+    assert "--cov-fail-under=$(COVERAGE_MIN)" in makefile
+
+
+def test_public_core_complexity_ceiling_is_enforced() -> None:
+    ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+    mccabe = metadata["tool"]["ruff"]["lint"]["mccabe"]
+    assert mccabe["max-complexity"] == 45
+    assert _workflow_step_command(ci, COMPLEXITY_STEP_NAME) == [
+        "ruff",
+        "check",
+        "src/tournament_forecaster",
+        "--select",
+        "C901",
+    ]
+    assert "complexity:" in makefile
+    assert "src/tournament_forecaster --select C901" in makefile
+
+
 @pytest.mark.parametrize("mutation", ["compile", "mypy", "mypy-docs", "strict-ruff"])
 def test_ci_quality_gate_contract_rejects_scope_mutations(mutation: str) -> None:
     ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
     contributing = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
     if mutation == "compile":
-        makefile = makefile.replace("src/tournament_forecaster ", "", 1)
+        makefile = makefile.replace(
+            "$(PYTHON) -m compileall -q src/tournament_forecaster worldcup_brazil scripts",
+            "$(PYTHON) -m compileall -q worldcup_brazil scripts",
+            1,
+        )
     elif mutation == "mypy":
         step, following_steps = ci.split(f"      - name: {MYPY_STEP_NAME}\n", maxsplit=1)
         ci = step + f"      - name: {MYPY_STEP_NAME}\n" + following_steps.replace(

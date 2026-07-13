@@ -9,9 +9,12 @@ import time
 from xml.etree import ElementTree
 
 import pytest
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import ValidationError
 
 from tournament_forecaster.domain import Forecast, MatchupProbability
 from tournament_forecaster.errors import TournamentValidationError
+from tournament_forecaster.reports.markdown_report import render_markdown_report
 
 
 def _forecast() -> Forecast:
@@ -51,6 +54,85 @@ def _forecast() -> Forecast:
 
 def _destination(tmp_path: Path, name: str = "north-city") -> Path:
     return tmp_path / "outputs" / "synthetic-cup" / name
+
+
+def test_markdown_makes_the_council_debrief_and_uncertainty_basis_visible() -> None:
+    council = {
+        "status": "applied",
+        "reason": None,
+        "engine_weight": 0.55,
+        "council_weight": 0.45,
+        "rounds_configured": 2,
+        "rounds_completed": 2,
+        "minimum_valid_agents": 2,
+        "participants": [
+            {
+                "id": "agent-a",
+                "display_name": "Agent A",
+                "provider": "openai",
+                "model": "model-a",
+                "reasoning_effort": "high",
+                "thinking_budget_tokens": None,
+                "max_output_tokens": 2400,
+            }
+        ],
+        "engine_baseline": {
+            "stage_probabilities": dict(_forecast().stage_probabilities),
+            "championship_probability": 0.25,
+        },
+        "consensus": {
+            "agent_id": "consensus",
+            "round": 2,
+            "stage_probabilities": dict(_forecast().stage_probabilities),
+            "championship_probability": 0.294444,
+            "confidence": 0.8,
+            "summary": "Availability narrowed the title path.",
+            "key_factors": ["availability", "path strength"],
+        },
+        "rounds": [],
+        "matchup_probabilities_basis": "engine_only",
+        "uncertainty_basis": "engine_sampling_with_fixed_council_consensus",
+    }
+
+    markdown = render_markdown_report(replace(_forecast(), council=council))
+
+    assert "## Multi-LLM Council Debrief" in markdown
+    assert "**Status:** applied" in markdown
+    assert "55% deterministic engine / 45% council consensus" in markdown
+    assert "Agent A" in markdown
+    assert "model\\-a" in markdown
+    assert "reasoning effort: high" in markdown
+    assert "Availability narrowed the title path\\." in markdown
+    assert "Matchup probabilities remain engine-only" in markdown
+    assert "confidence intervals carry engine sampling uncertainty only" in markdown
+
+
+def test_forecast_schema_rejects_an_underspecified_council_mapping() -> None:
+    from tournament_forecaster.resources import resource_path
+
+    document = replace(_forecast(), council={"status": "applied"}).to_dict()
+    with resource_path("schemas", "forecast.schema.json") as schema_path:
+        schema = json.loads(Path(schema_path).read_text(encoding="utf-8"))
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(document)
+
+
+def test_forecast_schema_accepts_only_the_exact_legacy_disabled_council() -> None:
+    from tournament_forecaster.resources import resource_path
+
+    with resource_path("schemas", "forecast.schema.json") as schema_path:
+        schema = json.loads(Path(schema_path).read_text(encoding="utf-8"))
+    validator = Draft202012Validator(schema)
+
+    validator.validate(replace(_forecast(), council={"enabled": False}).to_dict())
+    with pytest.raises(ValidationError):
+        validator.validate(
+            replace(
+                _forecast(),
+                council={"enabled": False, "unexpected": "unbounded"},
+            ).to_dict()
+        )
 
 
 def test_report_bundle_is_one_versioned_generation_at_stable_public_paths(

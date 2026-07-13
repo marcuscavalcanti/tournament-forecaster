@@ -1009,8 +1009,21 @@ def _knockout_fact_pair(
     return match.away_team_id, match.home_team_id
 
 
-def validate_tournament(tournament: Tournament) -> None:
-    """Validate cross-object invariants after a tournament has been normalized."""
+@dataclass(frozen=True, slots=True)
+class _TournamentStructure:
+    team_ids: frozenset[str]
+    stages_by_id: dict[str, Mapping[str, object]]
+    group_memberships: dict[str, dict[str, str]]
+    group_fixture_contracts: dict[str, dict[str, tuple[str, str, int]]]
+    league_fixtures: dict[str, dict[str, tuple[str, str]]]
+    stage_leg_limits: dict[str, int]
+    knockout_sources: dict[str, tuple[Mapping[str, object], ...]]
+    tie_owners: dict[str, str]
+    stage_dependency_order: tuple[str, ...]
+
+
+def _validate_tournament_structure(tournament: Tournament) -> _TournamentStructure:
+    """Validate teams and the stage dependency graph before completed facts."""
 
     if not isinstance(tournament, Tournament):
         raise TournamentValidationError("tournament must be a Tournament")
@@ -1191,6 +1204,34 @@ def validate_tournament(tournament: Tournament) -> None:
         if team_id not in team_ids:
             raise TournamentValidationError("ratings must reference configured teams")
         bounded_finite_number(rating, f"rating {team_id}")
+
+    return _TournamentStructure(
+        team_ids=frozenset(team_ids),
+        stages_by_id=stages_by_id,
+        group_memberships=group_memberships,
+        group_fixture_contracts=group_fixture_contracts,
+        league_fixtures=league_fixtures,
+        stage_leg_limits=stage_leg_limits,
+        knockout_sources=knockout_sources,
+        tie_owners=tie_owners,
+        stage_dependency_order=tuple(stage_dependency_order),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _CompletedFacts:
+    completed_by_stage: dict[str, list[CompletedMatch]]
+    completed_knockout_ties: dict[tuple[str, str], list[CompletedMatch]]
+    completed_winners: dict[str, str]
+    locked_pairs_by_stage: dict[str, dict[str, tuple[str, str]]]
+
+
+def _validate_completed_match_facts(
+    tournament: Tournament,
+    structure: _TournamentStructure,
+) -> _CompletedFacts:
+    """Validate completed scores against their configured stage contracts."""
+
     completed_keys: set[tuple[str, int]] = set()
     completed_identities: dict[str, tuple[str, frozenset[str]]] = {}
     completed_knockout_ties: dict[tuple[str, str], list[CompletedMatch]] = {}
@@ -1198,9 +1239,12 @@ def validate_tournament(tournament: Tournament) -> None:
     for match in tournament.completed_matches:
         if not isinstance(match, CompletedMatch):
             raise TournamentValidationError("completed matches must be CompletedMatch values")
-        if match.stage_id not in stages_by_id:
+        if match.stage_id not in structure.stages_by_id:
             raise TournamentValidationError("completed matches must reference configured stages")
-        if match.home_team_id not in team_ids or match.away_team_id not in team_ids:
+        if (
+            match.home_team_id not in structure.team_ids
+            or match.away_team_id not in structure.team_ids
+        ):
             raise TournamentValidationError("completed matches must reference configured teams")
         key = (match.match_id, match.leg)
         if key in completed_keys:
@@ -1216,11 +1260,11 @@ def validate_tournament(tournament: Tournament) -> None:
         else:
             completed_identities[match.match_id] = identity
         completed_by_stage.setdefault(match.stage_id, []).append(match)
-        if match.leg > stage_leg_limits[match.stage_id]:
+        if match.leg > structure.stage_leg_limits[match.stage_id]:
             raise TournamentValidationError("completed match leg exceeds stage contract")
-        stage = stages_by_id[match.stage_id]
+        stage = structure.stages_by_id[match.stage_id]
         if stage.get("type") == "knockout":
-            if tie_owners.get(match.match_id) != match.stage_id:
+            if structure.tie_owners.get(match.match_id) != match.stage_id:
                 raise TournamentValidationError(
                     "completed knockout match is not a configured tie"
                 )
@@ -1240,15 +1284,19 @@ def validate_tournament(tournament: Tournament) -> None:
             )
             if match.winner_team_id != score_winner:
                 raise TournamentValidationError("completed match winner contradicts score")
-        if match.stage_id in group_memberships:
-            membership = group_memberships[match.stage_id]
+        if match.stage_id in structure.group_memberships:
+            membership = structure.group_memberships[match.stage_id]
             if (
                 match.home_team_id not in membership
                 or match.away_team_id not in membership
                 or membership[match.home_team_id] != membership[match.away_team_id]
             ):
-                raise TournamentValidationError("completed group match teams must share the same configured group")
-            expected_identity = group_fixture_contracts[match.stage_id].get(match.match_id)
+                raise TournamentValidationError(
+                    "completed group match teams must share the same configured group"
+                )
+            expected_identity = structure.group_fixture_contracts[match.stage_id].get(
+                match.match_id
+            )
             if expected_identity != (
                 match.home_team_id,
                 match.away_team_id,
@@ -1257,10 +1305,13 @@ def validate_tournament(tournament: Tournament) -> None:
                 raise TournamentValidationError(
                     "completed group match does not match the generated group fixture contract"
                 )
-        if match.stage_id in league_fixtures:
-            configured_pair = league_fixtures[match.stage_id].get(match.match_id)
+        if match.stage_id in structure.league_fixtures:
+            configured_pair = structure.league_fixtures[match.stage_id].get(match.match_id)
             if configured_pair != (match.home_team_id, match.away_team_id):
-                raise TournamentValidationError("completed league match must reference a configured league fixture")
+                raise TournamentValidationError(
+                    "completed league match must reference a configured league fixture"
+                )
+
     completed_winners: dict[str, str] = {}
     locked_entrants_by_stage: dict[str, set[str]] = {}
     locked_pairs_by_stage: dict[str, dict[str, tuple[str, str]]] = {}
@@ -1273,11 +1324,26 @@ def validate_tournament(tournament: Tournament) -> None:
             )
         locked_entrants.update(team_pair)
         locked_pairs_by_stage.setdefault(stage_id, {})[match_id] = (
-            _knockout_fact_pair(stages_by_id[stage_id], matches[0])
+            _knockout_fact_pair(structure.stages_by_id[stage_id], matches[0])
         )
-        winner = _completed_knockout_winner(stages_by_id[stage_id], matches)
+        winner = _completed_knockout_winner(structure.stages_by_id[stage_id], matches)
         if winner is not None:
             completed_winners[match_id] = winner
+
+    return _CompletedFacts(
+        completed_by_stage=completed_by_stage,
+        completed_knockout_ties=completed_knockout_ties,
+        completed_winners=completed_winners,
+        locked_pairs_by_stage=locked_pairs_by_stage,
+    )
+
+
+def _validate_completed_knockout_dependencies(
+    tournament: Tournament,
+    structure: _TournamentStructure,
+    facts: _CompletedFacts,
+) -> None:
+    """Require every completed knockout fact to have resolvable ancestors."""
 
     tie_sources: dict[str, tuple[Mapping[str, object], ...]] = {}
     for stage in tournament.stages:
@@ -1295,14 +1361,14 @@ def validate_tournament(tournament: Tournament) -> None:
                 entrant for entrant in entrants if isinstance(entrant, Mapping)
             )
 
-    for (stage_id, match_id), _matches in sorted(completed_knockout_ties.items()):
-        stage = stages_by_id[stage_id]
+    for (stage_id, match_id), _matches in sorted(facts.completed_knockout_ties.items()):
+        stage = structure.stages_by_id[stage_id]
         pairing = stage["pairing"]
         assert isinstance(pairing, Mapping)
         sources = (
             tie_sources[match_id]
             if pairing["mode"] == "fixed"
-            else knockout_sources[stage_id]
+            else structure.knockout_sources[stage_id]
         )
         rank_stages = {
             (
@@ -1313,7 +1379,7 @@ def validate_tournament(tournament: Tournament) -> None:
             if source.get("type") in {"group_rank", "best_additional", "league_rank"}
         }
         for rank_stage_type, rank_stage_id in sorted(rank_stages):
-            source_facts = completed_by_stage.get(rank_stage_id, [])
+            source_facts = facts.completed_by_stage.get(rank_stage_id, [])
             if rank_stage_type == "group":
                 completed_contract = {
                     match.match_id: (
@@ -1323,24 +1389,24 @@ def validate_tournament(tournament: Tournament) -> None:
                     )
                     for match in source_facts
                 }
-                if completed_contract != group_fixture_contracts[rank_stage_id]:
+                if completed_contract != structure.group_fixture_contracts[rank_stage_id]:
                     raise TournamentValidationError(
                         "completed rank-fed tie requires every generated group fixture"
                     )
             elif {match.match_id for match in source_facts} != set(
-                league_fixtures[rank_stage_id]
+                structure.league_fixtures[rank_stage_id]
             ):
                 raise TournamentValidationError(
                     "completed rank-fed tie requires every configured league fixture"
                 )
 
-    for (_, match_id), matches in sorted(completed_knockout_ties.items()):
+    for (_, match_id), matches in sorted(facts.completed_knockout_ties.items()):
         required_winners: list[str] = []
         for source in tie_sources[match_id]:
             if source.get("type") != "match_winner":
                 continue
             ancestor_match_id = str(source["match_id"])
-            ancestor_winner = completed_winners.get(ancestor_match_id)
+            ancestor_winner = facts.completed_winners.get(ancestor_match_id)
             if ancestor_winner is None:
                 raise TournamentValidationError(
                     "completed match_winner ancestor must also be fully completed"
@@ -1359,9 +1425,17 @@ def validate_tournament(tournament: Tournament) -> None:
                     "completed downstream tie contradicts completed ancestor winners"
                 )
 
-    resolved_state = QualificationState(match_winners=dict(completed_winners))
-    for stage_id, expected_contract in group_fixture_contracts.items():
-        source_facts = completed_by_stage.get(stage_id, [])
+
+def _resolved_qualification_state(
+    tournament: Tournament,
+    structure: _TournamentStructure,
+    facts: _CompletedFacts,
+) -> QualificationState:
+    """Resolve rankings only for source stages whose fixture sets are complete."""
+
+    resolved_state = QualificationState(match_winners=dict(facts.completed_winners))
+    for stage_id, expected_contract in structure.group_fixture_contracts.items():
+        source_facts = facts.completed_by_stage.get(stage_id, [])
         completed_contract = {
             match.match_id: (
                 match.home_team_id,
@@ -1383,7 +1457,7 @@ def validate_tournament(tournament: Tournament) -> None:
             for match in source_facts
         )
         group_rankings, best_additional, _qualified = calculate_group_tables(
-            stages_by_id[stage_id],
+            structure.stages_by_id[stage_id],
             table_matches,
             ratings=tournament.ratings,
         )
@@ -1393,8 +1467,8 @@ def validate_tournament(tournament: Tournament) -> None:
         }
         resolved_state.best_additional[stage_id] = best_additional
 
-    for stage_id, configured_fixtures in league_fixtures.items():
-        source_facts = completed_by_stage.get(stage_id, [])
+    for stage_id, configured_fixtures in structure.league_fixtures.items():
+        source_facts = facts.completed_by_stage.get(stage_id, [])
         if {match.match_id for match in source_facts} != set(configured_fixtures):
             continue
         table_matches = tuple(
@@ -1408,17 +1482,25 @@ def validate_tournament(tournament: Tournament) -> None:
             for match in source_facts
         )
         league_rankings = calculate_league_table(
-            stages_by_id[stage_id],
+            structure.stages_by_id[stage_id],
             table_matches,
             ratings=tournament.ratings,
         )
         resolved_state.league_rankings[stage_id] = tuple(
             row.team_id for row in league_rankings
         )
+    return resolved_state
+
+
+def _validate_knockout_entrant_possibilities(
+    structure: _TournamentStructure,
+    resolved_state: QualificationState,
+) -> None:
+    """Reject explicit entrants that overlap a dynamic entrant source."""
 
     possible_tie_winners: dict[str, frozenset[str]] = {}
-    for stage_id in stage_dependency_order:
-        stage = stages_by_id[stage_id]
+    for stage_id in structure.stage_dependency_order:
+        stage = structure.stages_by_id[stage_id]
         if stage.get("type") != "knockout":
             continue
         pairing = stage["pairing"]
@@ -1438,8 +1520,8 @@ def validate_tournament(tournament: Tournament) -> None:
                     source,
                     state=resolved_state,
                     possible_tie_winners=possible_tie_winners,
-                    group_memberships=group_memberships,
-                    league_fixtures=league_fixtures,
+                    group_memberships=structure.group_memberships,
+                    league_fixtures=structure.league_fixtures,
                 )
                 stage_sources.append((source, possibilities))
                 tie_possibilities.append(possibilities)
@@ -1475,7 +1557,15 @@ def validate_tournament(tournament: Tournament) -> None:
                 if isinstance(tie, Mapping)
             )
 
-    for stage_id, stage in sorted(stages_by_id.items()):
+
+def _validate_locked_knockout_pairs(
+    structure: _TournamentStructure,
+    facts: _CompletedFacts,
+    resolved_state: QualificationState,
+) -> None:
+    """Compare completed knockout pairs with pairs resolved from source facts."""
+
+    for stage_id, stage in sorted(structure.stages_by_id.items()):
         if stage.get("type") != "knockout":
             continue
         pairing = stage["pairing"]
@@ -1483,12 +1573,11 @@ def validate_tournament(tournament: Tournament) -> None:
         ties = pairing["ties"]
         assert isinstance(ties, Sequence)
         mode = str(pairing["mode"])
-        locked_pairs = locked_pairs_by_stage.get(stage_id, {})
+        locked_pairs = facts.locked_pairs_by_stage.get(stage_id, {})
         selected_ties = tuple(
             tie
             for tie in ties
-            if isinstance(tie, Mapping)
-            and _tie_is_resolved(tie, resolved_state)
+            if isinstance(tie, Mapping) and _tie_is_resolved(tie, resolved_state)
         )
         if not selected_ties and not locked_pairs:
             continue
@@ -1503,3 +1592,14 @@ def validate_tournament(tournament: Tournament) -> None:
                 if isinstance(tie, Mapping)
             ),
         )
+
+
+def validate_tournament(tournament: Tournament) -> None:
+    """Validate cross-object invariants after a tournament has been normalized."""
+
+    structure = _validate_tournament_structure(tournament)
+    completed_facts = _validate_completed_match_facts(tournament, structure)
+    _validate_completed_knockout_dependencies(tournament, structure, completed_facts)
+    resolved_state = _resolved_qualification_state(tournament, structure, completed_facts)
+    _validate_knockout_entrant_possibilities(structure, resolved_state)
+    _validate_locked_knockout_pairs(structure, completed_facts, resolved_state)

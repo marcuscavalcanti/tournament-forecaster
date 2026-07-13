@@ -6,7 +6,8 @@ Providers are acquisition boundaries, not owners of tournament truth. Tournament
 
 - **Credentials** such as `THE_ODDS_API_KEY` are secrets. Load them from an environment variable or secret manager, require rotation after suspected exposure, require revocation when retired, and never commit or log them.
 - **Competition and season IDs** identify public datasets and are not secrets. The World Cup example uses competition `17` and season `285023`.
-- **Local bridges** are a reserved future extension and are not implemented by the generic CLI. No public environment variable enables one; any later bridge requires a separate threat model, explicit configuration contract, and security review.
+- **Model credentials** are resolved from the environment variable names declared in council configuration. They are never accepted as inline JSON values.
+- **Local bridges** remain a reserved extension and are not implemented by the generic CLI. The council uses direct HTTPS adapters; no public environment variable enables command execution.
 
 ## Platform Boundary
 
@@ -51,6 +52,23 @@ tournament-forecast update-odds --source normalized-odds.json
 ```
 
 Unknown fields, malformed timestamps, invalid decimal odds, unsafe metadata, and non-HTTP(S) source URLs fail closed. Missing optional odds data leaves the deterministic core available; an operator-defined required acquisition step should fail its own workflow rather than fabricate evidence.
+
+## Multi-LLM Council Providers
+
+The first-class optional council supports four adapter contracts:
+
+| Provider value | HTTP contract | Provider-specific controls |
+| --- | --- | --- |
+| `openai` | OpenAI Responses API | `reasoning_effort` |
+| `anthropic` | Anthropic Messages API | `thinking_budget_tokens` |
+| `google-gemini` | Gemini `generateContent` API | `reasoning_effort` or `thinking_budget_tokens` |
+| `openai-compatible` | HTTPS chat completions | explicit `endpoint` |
+
+Provider model IDs are intentionally not frozen in this document. Copy `examples/council.example.json`, replace its placeholder IDs with models available in your accounts, and validate before running. The example includes Perplexity and DeepSeek as OpenAI-compatible endpoints, but any compatible endpoint must satisfy the same HTTPS, credential, response, and timeout contract.
+
+The council is invoked only by `simulate` or `quickstart` when both a council file and an enabled policy are present. Round one collects independent structured opinions. Round two, when configured, exposes anonymized valid peer positions. Provider failures are classified and persisted without secrets. Missing credentials, authentication failures, quota errors, invalid responses, and timeouts reduce the valid-agent count; below quorum, the finalizer falls back to the deterministic baseline.
+
+Google 429 responses whose body reports depleted prepayment credits are surfaced explicitly in the council audit: the operator must buy or add credits in Google AI Studio before retrying. No automatic retry can repair depleted billing credit.
 
 ## Raw Payload Policy
 

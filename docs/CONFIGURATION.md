@@ -69,7 +69,30 @@ Pairing modes are `fixed`, `seeded_draw`, and `open_draw`. Knockout stages decla
 
 ## Local And Secret Settings
 
-Commit reusable public configuration only. Keep credentials in environment variables and machine-specific values in ignored `*.local.json` files. `.env.example` names optional variables but contains no values. The generic simulation, validation, reporting, schema, preset, and backtest paths require no provider key.
+Tournament rules and council policy use separate JSON files. This keeps a reusable tournament offline and prevents model-provider choices from becoming tournament truth.
+
+Start from `examples/council.example.json`. Its public contract is:
+
+- `enabled` is the saved default; `--council` and `--no-council` override it for one run.
+- `engine_weight` must be `0.55` and `council_weight` must be `0.45`; this fixed public policy prevents configuration drift from contradicting the audit.
+- `rounds` defaults to `2`: independent opinions first, then an anonymized peer review.
+- `minimum_valid_agents` is the quorum required before the consensus can affect the forecast.
+- `timeout_seconds` and `max_attempts` bound each provider call.
+- Each agent declares a stable `id`, presentation `display_name`, `provider`, current `model`, `api_key_env`, and `enabled` state.
+- `reasoning_effort` supports `none`, `minimal`, `low`, `medium`, `high`, and `xhigh` where the provider supports it.
+- `thinking_budget_tokens` exposes providers that use an explicit thinking budget instead of an effort label.
+- `max_output_tokens` and `temperature` are per-agent controls.
+- An `openai-compatible` agent must declare an HTTPS `endpoint`; standard OpenAI, Anthropic, and Gemini endpoints are supplied by the adapter.
+
+Validate policy, models, effort, endpoints, and quorum without making a network call:
+
+```bash
+tournament-forecast council validate --config council.local.json
+```
+
+Council configuration contains environment variable names, never credential values. A missing key becomes a classified agent failure; if valid agents fall below quorum, the forecast uses the deterministic baseline and records the fallback.
+
+Commit reusable public configuration only. Keep credentials in environment variables and machine-specific values in ignored `*.local.json` files. `.env.example` names optional variables but contains no values. The generic simulation, validation, reporting, schema, preset, and backtest paths require no provider key. Council calls require only the keys used by enabled agents.
 
 Configuration is trusted input. Review local files and templates before running them. The generic CLI does not implement a local command bridge or accept executable commands from configuration.
 

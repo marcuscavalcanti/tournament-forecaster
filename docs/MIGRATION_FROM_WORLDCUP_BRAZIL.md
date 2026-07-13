@@ -41,6 +41,8 @@ For persistent operator-owned configuration, use the `bridges_enabled` config fi
 }
 ```
 
+Bridge subprocesses receive a least-privilege environment: basic process, locale, proxy, and certificate variables; the known CLI credential; and the `env_api_key` declared for that agent. Unrelated provider, cloud, GitHub, and database credentials are not inherited. Remote custom API endpoints must use HTTPS. Plain HTTP is reserved for `localhost` and loopback IP addresses used during local development.
+
 When `bridges_enabled` is omitted from config, the inherited-environment alternative is `WORLDCUP_ENABLE_BRIDGES=1`. It does not load a profile; an explicit CLI bridge flag still has highest precedence:
 
 ```bash

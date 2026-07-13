@@ -2,6 +2,7 @@ SHELL := /bin/sh
 
 PYTHON ?= uv run --locked python
 PYTEST ?= uv run --locked --extra dev python -m pytest
+RUFF ?= uv run --locked --extra dev ruff
 PYTHON_WITH_PILLOW ?= uv run --locked --with pillow python
 
 CONFIG ?= config/worldcup_brazil.json
@@ -11,6 +12,7 @@ OUTPUT_DIR ?= outputs
 WATCHDOG_LOG ?= data/watchdog.jsonl
 CALIBRATION_INPUT ?= data/calibration_predictions.json
 CALIBRATION_MIN_RESOLVED ?= 1
+COVERAGE_MIN ?= 83
 RESULTS_SOURCE ?= fifa
 RESULTS_INPUT ?=
 FIFA_RESULTS_URL ?= https://api.fifa.com/api/v3/calendar/matches
@@ -81,7 +83,7 @@ ifeq ($(MARKET_ODDS_REQUIRED),1)
 UPDATE_MARKET_ODDS_ARGS += --require
 endif
 
-.PHONY: help quickstart daily force watch doctor diagrams calibration profile validate debate update-results update-market-odds calibrate-rho calibrate-base-rating
+.PHONY: help quickstart daily force watch doctor diagrams calibration complexity coverage profile validate debate update-results update-market-odds calibrate-rho calibrate-base-rating
 
 help:
 	@printf "Main commands:\n"
@@ -93,6 +95,8 @@ help:
 	@printf "  make doctor     diagnoses legacy agent quorum and sources without a post\n"
 	@printf "  make diagrams   regenerates the legacy engine diagram PNGs\n"
 	@printf "  make calibration validates Brier, log loss, and ECE from CALIBRATION_INPUT\n"
+	@printf "  make coverage    measures public-core branch coverage (minimum: $(COVERAGE_MIN)%%)\n"
+	@printf "  make complexity  enforces the public-core complexity ceiling\n"
 	@printf "  make profile    reports elapsed time by stage and round for the latest run\n"
 	@printf "  make update-results fetches FIFA scores; APPLY=1 writes, RESULTS_INPUT imports a local file\n"
 	@printf "  make update-market-odds fetches outright odds; APPLY=1 writes market_outright_odds\n"
@@ -134,6 +138,15 @@ diagrams:
 calibration:
 	$(PYTHON) scripts/validate_calibration.py --input "$(CALIBRATION_INPUT)" --min-resolved "$(CALIBRATION_MIN_RESOLVED)"
 
+coverage:
+	TOURNAMENT_FORECASTER_INNER_MAKE_VALIDATE=1 $(PYTEST) -q \
+		--ignore=tests/test_clean_wheel.py \
+		--cov=tournament_forecaster --cov-branch --cov-report=term-missing \
+		--cov-fail-under=$(COVERAGE_MIN)
+
+complexity:
+	$(RUFF) check src/tournament_forecaster --select C901
+
 profile:
 	$(PYTHON) scripts/profile_run.py --watchdog-log "$(WATCHDOG_LOG)" $(PROFILE_ARGS)
 
@@ -152,6 +165,7 @@ calibrate-base-rating:
 
 validate:
 	$(PYTEST) -q
+	$(MAKE) complexity
 	$(PYTHON) -m compileall -q src/tournament_forecaster worldcup_brazil scripts
 	$(PYTHON) scripts/validate_blind_peer_review_contract.py >/tmp/worldcup_blind_peer_review_contract.json
 	$(PYTHON) scripts/validate_opponent_room_contract.py >/tmp/worldcup_opponent_room_contract.json

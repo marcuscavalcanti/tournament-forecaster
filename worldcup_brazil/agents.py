@@ -4,6 +4,7 @@ import asyncio
 import datetime
 import email.utils
 import http.client
+import ipaddress
 import io
 import json
 import os
@@ -54,6 +55,52 @@ RETRYABLE_HTTP_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
 DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
 DEFAULT_GEMINI_FALLBACK_MODEL = "gemini-3.1-flash-lite"
 DEFAULT_GEMINI_RATE_LIMIT_COOLDOWN_SECONDS = 900.0
+
+_BRIDGE_BASE_ENV_NAMES = frozenset(
+    {
+        "COLORTERM",
+        "CURL_CA_BUNDLE",
+        "HOME",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LOGNAME",
+        "NO_COLOR",
+        "NO_PROXY",
+        "PATH",
+        "REQUESTS_CA_BUNDLE",
+        "SHELL",
+        "SSL_CERT_DIR",
+        "SSL_CERT_FILE",
+        "TEMP",
+        "TERM",
+        "TMP",
+        "TMPDIR",
+        "USER",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+    }
+)
+_BRIDGE_COMMAND_ENV_NAMES = {
+    "chatgpt": frozenset({"OPENAI_API_KEY"}),
+    "claude": frozenset({"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"}),
+    "codex": frozenset({"CODEX_HOME", "OPENAI_API_KEY"}),
+    "gemini": frozenset(
+        {
+            "CODEX_HOME",
+            "GEMINI_API_KEY",
+            "GOOGLE_API_KEY",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+        }
+    ),
+    "openai": frozenset({"OPENAI_API_KEY"}),
+}
 
 
 _MODEL_RATE_LIMIT_COOLDOWNS: dict[tuple[str, str, str], float] = {}
@@ -315,6 +362,8 @@ def _post_json_once(
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise urllib.error.URLError(f"invalid HTTP endpoint: {url}")
+    if parsed.scheme == "http" and not _is_loopback_hostname(parsed.hostname):
+        raise urllib.error.URLError("remote provider endpoints must use HTTPS")
     connection_cls = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
     connect_timeout = _http_connect_timeout_seconds(timeout)
     path = parsed.path or "/"
@@ -344,6 +393,15 @@ def _post_json_once(
         return json.loads(response_body.decode("utf-8"))
     finally:
         connection.close()
+
+
+def _is_loopback_hostname(hostname: str) -> bool:
+    if hostname.casefold() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
 
 
 def _hard_timeout_margin_seconds() -> float:
@@ -1355,13 +1413,17 @@ def _run_browser_command(
     timeout: int,
     primary_model: str,
     model: str,
+    env_api_key: str | None = None,
 ) -> str:
     uses_placeholder = any("{prompt" in arg for arg in raw_command)
     command = [
         _render_command_arg(arg, prompt=prompt, primary_model=primary_model, model=model)
         for arg in raw_command
     ]
-    env = _browser_command_env(command)
+    env = _browser_command_env(
+        command,
+        allowed_secret_names=(env_api_key,) if env_api_key else (),
+    )
     result = _run_browser_subprocess(
         command,
         input_text=None if uses_placeholder else prompt,
@@ -1442,6 +1504,7 @@ def _call_browser_command_agent_runtime(spec: AgentSpec, prompt: str, *, timeout
                     timeout=timeout,
                     primary_model=spec.model,
                     model=model,
+                    env_api_key=spec.env_api_key,
                 )
                 return (
                     _annotate_runtime_model_fallback(text, primary_model=spec.model, used_model=model),
@@ -1458,14 +1521,22 @@ def _call_browser_command_agent_runtime(spec: AgentSpec, prompt: str, *, timeout
     raise RuntimeError(f"{spec.slot} browser_command chain failed: " + " | ".join(failures))
 
 
-def _browser_command_env(command: list[str]) -> dict[str, str]:
-    env = os.environ.copy()
+def _browser_command_env(
+    command: list[str],
+    *,
+    allowed_secret_names: tuple[str, ...] = (),
+) -> dict[str, str]:
     command_name = os.path.basename(command[0]) if command else ""
-    if command_name in {"codex", "gemini"}:
-        for key in list(env):
-            if key.startswith("CODEX_") and key != "CODEX_HOME":
-                env.pop(key, None)
-    return env
+    allowed_names = (
+        _BRIDGE_BASE_ENV_NAMES
+        | _BRIDGE_COMMAND_ENV_NAMES.get(command_name, frozenset())
+        | frozenset(allowed_secret_names)
+    )
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if key in allowed_names
+    }
 
 
 def _extract_json_object(text: str) -> dict[str, Any] | None:
