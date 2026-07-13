@@ -348,7 +348,7 @@ def _assert_temporal_import_contract(
     providers: str,
     adding_provider: str,
     results_schema: dict[str, object],
-    fifa_builder: str,
+    example_builder: str,
 ) -> None:
     normalized_providers = providers.casefold()
     normalized_adding = adding_provider.casefold()
@@ -372,7 +372,7 @@ def _assert_temporal_import_contract(
     row_properties = items["properties"]
     assert isinstance(row_properties, dict)
     assert not {"kickoff_at", "observed_at", "result_at"} & set(row_properties)
-    assert "retrieved_at must be after kickoff_at" in fifa_builder
+    assert "retrieved_at must be after kickoff_at" in example_builder
 
 
 def _assert_output_path_contract(readme: str, configuration: str, security: str) -> None:
@@ -521,7 +521,7 @@ def test_temporal_import_contract_rejects_generic_apply_claim_mutation() -> None
             ROOT / "src/tournament_forecaster/schemas/results.import.schema.json"
         ).read_text(encoding="utf-8")
     )
-    fifa_builder = (ROOT / "scripts/build_world_cup_2026_example.py").read_text(
+    example_builder = (ROOT / "scripts/build_world_cup_2026_example.py").read_text(
         encoding="utf-8"
     )
 
@@ -530,7 +530,7 @@ def test_temporal_import_contract_rejects_generic_apply_claim_mutation() -> None
             providers + "\nGeneric apply rejects future results.\n",
             adding_provider,
             results_schema,
-            fifa_builder,
+            example_builder,
         )
 
 
@@ -725,7 +725,7 @@ def test_readme_states_the_real_example_and_backtest_boundaries() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8").casefold()
     for phrase in (
         "retrieved_at",
-        "2026-07-13t12:21:03z",
+        "2026-07-13t16:35:34z",
         "100 completed facts",
         "72 group",
         "16 r32",
@@ -737,7 +737,7 @@ def test_readme_states_the_real_example_and_backtest_boundaries() -> None:
         "france-spain",
         "england-argentina",
         "frozen ratings",
-        "normalized snapshot",
+        "normalized from",
         "rps",
         "multiclass brier",
         "log loss",
