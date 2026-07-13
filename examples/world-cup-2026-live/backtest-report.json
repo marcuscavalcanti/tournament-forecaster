@@ -1,0 +1,22 @@
+{
+  "exclusions": [],
+  "metrics": {
+    "brier": 0.49873843934489415,
+    "log_loss": 0.8320301393116664,
+    "rps": 0.14683765711470123,
+    "top_pick_accuracy": 0.625
+  },
+  "min_resolved": 72,
+  "model_version": "poisson-elo-v1",
+  "ok": true,
+  "ratings_sha256": "983a20748541db3612dd75fa2d5dde954d1b89de52a23c1b19f345a427bca259",
+  "sample_size": 72,
+  "schema_version": 1,
+  "status": "ok",
+  "uniform_baseline": {
+    "brier": 0.6666666666666662,
+    "log_loss": 1.0986122886681084,
+    "rps": 0.2314814814814817,
+    "top_pick_accuracy": 0.3333333333333333
+  }
+}

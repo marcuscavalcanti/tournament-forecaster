@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tournament-forecaster.example/schemas/forecast.schema.json",
+  "title": "Tournament Forecaster forecast artifact",
+  "$defs": {
+    "stable_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "output_key": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:[-_][a-z0-9]+)*$"
+    },
+    "probability": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "matchup": {
+      "type": "object",
+      "required": ["stage_id", "opponent_team_id", "probability"],
+      "properties": {
+        "stage_id": {"$ref": "#/$defs/stable_id"},
+        "opponent_team_id": {"$ref": "#/$defs/stable_id"},
+        "probability": {"$ref": "#/$defs/probability"}
+      },
+      "additionalProperties": false
+    },
+    "confidence_interval": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {"$ref": "#/$defs/probability"}
+    },
+    "provenance": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {"type": "string", "minLength": 1},
+        "name": {"type": "string", "minLength": 1},
+        "source": {"type": "string", "minLength": 1},
+        "source_id": {"$ref": "#/$defs/stable_id"},
+        "uri": {"type": "string", "minLength": 1},
+        "retrieved_at": {"type": "string", "minLength": 1},
+        "metadata": {"$ref": "#/$defs/metadata"}
+      },
+      "additionalProperties": false
+    },
+    "simulation": {
+      "type": "object",
+      "required": ["seed", "iterations", "confidence_level"],
+      "properties": {
+        "seed": {"type": "integer", "minimum": 0},
+        "iterations": {"type": "integer", "minimum": 1},
+        "confidence_level": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1}
+      },
+      "additionalProperties": false
+    }
+  },
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_id",
+    "generated_at",
+    "tournament_id",
+    "focus_team_id",
+    "stage_probabilities",
+    "matchup_probabilities",
+    "championship_probability",
+    "confidence_intervals",
+    "input_provenance",
+    "warnings",
+    "council"
+  ],
+  "properties": {
+    "schema_version": {"const": 2},
+    "run_id": {"$ref": "#/$defs/stable_id"},
+    "generated_at": {"type": "string", "minLength": 1},
+    "tournament_id": {"$ref": "#/$defs/stable_id"},
+    "focus_team_id": {"$ref": "#/$defs/stable_id"},
+    "stage_probabilities": {
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/stable_id"},
+      "additionalProperties": {"$ref": "#/$defs/probability"}
+    },
+    "stage_order": {
+      "description": "Explicit stage order. Schema-v2 readers fall back to stage_probabilities property insertion order when omitted.",
+      "type": "array",
+      "items": {"$ref": "#/$defs/stable_id"},
+      "uniqueItems": true
+    },
+    "matchup_probabilities": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/matchup"}
+    },
+    "championship_probability": {"$ref": "#/$defs/probability"},
+    "confidence_intervals": {
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/output_key"},
+      "additionalProperties": {"$ref": "#/$defs/confidence_interval"}
+    },
+    "input_provenance": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/provenance"}
+    },
+    "warnings": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "council": {
+      "oneOf": [
+        {"$ref": "#/$defs/metadata"},
+        {"type": "null"}
+      ]
+    },
+    "tournament_display_name": {"type": "string", "minLength": 1},
+    "team_display_names": {
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/stable_id"},
+      "additionalProperties": {"type": "string", "minLength": 1}
+    },
+    "simulation": {"$ref": "#/$defs/simulation"}
+  },
+  "additionalProperties": false
+}

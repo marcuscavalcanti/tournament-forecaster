@@ -6,11 +6,12 @@ import os
 import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 try:
     import fcntl  # POSIX-only; ausente no Windows.
 except ImportError:  # pragma: no cover - plataforma sem fcntl
-    fcntl = None
+    fcntl = None  # type: ignore[assignment]
 
 from worldcup_brazil.agents import (
     load_agent_specs_from_config,
@@ -181,8 +182,8 @@ def _bundle_output_stamp(bundle, fallback: datetime) -> str:
     return parsed.astimezone(timezone.utc).strftime("%Y-%m-%d")
 
 
-def load_env_file(path: Path) -> None:
-    if not path.exists():
+def load_env_file(path: Path | None) -> None:
+    if path is None or not path.exists():
         return
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
@@ -196,6 +197,20 @@ def load_env_file(path: Path) -> None:
             continue
         cleaned = value.strip().strip('"').strip("'")
         os.environ[key] = cleaned
+
+
+def _bridges_enabled(config: dict, *, cli_override: bool | None) -> bool:
+    if cli_override is not None:
+        return cli_override
+    configured = config.get("bridges_enabled")
+    if configured is not None:
+        return configured is True
+    return os.environ.get("WORLDCUP_ENABLE_BRIDGES", "").strip().casefold() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def _effective_config_path(path: Path) -> Path:
@@ -226,8 +241,12 @@ def _config_watchdog_extra(
     effective_config_path: Path,
     strict_agents: bool,
 ) -> dict:
-    group_matches = config.get("group_matches") if isinstance(config.get("group_matches"), list) else []
-    knockout_matches = config.get("knockout_matches") if isinstance(config.get("knockout_matches"), list) else []
+    raw_group_matches = config.get("group_matches")
+    group_matches: list[Any] = raw_group_matches if isinstance(raw_group_matches, list) else []
+    raw_knockout_matches = config.get("knockout_matches")
+    knockout_matches: list[Any] = (
+        raw_knockout_matches if isinstance(raw_knockout_matches, list) else []
+    )
     bracket_path = brazil_bracket_path(config)
     bracket_errors = invalid_configured_knockout_opponents(config)
     return {
@@ -422,13 +441,26 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("data/.run.lock"),
         help="Exclusive run lock path used to prevent concurrent daily runs.",
     )
-    parser.add_argument("--env-file", type=Path, default=Path(".env"), help="Optional dotenv file loaded before agent setup.")
+    parser.add_argument("--env-file", type=Path, help="Trusted dotenv file loaded before agent setup.")
     parser.add_argument(
         "--shell-env-file",
         type=Path,
-        default=Path.home() / ".zshrc",
-        help="Optional shell env file loaded after .env; supports simple export KEY=value lines.",
+        help="Trusted shell-style env file loaded only when explicitly provided.",
     )
+    bridge_group = parser.add_mutually_exclusive_group()
+    bridge_group.add_argument(
+        "--bridges",
+        dest="bridges",
+        action="store_true",
+        help="Explicitly enable configured local executable/browser bridges.",
+    )
+    bridge_group.add_argument(
+        "--no-bridges",
+        dest="bridges",
+        action="store_false",
+        help="Disable every local executable/browser bridge regardless of config or environment.",
+    )
+    parser.set_defaults(bridges=None)
     parser.add_argument("--no-watchdog", action="store_true", help="Disable watchdog JSONL events.")
     parser.add_argument("--quiet-watchdog", action="store_true", help="Write watchdog JSONL without stderr progress lines.")
     parser.add_argument("--force", action="store_true", help="Run even if the three-day interval has not elapsed.")
@@ -474,6 +506,10 @@ def _run(args: argparse.Namespace) -> int:
         if watchdog:
             watchdog.start("load_config", detail=str(args.config))
         config = load_config(args.config)
+        config["_bridges_enabled"] = _bridges_enabled(
+            config,
+            cli_override=getattr(args, "bridges", None),
+        )
         if watchdog:
             effective_config_path = _effective_config_path(args.config)
             watchdog.finish(

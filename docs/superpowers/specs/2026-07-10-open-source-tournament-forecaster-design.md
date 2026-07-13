@@ -1,6 +1,6 @@
 # Tournament Forecaster Open-Source Design
 
-**Status:** Approved direction, pending written-spec review  
+**Status:** Approved, with final release-review corrections
 **Date:** 2026-07-10  
 **Working name:** Tournament Forecaster  
 **Python package:** `tournament_forecaster`  
@@ -31,7 +31,7 @@ The system is divided into three product layers:
 - **Optional intelligence layer:** multi-agent source research, debate, contextual rating adjustments, market challenges, audit trails, and model-provider adapters.
 - **Optional publishing layer:** generic Markdown and JSON reports plus competition-specific or user-specific templates such as the current LinkedIn series.
 
-The deterministic engine must run offline without API keys, browser bridges, shell configuration, or model-provider packages.
+After installation, the deterministic engine must run offline without API keys, browser bridges, shell configuration, or model-provider packages.
 
 ### 2.2 Stable identifiers, localizable display names
 
@@ -274,7 +274,7 @@ Public defaults are safe and non-executing:
 - `--no-bridges` is available as a hard-off switch.
 - Configuration files that declare commands are documented as trusted code.
 - Commands are represented as argument arrays and never passed through a shell.
-- Query-string secrets are redacted before logging or artifact persistence.
+- Credential-shaped query-string and URL-fragment values are redacted before logging or artifact persistence.
 - `.env`, local configs, runtime state, transcripts, outputs, and credentials remain ignored.
 - `.env.example` contains names only, never values.
 - A full-history Gitleaks scan runs before visibility changes and in CI for future commits.
@@ -377,6 +377,8 @@ tournament-forecast update-results \
 
 An external result is accepted only when it matches a configured fixture or a uniquely resolvable knockout tie. Unmatched teams, ambiguous aliases, non-final matches, impossible stages, and conflicting scores fail before the ledger is written. Writes are atomic. Group results update standings; knockout results lock winners, penalty outcomes, and future bracket slots.
 
+The generic import schema contains normalized final facts, not an authoritative schedule, so generic preview/apply cannot infer whether a result is in the future. Acquisition adapters must compare provider status and observation time with the authoritative kickoff before producing the local import. The FIFA example builder owns that temporal guard and requires `retrieved_at > kickoff_at` before promoting a completed fact.
+
 JSON and CSV import remain first-class fallbacks for competitions without a supported live provider or when the FIFA endpoint is unavailable. Provider failure never fabricates a result. A tournament chooses between `required`, `cached_with_ttl`, and `best_effort` freshness policies.
 
 The public CLI also exposes:
@@ -409,20 +411,24 @@ The project uses the `src/` layout and a standards-compliant build backend. Core
 
 Supported Python versions are 3.11 through 3.13.
 
+`v0.1.0` supports macOS and Linux natively and Windows through WSL2. Native Windows is outside the release contract because provider apply and durable report publication require POSIX no-follow, directory-descriptor, symlink, and native rename semantics.
+
 Primary onboarding:
 
 ```bash
-git clone https://github.com/marcuscavalcanti/tournament-forecaster.git
-cd tournament-forecaster
-python -m pip install -e .
-tournament-forecast quickstart
+git clone https://github.com/marcuscavalcanti/worldcup2026.git
+cd worldcup2026
+python3 -m venv .venv && . .venv/bin/activate && python -m pip install .
+tournament-forecast simulate --config examples/world-cup-2026-live/tournament.json --iterations 10000 --output-dir outputs
 ```
 
-The existing `worldcup-brazil-report` console command remains as a deprecated alias for one release cycle.
+The first source installation requires package-index/network access to obtain Hatchling and any transitive build dependencies. Hatchling is not vendored. Once the package is installed, simulation, initialization, validation, reporting, presets, and the deterministic backtest run offline.
+
+The existing `worldcup-brazil-report` console command and `worldcup_brazil` package remain as deprecated aliases throughout `v0.1.x`. Removal requires both a `v0.2.0` or later release and a date on or after `2026-10-01`.
 
 ### 10.1 Clone-to-first-output contract
 
-`tournament-forecast quickstart` is the mandatory first-run path. It requires only Python 3.11 or newer and the cloned repository. It does not require API keys, network access, a copied configuration file, `make`, `uv`, browser automation, provider CLIs, or user input.
+`tournament-forecast quickstart` is the mandatory synthetic smoke-test path after installation. The runtime command does not require API keys, network access, a copied configuration file, `make`, `uv`, browser automation, provider CLIs, or user input. A first source install is a separate online/build-dependency-available step.
 
 The command performs this complete flow:
 
@@ -440,9 +446,9 @@ outputs/synthetic-cup/north-city/bracket.svg
 
 6. Print the exact next commands for changing the focus team, copying a competition template, enabling live results, and enabling the optional council.
 
-Repeated runs with the same seed produce byte-identical JSON probability fields. Existing unrelated files are never deleted. The command accepts `--output-dir`, `--seed`, and `--iterations` for explicit overrides.
+Repeated runs with the same seed produce byte-identical JSON probability fields. Existing unrelated files are never deleted. The command accepts `--output-dir`, `--seed`, and `--iterations` for explicit overrides. Publication rejects any lexical output path with an ancestor symlink or junction; users must supply the canonical path, such as `/private/tmp/...` instead of macOS `/tmp/...`.
 
-For contributors, `make quickstart` delegates to the same CLI behavior. The README does not require Make because it must work on Windows as well as macOS and Linux.
+For contributors, `make quickstart` delegates to the same CLI behavior. The README does not require Make. Windows users run the POSIX quickstart inside WSL2; native Windows is not part of `v0.1.0`.
 
 After the first output, a user can scaffold a competition without writing Python:
 
@@ -532,7 +538,7 @@ Three offline acceptance presets prove product scope:
 
 GitHub Actions runs on Python 3.11, 3.12, and 3.13 without API keys or network-dependent tests. Required checks include tests, compile, lint, type checking, schema validation, package build, English-surface scan, secret scan, and preset contracts.
 
-A dedicated onboarding job builds a wheel, creates a clean virtual environment, installs only that wheel, clears all supported credential variables, blocks network access, runs `tournament-forecast quickstart`, and validates the three generated artifacts. Linux runs on every pull request; macOS and Windows run before release.
+A dedicated source-onboarding job creates a clean virtual environment and runs the literal four-line source quickstart with package-index/build-dependency access. The clean-wheel job separately installs only the wheel, clears supported credential variables, blocks network access after installation, runs `tournament-forecast quickstart`, and validates the three generated artifacts. Linux runs on every pull request; Linux and macOS run before release. WSL2 follows the Linux contract; there is no native Windows release matrix in `v0.1.0`.
 
 Network integration tests are opt-in and never required for pull requests from forks.
 
@@ -562,7 +568,7 @@ The repository may become public only when all of these conditions hold:
 3. Gitleaks scans the entire reachable history with zero unresolved findings.
 4. No runtime outputs, private transcripts, credentials, local configuration, or personal filesystem paths are tracked.
 5. Personal LinkedIn content and hashtags live only in an optional example or user config.
-6. A clean clone reaches valid JSON, Markdown, and SVG outputs through the documented four-line flow in less than five minutes without keys, network, configuration edits, Make, or uv.
+6. A clean clone reaches valid JSON, Markdown, and SVG outputs through the documented four-line flow in less than five minutes. The source-install line has package-index/build-dependency access; after installation, simulation requires no keys, network, configuration edits, Make, or uv.
 7. CI passes across Python 3.11 through 3.13.
 8. World Cup, Champions League, and Libertadores preset contracts pass offline.
 9. Seeded World Cup Monte Carlo goldens remain bit-identical through the generic extraction.
@@ -611,6 +617,6 @@ Build and install the package in a clean environment, run all release gates, rec
 
 ## 18. Success Criteria
 
-A new user can clone the repository and generate valid JSON, Markdown, and SVG forecasts through the documented four-line quick start without credentials, network access, configuration edits, or prior knowledge of the project. The same user can then select a preset or scaffold a schema-valid tournament, choose any focus team, simulate the complete competition, and receive coherent stage and championship probabilities without editing Python code.
+A new user can clone the repository, obtain declared build dependencies from a package index during the first source install, and generate valid JSON, Markdown, and SVG forecasts through the documented four-line quickstart. After installation, those simulation, initialization, and validation paths require no credentials, network access, configuration edits, or prior knowledge of the project. The same user can then select a preset or scaffold a schema-valid tournament, choose any focus team, simulate the complete competition, and receive coherent stage and championship probabilities without editing Python code.
 
 The existing Brazil workflow continues producing valid forecasts during migration. At public release, the repository contains no Brazil-specific behavior in the generic core, no Portuguese public surface, and no claim of competition support that lacks a passing offline contract.

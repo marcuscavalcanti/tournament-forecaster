@@ -20,8 +20,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from worldcup_brazil.bracket import hydrate_canonical_configs
-from worldcup_brazil.cli import _effective_config_path
+from worldcup_brazil.cli import _effective_config_path, load_env_file
 from worldcup_brazil.pipeline import _devig_outright_title_probabilities
+from tournament_forecaster.providers.security import redact_url
 
 
 THE_ODDS_API_URL = (
@@ -245,19 +246,21 @@ def _load_entries_from_args(args: argparse.Namespace, config: dict[str, Any]) ->
         entries = _entries_from_the_odds_api_payload(payload, config, source_url=str(args.odds_json))
         return "local", str(args.odds_json), entries, ""
     if args.from_the_odds_api:
+        source_url = redact_url(args.odds_url)
         try:
             fetched = _odds_api_text_from_url(args.odds_url)
         except (urllib.error.URLError, TimeoutError) as exc:
             raise MarketOddsUnavailable(str(exc)) from exc
         if fetched is None:
-            return "the-odds-api", args.odds_url, [], "skipped_missing_api_key"
+            return "the-odds-api", source_url, [], "skipped_missing_api_key"
         effective_url, text = fetched
         try:
             payload = json.loads(text)
         except json.JSONDecodeError as exc:
             raise MarketOddsUnavailable(str(exc)) from exc
-        entries = _entries_from_the_odds_api_payload(payload, config, source_url=effective_url.split("apiKey=", 1)[0] + "apiKey=***")
-        return "the-odds-api", effective_url.split("apiKey=", 1)[0] + "apiKey=***", entries, ""
+        source_url = redact_url(effective_url)
+        entries = _entries_from_the_odds_api_payload(payload, config, source_url=source_url)
+        return "the-odds-api", source_url, entries, ""
     raise ValueError("informe --odds-json ou --from-the-odds-api")
 
 
@@ -267,10 +270,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--odds-json", type=Path, help="read a saved The Odds API JSON snapshot")
     parser.add_argument("--from-the-odds-api", action="store_true", help="fetch outright odds from The Odds API")
     parser.add_argument("--odds-url", default=THE_ODDS_API_URL, help="The Odds API URL")
+    parser.add_argument("--env-file", type=Path, help="trusted dotenv file loaded only when provided")
+    parser.add_argument(
+        "--shell-env-file",
+        type=Path,
+        help="trusted shell-style env file loaded only when provided",
+    )
     parser.add_argument("--apply", action="store_true", help="write market_outright_odds to the effective config")
     parser.add_argument("--require", action="store_true", help="fail if no valid de-vigged odds can be ingested")
     args = parser.parse_args(argv)
 
+    load_env_file(args.env_file)
+    load_env_file(args.shell_env_file)
     config_path = _effective_config_path(args.config)
     if not config_path.exists():
         print(f"config não encontrado: {args.config}", file=sys.stderr)

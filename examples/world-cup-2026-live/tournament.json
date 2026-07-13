@@ -1,0 +1,2591 @@
+{
+  "completed_matches": [
+    {
+      "away_team_id": "korea-republic",
+      "home_team_id": "czechia",
+      "match_id": "group-stage-group-41-round-1-match-637a6563686961-6b6f7265612d72657075626c6963",
+      "metadata": {
+        "kickoff_at": "2026-06-12T02:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 2,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 2,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "mexico",
+      "home_team_id": "czechia",
+      "match_id": "group-stage-group-41-round-1-match-637a6563686961-6d657869636f",
+      "metadata": {
+        "kickoff_at": "2026-06-25T01:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 5,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 3,
+        "home": 0
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "south-africa",
+      "home_team_id": "czechia",
+      "match_id": "group-stage-group-41-round-1-match-637a6563686961-736f7574682d616672696361",
+      "metadata": {
+        "kickoff_at": "2026-06-18T16:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 3,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "mexico",
+      "home_team_id": "korea-republic",
+      "match_id": "group-stage-group-41-round-1-match-6b6f7265612d72657075626c6963-6d657869636f",
+      "metadata": {
+        "kickoff_at": "2026-06-19T01:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 4,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 0
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "south-africa",
+      "home_team_id": "korea-republic",
+      "match_id": "group-stage-group-41-round-1-match-6b6f7265612d72657075626c6963-736f7574682d616672696361",
+      "metadata": {
+        "kickoff_at": "2026-06-25T01:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 6,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 0
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "south-africa",
+      "home_team_id": "mexico",
+      "match_id": "group-stage-group-41-round-1-match-6d657869636f-736f7574682d616672696361",
+      "metadata": {
+        "kickoff_at": "2026-06-11T19:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 1,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 0,
+        "home": 2
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "canada",
+      "home_team_id": "bosnia-and-herzegovina",
+      "match_id": "group-stage-group-42-round-1-match-626f736e69612d616e642d6865727a65676f76696e61-63616e616461",
+      "metadata": {
+        "kickoff_at": "2026-06-12T19:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 7,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "qatar",
+      "home_team_id": "bosnia-and-herzegovina",
+      "match_id": "group-stage-group-42-round-1-match-626f736e69612d616e642d6865727a65676f76696e61-7161746172",
+      "metadata": {
+        "kickoff_at": "2026-06-24T19:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 12,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 3
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "switzerland",
+      "home_team_id": "bosnia-and-herzegovina",
+      "match_id": "group-stage-group-42-round-1-match-626f736e69612d616e642d6865727a65676f76696e61-737769747a65726c616e64",
+      "metadata": {
+        "kickoff_at": "2026-06-18T19:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 9,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 4,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "qatar",
+      "home_team_id": "canada",
+      "match_id": "group-stage-group-42-round-1-match-63616e616461-7161746172",
+      "metadata": {
+        "kickoff_at": "2026-06-18T22:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 10,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 0,
+        "home": 6
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "switzerland",
+      "home_team_id": "canada",
+      "match_id": "group-stage-group-42-round-1-match-63616e616461-737769747a65726c616e64",
+      "metadata": {
+        "kickoff_at": "2026-06-24T19:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 11,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 2,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "switzerland",
+      "home_team_id": "qatar",
+      "match_id": "group-stage-group-42-round-1-match-7161746172-737769747a65726c616e64",
+      "metadata": {
+        "kickoff_at": "2026-06-13T19:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 8,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "haiti",
+      "home_team_id": "brazil",
+      "match_id": "group-stage-group-43-round-1-match-6272617a696c-6861697469",
+      "metadata": {
+        "kickoff_at": "2026-06-20T00:30:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 16,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 0,
+        "home": 3
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "morocco",
+      "home_team_id": "brazil",
+      "match_id": "group-stage-group-43-round-1-match-6272617a696c-6d6f726f63636f",
+      "metadata": {
+        "kickoff_at": "2026-06-13T22:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 13,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "scotland",
+      "home_team_id": "brazil",
+      "match_id": "group-stage-group-43-round-1-match-6272617a696c-73636f746c616e64",
+      "metadata": {
+        "kickoff_at": "2026-06-24T22:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 17,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 0,
+        "home": 3
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "morocco",
+      "home_team_id": "haiti",
+      "match_id": "group-stage-group-43-round-1-match-6861697469-6d6f726f63636f",
+      "metadata": {
+        "kickoff_at": "2026-06-24T22:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 18,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 4,
+        "home": 2
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "scotland",
+      "home_team_id": "haiti",
+      "match_id": "group-stage-group-43-round-1-match-6861697469-73636f746c616e64",
+      "metadata": {
+        "kickoff_at": "2026-06-14T01:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 14,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 0
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "scotland",
+      "home_team_id": "morocco",
+      "match_id": "group-stage-group-43-round-1-match-6d6f726f63636f-73636f746c616e64",
+      "metadata": {
+        "kickoff_at": "2026-06-19T22:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 15,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 0,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "paraguay",
+      "home_team_id": "australia",
+      "match_id": "group-stage-group-44-round-1-match-6175737472616c6961-7061726167756179",
+      "metadata": {
+        "kickoff_at": "2026-06-26T02:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 24,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 0,
+        "home": 0
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "turkiye",
+      "home_team_id": "australia",
+      "match_id": "group-stage-group-44-round-1-match-6175737472616c6961-7475726b697965",
+      "metadata": {
+        "kickoff_at": "2026-06-14T04:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 20,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 0,
+        "home": 2
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "usa",
+      "home_team_id": "australia",
+      "match_id": "group-stage-group-44-round-1-match-6175737472616c6961-757361",
+      "metadata": {
+        "kickoff_at": "2026-06-19T19:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 21,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 2,
+        "home": 0
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "turkiye",
+      "home_team_id": "paraguay",
+      "match_id": "group-stage-group-44-round-1-match-7061726167756179-7475726b697965",
+      "metadata": {
+        "kickoff_at": "2026-06-20T03:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 22,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 0,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "usa",
+      "home_team_id": "paraguay",
+      "match_id": "group-stage-group-44-round-1-match-7061726167756179-757361",
+      "metadata": {
+        "kickoff_at": "2026-06-13T01:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 19,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 4,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "usa",
+      "home_team_id": "turkiye",
+      "match_id": "group-stage-group-44-round-1-match-7475726b697965-757361",
+      "metadata": {
+        "kickoff_at": "2026-06-26T02:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 23,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 2,
+        "home": 3
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "curacao",
+      "home_team_id": "cote-d-ivoire",
+      "match_id": "group-stage-group-45-round-1-match-636f74652d642d69766f697265-6375726163616f",
+      "metadata": {
+        "kickoff_at": "2026-06-25T20:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 29,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 0,
+        "home": 2
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "ecuador",
+      "home_team_id": "cote-d-ivoire",
+      "match_id": "group-stage-group-45-round-1-match-636f74652d642d69766f697265-65637561646f72",
+      "metadata": {
+        "kickoff_at": "2026-06-14T23:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 26,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 0,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "germany",
+      "home_team_id": "cote-d-ivoire",
+      "match_id": "group-stage-group-45-round-1-match-636f74652d642d69766f697265-6765726d616e79",
+      "metadata": {
+        "kickoff_at": "2026-06-20T20:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 27,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 2,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "ecuador",
+      "home_team_id": "curacao",
+      "match_id": "group-stage-group-45-round-1-match-6375726163616f-65637561646f72",
+      "metadata": {
+        "kickoff_at": "2026-06-21T00:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 28,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 0,
+        "home": 0
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "germany",
+      "home_team_id": "curacao",
+      "match_id": "group-stage-group-45-round-1-match-6375726163616f-6765726d616e79",
+      "metadata": {
+        "kickoff_at": "2026-06-14T17:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 25,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 7,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "germany",
+      "home_team_id": "ecuador",
+      "match_id": "group-stage-group-45-round-1-match-65637561646f72-6765726d616e79",
+      "metadata": {
+        "kickoff_at": "2026-06-25T20:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 30,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 2
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "netherlands",
+      "home_team_id": "japan",
+      "match_id": "group-stage-group-46-round-1-match-6a6170616e-6e65746865726c616e6473",
+      "metadata": {
+        "kickoff_at": "2026-06-14T20:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 31,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 2,
+        "home": 2
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "sweden",
+      "home_team_id": "japan",
+      "match_id": "group-stage-group-46-round-1-match-6a6170616e-73776564656e",
+      "metadata": {
+        "kickoff_at": "2026-06-25T23:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 35,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "tunisia",
+      "home_team_id": "japan",
+      "match_id": "group-stage-group-46-round-1-match-6a6170616e-74756e69736961",
+      "metadata": {
+        "kickoff_at": "2026-06-21T04:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 34,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 0,
+        "home": 4
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "sweden",
+      "home_team_id": "netherlands",
+      "match_id": "group-stage-group-46-round-1-match-6e65746865726c616e6473-73776564656e",
+      "metadata": {
+        "kickoff_at": "2026-06-20T17:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 33,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 5
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "tunisia",
+      "home_team_id": "netherlands",
+      "match_id": "group-stage-group-46-round-1-match-6e65746865726c616e6473-74756e69736961",
+      "metadata": {
+        "kickoff_at": "2026-06-25T23:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 36,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 3
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "tunisia",
+      "home_team_id": "sweden",
+      "match_id": "group-stage-group-46-round-1-match-73776564656e-74756e69736961",
+      "metadata": {
+        "kickoff_at": "2026-06-15T02:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 32,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 5
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "egypt",
+      "home_team_id": "belgium",
+      "match_id": "group-stage-group-47-round-1-match-62656c6769756d-6567797074",
+      "metadata": {
+        "kickoff_at": "2026-06-15T19:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 37,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "ir-iran",
+      "home_team_id": "belgium",
+      "match_id": "group-stage-group-47-round-1-match-62656c6769756d-69722d6972616e",
+      "metadata": {
+        "kickoff_at": "2026-06-21T19:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 39,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 0,
+        "home": 0
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "new-zealand",
+      "home_team_id": "belgium",
+      "match_id": "group-stage-group-47-round-1-match-62656c6769756d-6e65772d7a65616c616e64",
+      "metadata": {
+        "kickoff_at": "2026-06-27T03:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 42,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 5
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "ir-iran",
+      "home_team_id": "egypt",
+      "match_id": "group-stage-group-47-round-1-match-6567797074-69722d6972616e",
+      "metadata": {
+        "kickoff_at": "2026-06-27T03:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 41,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "new-zealand",
+      "home_team_id": "egypt",
+      "match_id": "group-stage-group-47-round-1-match-6567797074-6e65772d7a65616c616e64",
+      "metadata": {
+        "kickoff_at": "2026-06-22T01:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 40,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 3
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "new-zealand",
+      "home_team_id": "ir-iran",
+      "match_id": "group-stage-group-47-round-1-match-69722d6972616e-6e65772d7a65616c616e64",
+      "metadata": {
+        "kickoff_at": "2026-06-16T01:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 38,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 2,
+        "home": 2
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "saudi-arabia",
+      "home_team_id": "cabo-verde",
+      "match_id": "group-stage-group-48-round-1-match-6361626f2d7665726465-73617564692d617261626961",
+      "metadata": {
+        "kickoff_at": "2026-06-27T00:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 47,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 0,
+        "home": 0
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "spain",
+      "home_team_id": "cabo-verde",
+      "match_id": "group-stage-group-48-round-1-match-6361626f2d7665726465-737061696e",
+      "metadata": {
+        "kickoff_at": "2026-06-15T16:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 43,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 0,
+        "home": 0
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "uruguay",
+      "home_team_id": "cabo-verde",
+      "match_id": "group-stage-group-48-round-1-match-6361626f2d7665726465-75727567756179",
+      "metadata": {
+        "kickoff_at": "2026-06-21T22:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 46,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 2,
+        "home": 2
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "spain",
+      "home_team_id": "saudi-arabia",
+      "match_id": "group-stage-group-48-round-1-match-73617564692d617261626961-737061696e",
+      "metadata": {
+        "kickoff_at": "2026-06-21T16:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 45,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 4,
+        "home": 0
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "uruguay",
+      "home_team_id": "saudi-arabia",
+      "match_id": "group-stage-group-48-round-1-match-73617564692d617261626961-75727567756179",
+      "metadata": {
+        "kickoff_at": "2026-06-15T22:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 44,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "uruguay",
+      "home_team_id": "spain",
+      "match_id": "group-stage-group-48-round-1-match-737061696e-75727567756179",
+      "metadata": {
+        "kickoff_at": "2026-06-27T00:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 48,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 0,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "iraq",
+      "home_team_id": "france",
+      "match_id": "group-stage-group-49-round-1-match-6672616e6365-69726171",
+      "metadata": {
+        "kickoff_at": "2026-06-22T21:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 51,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 0,
+        "home": 3
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "norway",
+      "home_team_id": "france",
+      "match_id": "group-stage-group-49-round-1-match-6672616e6365-6e6f72776179",
+      "metadata": {
+        "kickoff_at": "2026-06-26T19:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 53,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 4
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "senegal",
+      "home_team_id": "france",
+      "match_id": "group-stage-group-49-round-1-match-6672616e6365-73656e6567616c",
+      "metadata": {
+        "kickoff_at": "2026-06-16T19:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 49,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 3
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "norway",
+      "home_team_id": "iraq",
+      "match_id": "group-stage-group-49-round-1-match-69726171-6e6f72776179",
+      "metadata": {
+        "kickoff_at": "2026-06-16T22:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 50,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 4,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "senegal",
+      "home_team_id": "iraq",
+      "match_id": "group-stage-group-49-round-1-match-69726171-73656e6567616c",
+      "metadata": {
+        "kickoff_at": "2026-06-26T19:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 54,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 5,
+        "home": 0
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "senegal",
+      "home_team_id": "norway",
+      "match_id": "group-stage-group-49-round-1-match-6e6f72776179-73656e6567616c",
+      "metadata": {
+        "kickoff_at": "2026-06-23T00:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 52,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 2,
+        "home": 3
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "argentina",
+      "home_team_id": "algeria",
+      "match_id": "group-stage-group-4a-round-1-match-616c6765726961-617267656e74696e61",
+      "metadata": {
+        "kickoff_at": "2026-06-17T01:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 55,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 3,
+        "home": 0
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "austria",
+      "home_team_id": "algeria",
+      "match_id": "group-stage-group-4a-round-1-match-616c6765726961-61757374726961",
+      "metadata": {
+        "kickoff_at": "2026-06-28T02:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 59,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 3,
+        "home": 3
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "jordan",
+      "home_team_id": "algeria",
+      "match_id": "group-stage-group-4a-round-1-match-616c6765726961-6a6f7264616e",
+      "metadata": {
+        "kickoff_at": "2026-06-23T03:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 58,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 2
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "austria",
+      "home_team_id": "argentina",
+      "match_id": "group-stage-group-4a-round-1-match-617267656e74696e61-61757374726961",
+      "metadata": {
+        "kickoff_at": "2026-06-22T17:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 57,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 0,
+        "home": 2
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "jordan",
+      "home_team_id": "argentina",
+      "match_id": "group-stage-group-4a-round-1-match-617267656e74696e61-6a6f7264616e",
+      "metadata": {
+        "kickoff_at": "2026-06-28T02:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 60,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 3
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "jordan",
+      "home_team_id": "austria",
+      "match_id": "group-stage-group-4a-round-1-match-61757374726961-6a6f7264616e",
+      "metadata": {
+        "kickoff_at": "2026-06-17T04:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 56,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 3
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "congo-dr",
+      "home_team_id": "colombia",
+      "match_id": "group-stage-group-4b-round-1-match-636f6c6f6d626961-636f6e676f2d6472",
+      "metadata": {
+        "kickoff_at": "2026-06-24T02:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 64,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 0,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "portugal",
+      "home_team_id": "colombia",
+      "match_id": "group-stage-group-4b-round-1-match-636f6c6f6d626961-706f72747567616c",
+      "metadata": {
+        "kickoff_at": "2026-06-27T23:30:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 65,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 0,
+        "home": 0
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "uzbekistan",
+      "home_team_id": "colombia",
+      "match_id": "group-stage-group-4b-round-1-match-636f6c6f6d626961-757a62656b697374616e",
+      "metadata": {
+        "kickoff_at": "2026-06-18T02:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 62,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 3
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "portugal",
+      "home_team_id": "congo-dr",
+      "match_id": "group-stage-group-4b-round-1-match-636f6e676f2d6472-706f72747567616c",
+      "metadata": {
+        "kickoff_at": "2026-06-17T17:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 61,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "uzbekistan",
+      "home_team_id": "congo-dr",
+      "match_id": "group-stage-group-4b-round-1-match-636f6e676f2d6472-757a62656b697374616e",
+      "metadata": {
+        "kickoff_at": "2026-06-27T23:30:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 66,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 3
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "uzbekistan",
+      "home_team_id": "portugal",
+      "match_id": "group-stage-group-4b-round-1-match-706f72747567616c-757a62656b697374616e",
+      "metadata": {
+        "kickoff_at": "2026-06-23T17:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 63,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 0,
+        "home": 5
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "england",
+      "home_team_id": "croatia",
+      "match_id": "group-stage-group-4c-round-1-match-63726f61746961-656e676c616e64",
+      "metadata": {
+        "kickoff_at": "2026-06-17T20:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 67,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 4,
+        "home": 2
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "ghana",
+      "home_team_id": "croatia",
+      "match_id": "group-stage-group-4c-round-1-match-63726f61746961-6768616e61",
+      "metadata": {
+        "kickoff_at": "2026-06-27T21:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 72,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 2
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "panama",
+      "home_team_id": "croatia",
+      "match_id": "group-stage-group-4c-round-1-match-63726f61746961-70616e616d61",
+      "metadata": {
+        "kickoff_at": "2026-06-23T23:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 70,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 0,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "ghana",
+      "home_team_id": "england",
+      "match_id": "group-stage-group-4c-round-1-match-656e676c616e64-6768616e61",
+      "metadata": {
+        "kickoff_at": "2026-06-23T20:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 69,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 0,
+        "home": 0
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "panama",
+      "home_team_id": "england",
+      "match_id": "group-stage-group-4c-round-1-match-656e676c616e64-70616e616d61",
+      "metadata": {
+        "kickoff_at": "2026-06-27T21:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 71,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 0,
+        "home": 2
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "panama",
+      "home_team_id": "ghana",
+      "match_id": "group-stage-group-4c-round-1-match-6768616e61-70616e616d61",
+      "metadata": {
+        "kickoff_at": "2026-06-17T23:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 68,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 0,
+        "home": 1
+      },
+      "stage_id": "group-stage"
+    },
+    {
+      "away_team_id": "morocco",
+      "home_team_id": "france",
+      "match_id": "400021536",
+      "metadata": {
+        "kickoff_at": "2026-07-09T20:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 97,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 0,
+        "home": 2
+      },
+      "stage_id": "quarter-finals",
+      "winner_team_id": "france"
+    },
+    {
+      "away_team_id": "switzerland",
+      "home_team_id": "argentina",
+      "match_id": "400021537",
+      "metadata": {
+        "kickoff_at": "2026-07-12T01:00:00Z",
+        "result_basis": "extra_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 100,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 3
+      },
+      "stage_id": "quarter-finals",
+      "winner_team_id": "argentina"
+    },
+    {
+      "away_team_id": "belgium",
+      "home_team_id": "spain",
+      "match_id": "400021538",
+      "metadata": {
+        "kickoff_at": "2026-07-10T19:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 98,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 2
+      },
+      "stage_id": "quarter-finals",
+      "winner_team_id": "spain"
+    },
+    {
+      "away_team_id": "england",
+      "home_team_id": "norway",
+      "match_id": "400021539",
+      "metadata": {
+        "kickoff_at": "2026-07-11T21:00:00Z",
+        "result_basis": "extra_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 99,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 2,
+        "home": 1
+      },
+      "stage_id": "quarter-finals",
+      "winner_team_id": "england"
+    },
+    {
+      "away_team_id": "egypt",
+      "home_team_id": "argentina",
+      "match_id": "400021528",
+      "metadata": {
+        "kickoff_at": "2026-07-07T16:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 95,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 2,
+        "home": 3
+      },
+      "stage_id": "round-of-16",
+      "winner_team_id": "argentina"
+    },
+    {
+      "away_team_id": "spain",
+      "home_team_id": "portugal",
+      "match_id": "400021529",
+      "metadata": {
+        "kickoff_at": "2026-07-06T19:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 93,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 0
+      },
+      "stage_id": "round-of-16",
+      "winner_team_id": "spain"
+    },
+    {
+      "away_team_id": "morocco",
+      "home_team_id": "canada",
+      "match_id": "400021530",
+      "metadata": {
+        "kickoff_at": "2026-07-04T17:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 90,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 3,
+        "home": 0
+      },
+      "stage_id": "round-of-16",
+      "winner_team_id": "morocco"
+    },
+    {
+      "away_team_id": "england",
+      "home_team_id": "mexico",
+      "match_id": "400021531",
+      "metadata": {
+        "kickoff_at": "2026-07-06T00:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 92,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 3,
+        "home": 2
+      },
+      "stage_id": "round-of-16",
+      "winner_team_id": "england"
+    },
+    {
+      "away_team_id": "norway",
+      "home_team_id": "brazil",
+      "match_id": "400021532",
+      "metadata": {
+        "kickoff_at": "2026-07-05T20:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 91,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 2,
+        "home": 1
+      },
+      "stage_id": "round-of-16",
+      "winner_team_id": "norway"
+    },
+    {
+      "away_team_id": "france",
+      "home_team_id": "paraguay",
+      "match_id": "400021533",
+      "metadata": {
+        "kickoff_at": "2026-07-04T21:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 89,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 0
+      },
+      "stage_id": "round-of-16",
+      "winner_team_id": "france"
+    },
+    {
+      "away_team_id": "belgium",
+      "home_team_id": "usa",
+      "match_id": "400021534",
+      "metadata": {
+        "kickoff_at": "2026-07-07T00:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 94,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 4,
+        "home": 1
+      },
+      "stage_id": "round-of-16",
+      "winner_team_id": "belgium"
+    },
+    {
+      "away_team_id": "colombia",
+      "home_team_id": "switzerland",
+      "match_id": "400021535",
+      "metadata": {
+        "kickoff_at": "2026-07-07T20:00:00Z",
+        "result_basis": "penalties",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 96,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 0,
+        "home": 0
+      },
+      "stage_id": "round-of-16",
+      "winner_team_id": "switzerland"
+    },
+    {
+      "away_team_id": "congo-dr",
+      "home_team_id": "england",
+      "match_id": "400021512",
+      "metadata": {
+        "kickoff_at": "2026-07-01T16:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 80,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 2
+      },
+      "stage_id": "round-of-32",
+      "winner_team_id": "england"
+    },
+    {
+      "away_team_id": "paraguay",
+      "home_team_id": "germany",
+      "match_id": "400021513",
+      "metadata": {
+        "kickoff_at": "2026-06-29T20:30:00Z",
+        "result_basis": "penalties",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 74,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 1
+      },
+      "stage_id": "round-of-32",
+      "winner_team_id": "paraguay"
+    },
+    {
+      "away_team_id": "norway",
+      "home_team_id": "cote-d-ivoire",
+      "match_id": "400021514",
+      "metadata": {
+        "kickoff_at": "2026-06-30T17:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 78,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 2,
+        "home": 1
+      },
+      "stage_id": "round-of-32",
+      "winner_team_id": "norway"
+    },
+    {
+      "away_team_id": "egypt",
+      "home_team_id": "australia",
+      "match_id": "400021515",
+      "metadata": {
+        "kickoff_at": "2026-07-03T18:00:00Z",
+        "result_basis": "penalties",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 88,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 1
+      },
+      "stage_id": "round-of-32",
+      "winner_team_id": "egypt"
+    },
+    {
+      "away_team_id": "japan",
+      "home_team_id": "brazil",
+      "match_id": "400021516",
+      "metadata": {
+        "kickoff_at": "2026-06-29T17:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 76,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 2
+      },
+      "stage_id": "round-of-32",
+      "winner_team_id": "brazil"
+    },
+    {
+      "away_team_id": "ghana",
+      "home_team_id": "colombia",
+      "match_id": "400021517",
+      "metadata": {
+        "kickoff_at": "2026-07-04T01:30:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 87,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 0,
+        "home": 1
+      },
+      "stage_id": "round-of-32",
+      "winner_team_id": "colombia"
+    },
+    {
+      "away_team_id": "canada",
+      "home_team_id": "south-africa",
+      "match_id": "400021518",
+      "metadata": {
+        "kickoff_at": "2026-06-28T19:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 73,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 0
+      },
+      "stage_id": "round-of-32",
+      "winner_team_id": "canada"
+    },
+    {
+      "away_team_id": "austria",
+      "home_team_id": "spain",
+      "match_id": "400021519",
+      "metadata": {
+        "kickoff_at": "2026-07-02T19:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 84,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 0,
+        "home": 3
+      },
+      "stage_id": "round-of-32",
+      "winner_team_id": "spain"
+    },
+    {
+      "away_team_id": "ecuador",
+      "home_team_id": "mexico",
+      "match_id": "400021520",
+      "metadata": {
+        "kickoff_at": "2026-07-01T01:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 79,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 0,
+        "home": 2
+      },
+      "stage_id": "round-of-32",
+      "winner_team_id": "mexico"
+    },
+    {
+      "away_team_id": "cabo-verde",
+      "home_team_id": "argentina",
+      "match_id": "400021521",
+      "metadata": {
+        "kickoff_at": "2026-07-03T22:00:00Z",
+        "result_basis": "extra_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 86,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 2,
+        "home": 3
+      },
+      "stage_id": "round-of-32",
+      "winner_team_id": "argentina"
+    },
+    {
+      "away_team_id": "morocco",
+      "home_team_id": "netherlands",
+      "match_id": "400021522",
+      "metadata": {
+        "kickoff_at": "2026-06-30T01:00:00Z",
+        "result_basis": "penalties",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 75,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 1
+      },
+      "stage_id": "round-of-32",
+      "winner_team_id": "morocco"
+    },
+    {
+      "away_team_id": "sweden",
+      "home_team_id": "france",
+      "match_id": "400021523",
+      "metadata": {
+        "kickoff_at": "2026-06-30T21:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 77,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 0,
+        "home": 3
+      },
+      "stage_id": "round-of-32",
+      "winner_team_id": "france"
+    },
+    {
+      "away_team_id": "bosnia-and-herzegovina",
+      "home_team_id": "usa",
+      "match_id": "400021524",
+      "metadata": {
+        "kickoff_at": "2026-07-02T00:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 81,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 0,
+        "home": 2
+      },
+      "stage_id": "round-of-32",
+      "winner_team_id": "usa"
+    },
+    {
+      "away_team_id": "senegal",
+      "home_team_id": "belgium",
+      "match_id": "400021525",
+      "metadata": {
+        "kickoff_at": "2026-07-01T20:00:00Z",
+        "result_basis": "extra_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 82,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 2,
+        "home": 3
+      },
+      "stage_id": "round-of-32",
+      "winner_team_id": "belgium"
+    },
+    {
+      "away_team_id": "croatia",
+      "home_team_id": "portugal",
+      "match_id": "400021526",
+      "metadata": {
+        "kickoff_at": "2026-07-02T23:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 83,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 1,
+        "home": 2
+      },
+      "stage_id": "round-of-32",
+      "winner_team_id": "portugal"
+    },
+    {
+      "away_team_id": "algeria",
+      "home_team_id": "switzerland",
+      "match_id": "400021527",
+      "metadata": {
+        "kickoff_at": "2026-07-03T03:00:00Z",
+        "result_basis": "full_time",
+        "source": "OpenFootball worldcup.json",
+        "source_match_number": 85,
+        "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json"
+      },
+      "score": {
+        "away": 0,
+        "home": 2
+      },
+      "stage_id": "round-of-32",
+      "winner_team_id": "switzerland"
+    }
+  ],
+  "focus_team_id": "france",
+  "metadata": {
+    "ratings": {
+      "frozen_at": "2026-06-09T23:27:23-03:00",
+      "git_commit": "a7b6e694",
+      "limitation": "Not an official rating source and not proof of universal calibration.",
+      "sha256": "983a20748541db3612dd75fa2d5dde954d1b89de52a23c1b19f345a427bca259",
+      "source": "project-authored pre-tournament seed"
+    },
+    "snapshot": {
+      "completed_fact_count": 100,
+      "known_limitations": [
+        "The community-maintained source is not an official live feed.",
+        "The source has no trusted result-finalization timestamp.",
+        "The generic project bracket cannot model the third-place loser entrants."
+      ],
+      "license": "CC0 1.0 Universal",
+      "license_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/LICENSE.md",
+      "retrieved_at": "2026-07-13T16:35:34Z",
+      "source": "OpenFootball worldcup.json",
+      "source_commit": "056c53ec82feb3fb68da63d1ce74ec59fc23e95d",
+      "source_match_count": 104,
+      "source_sha256": "b0aef8771d7fc3b6a5ec04cf7a9f9cd167c4e8b0be9152b3a35ae5629bb4e8d5",
+      "source_url": "https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json",
+      "stable_id_policy": "Existing numeric knockout IDs are project-owned topology IDs, not source or provider IDs.",
+      "transformation": "Validated the 104-match structure; mapped OpenFootball team aliases and stages to project topology; converted kickoff offsets to UTC; selected et over ft for extra-time finals; used p only to identify shootout winners; omitted goals, grounds, half-time scores, and the unsupported third-place tie."
+    }
+  },
+  "ratings": {
+    "algeria": 1595.0,
+    "argentina": 1910.0,
+    "australia": 1580.0,
+    "austria": 1700.0,
+    "belgium": 1790.0,
+    "bosnia-and-herzegovina": 1560.0,
+    "brazil": 1850.0,
+    "cabo-verde": 1505.0,
+    "canada": 1585.0,
+    "colombia": 1740.0,
+    "congo-dr": 1500.0,
+    "cote-d-ivoire": 1605.0,
+    "croatia": 1745.0,
+    "curacao": 1360.0,
+    "czechia": 1580.0,
+    "ecuador": 1650.0,
+    "egypt": 1615.0,
+    "england": 1880.0,
+    "france": 1920.0,
+    "germany": 1860.0,
+    "ghana": 1560.0,
+    "haiti": 1320.0,
+    "ir-iran": 1625.0,
+    "iraq": 1490.0,
+    "japan": 1690.0,
+    "jordan": 1440.0,
+    "korea-republic": 1630.0,
+    "mexico": 1690.0,
+    "morocco": 1660.0,
+    "netherlands": 1860.0,
+    "new-zealand": 1430.0,
+    "norway": 1660.0,
+    "panama": 1480.0,
+    "paraguay": 1600.0,
+    "portugal": 1870.0,
+    "qatar": 1500.0,
+    "saudi-arabia": 1510.0,
+    "scotland": 1540.0,
+    "senegal": 1655.0,
+    "south-africa": 1470.0,
+    "spain": 1900.0,
+    "sweden": 1650.0,
+    "switzerland": 1710.0,
+    "tunisia": 1480.0,
+    "turkiye": 1640.0,
+    "uruguay": 1780.0,
+    "usa": 1645.0,
+    "uzbekistan": 1515.0
+  },
+  "schema_version": 2,
+  "stages": [
+    {
+      "groups": {
+        "A": [
+          "czechia",
+          "korea-republic",
+          "mexico",
+          "south-africa"
+        ],
+        "B": [
+          "bosnia-and-herzegovina",
+          "canada",
+          "qatar",
+          "switzerland"
+        ],
+        "C": [
+          "brazil",
+          "haiti",
+          "morocco",
+          "scotland"
+        ],
+        "D": [
+          "australia",
+          "paraguay",
+          "turkiye",
+          "usa"
+        ],
+        "E": [
+          "cote-d-ivoire",
+          "curacao",
+          "ecuador",
+          "germany"
+        ],
+        "F": [
+          "japan",
+          "netherlands",
+          "sweden",
+          "tunisia"
+        ],
+        "G": [
+          "belgium",
+          "egypt",
+          "ir-iran",
+          "new-zealand"
+        ],
+        "H": [
+          "cabo-verde",
+          "spain",
+          "saudi-arabia",
+          "uruguay"
+        ],
+        "I": [
+          "france",
+          "iraq",
+          "norway",
+          "senegal"
+        ],
+        "J": [
+          "algeria",
+          "argentina",
+          "austria",
+          "jordan"
+        ],
+        "K": [
+          "congo-dr",
+          "colombia",
+          "portugal",
+          "uzbekistan"
+        ],
+        "L": [
+          "croatia",
+          "england",
+          "ghana",
+          "panama"
+        ]
+      },
+      "id": "group-stage",
+      "metadata": {
+        "home_advantage_rating_points": 0
+      },
+      "points": {
+        "draw": 1,
+        "loss": 0,
+        "win": 3
+      },
+      "rounds_per_pair": 1,
+      "tiebreakers": [
+        "points",
+        "goal_difference",
+        "goals_for",
+        "wins",
+        "rating",
+        "team_id"
+      ],
+      "type": "round_robin_groups"
+    },
+    {
+      "aggregate_tiebreak": "extra_time_then_penalties",
+      "away_goals_rule": false,
+      "home_away_order": "listed_team_first_leg_home",
+      "id": "round-of-32",
+      "legs": 1,
+      "metadata": {
+        "home_advantage_rating_points": 0
+      },
+      "pairing": {
+        "mode": "fixed",
+        "ties": [
+          {
+            "entrants": [
+              {
+                "team_id": "south-africa",
+                "type": "team"
+              },
+              {
+                "team_id": "canada",
+                "type": "team"
+              }
+            ],
+            "id": "400021518"
+          },
+          {
+            "entrants": [
+              {
+                "team_id": "germany",
+                "type": "team"
+              },
+              {
+                "team_id": "paraguay",
+                "type": "team"
+              }
+            ],
+            "id": "400021513"
+          },
+          {
+            "entrants": [
+              {
+                "team_id": "netherlands",
+                "type": "team"
+              },
+              {
+                "team_id": "morocco",
+                "type": "team"
+              }
+            ],
+            "id": "400021522"
+          },
+          {
+            "entrants": [
+              {
+                "team_id": "brazil",
+                "type": "team"
+              },
+              {
+                "team_id": "japan",
+                "type": "team"
+              }
+            ],
+            "id": "400021516"
+          },
+          {
+            "entrants": [
+              {
+                "team_id": "france",
+                "type": "team"
+              },
+              {
+                "team_id": "sweden",
+                "type": "team"
+              }
+            ],
+            "id": "400021523"
+          },
+          {
+            "entrants": [
+              {
+                "team_id": "cote-d-ivoire",
+                "type": "team"
+              },
+              {
+                "team_id": "norway",
+                "type": "team"
+              }
+            ],
+            "id": "400021514"
+          },
+          {
+            "entrants": [
+              {
+                "team_id": "mexico",
+                "type": "team"
+              },
+              {
+                "team_id": "ecuador",
+                "type": "team"
+              }
+            ],
+            "id": "400021520"
+          },
+          {
+            "entrants": [
+              {
+                "team_id": "england",
+                "type": "team"
+              },
+              {
+                "team_id": "congo-dr",
+                "type": "team"
+              }
+            ],
+            "id": "400021512"
+          },
+          {
+            "entrants": [
+              {
+                "team_id": "usa",
+                "type": "team"
+              },
+              {
+                "team_id": "bosnia-and-herzegovina",
+                "type": "team"
+              }
+            ],
+            "id": "400021524"
+          },
+          {
+            "entrants": [
+              {
+                "team_id": "belgium",
+                "type": "team"
+              },
+              {
+                "team_id": "senegal",
+                "type": "team"
+              }
+            ],
+            "id": "400021525"
+          },
+          {
+            "entrants": [
+              {
+                "team_id": "portugal",
+                "type": "team"
+              },
+              {
+                "team_id": "croatia",
+                "type": "team"
+              }
+            ],
+            "id": "400021526"
+          },
+          {
+            "entrants": [
+              {
+                "team_id": "spain",
+                "type": "team"
+              },
+              {
+                "team_id": "austria",
+                "type": "team"
+              }
+            ],
+            "id": "400021519"
+          },
+          {
+            "entrants": [
+              {
+                "team_id": "switzerland",
+                "type": "team"
+              },
+              {
+                "team_id": "algeria",
+                "type": "team"
+              }
+            ],
+            "id": "400021527"
+          },
+          {
+            "entrants": [
+              {
+                "team_id": "argentina",
+                "type": "team"
+              },
+              {
+                "team_id": "cabo-verde",
+                "type": "team"
+              }
+            ],
+            "id": "400021521"
+          },
+          {
+            "entrants": [
+              {
+                "team_id": "colombia",
+                "type": "team"
+              },
+              {
+                "team_id": "ghana",
+                "type": "team"
+              }
+            ],
+            "id": "400021517"
+          },
+          {
+            "entrants": [
+              {
+                "team_id": "australia",
+                "type": "team"
+              },
+              {
+                "team_id": "egypt",
+                "type": "team"
+              }
+            ],
+            "id": "400021515"
+          }
+        ]
+      },
+      "type": "knockout"
+    },
+    {
+      "aggregate_tiebreak": "extra_time_then_penalties",
+      "away_goals_rule": false,
+      "home_away_order": "listed_team_first_leg_home",
+      "id": "round-of-16",
+      "legs": 1,
+      "metadata": {
+        "home_advantage_rating_points": 0
+      },
+      "pairing": {
+        "mode": "fixed",
+        "ties": [
+          {
+            "entrants": [
+              {
+                "match_id": "400021513",
+                "type": "match_winner"
+              },
+              {
+                "match_id": "400021523",
+                "type": "match_winner"
+              }
+            ],
+            "id": "400021533"
+          },
+          {
+            "entrants": [
+              {
+                "match_id": "400021518",
+                "type": "match_winner"
+              },
+              {
+                "match_id": "400021522",
+                "type": "match_winner"
+              }
+            ],
+            "id": "400021530"
+          },
+          {
+            "entrants": [
+              {
+                "match_id": "400021516",
+                "type": "match_winner"
+              },
+              {
+                "match_id": "400021514",
+                "type": "match_winner"
+              }
+            ],
+            "id": "400021532"
+          },
+          {
+            "entrants": [
+              {
+                "match_id": "400021520",
+                "type": "match_winner"
+              },
+              {
+                "match_id": "400021512",
+                "type": "match_winner"
+              }
+            ],
+            "id": "400021531"
+          },
+          {
+            "entrants": [
+              {
+                "match_id": "400021526",
+                "type": "match_winner"
+              },
+              {
+                "match_id": "400021519",
+                "type": "match_winner"
+              }
+            ],
+            "id": "400021529"
+          },
+          {
+            "entrants": [
+              {
+                "match_id": "400021524",
+                "type": "match_winner"
+              },
+              {
+                "match_id": "400021525",
+                "type": "match_winner"
+              }
+            ],
+            "id": "400021534"
+          },
+          {
+            "entrants": [
+              {
+                "match_id": "400021521",
+                "type": "match_winner"
+              },
+              {
+                "match_id": "400021515",
+                "type": "match_winner"
+              }
+            ],
+            "id": "400021528"
+          },
+          {
+            "entrants": [
+              {
+                "match_id": "400021527",
+                "type": "match_winner"
+              },
+              {
+                "match_id": "400021517",
+                "type": "match_winner"
+              }
+            ],
+            "id": "400021535"
+          }
+        ]
+      },
+      "type": "knockout"
+    },
+    {
+      "aggregate_tiebreak": "extra_time_then_penalties",
+      "away_goals_rule": false,
+      "home_away_order": "listed_team_first_leg_home",
+      "id": "quarter-finals",
+      "legs": 1,
+      "metadata": {
+        "home_advantage_rating_points": 0
+      },
+      "pairing": {
+        "mode": "fixed",
+        "ties": [
+          {
+            "entrants": [
+              {
+                "match_id": "400021533",
+                "type": "match_winner"
+              },
+              {
+                "match_id": "400021530",
+                "type": "match_winner"
+              }
+            ],
+            "id": "400021536"
+          },
+          {
+            "entrants": [
+              {
+                "match_id": "400021529",
+                "type": "match_winner"
+              },
+              {
+                "match_id": "400021534",
+                "type": "match_winner"
+              }
+            ],
+            "id": "400021538"
+          },
+          {
+            "entrants": [
+              {
+                "match_id": "400021532",
+                "type": "match_winner"
+              },
+              {
+                "match_id": "400021531",
+                "type": "match_winner"
+              }
+            ],
+            "id": "400021539"
+          },
+          {
+            "entrants": [
+              {
+                "match_id": "400021528",
+                "type": "match_winner"
+              },
+              {
+                "match_id": "400021535",
+                "type": "match_winner"
+              }
+            ],
+            "id": "400021537"
+          }
+        ]
+      },
+      "type": "knockout"
+    },
+    {
+      "aggregate_tiebreak": "extra_time_then_penalties",
+      "away_goals_rule": false,
+      "home_away_order": "listed_team_first_leg_home",
+      "id": "semi-finals",
+      "legs": 1,
+      "metadata": {
+        "home_advantage_rating_points": 0
+      },
+      "pairing": {
+        "mode": "fixed",
+        "ties": [
+          {
+            "entrants": [
+              {
+                "match_id": "400021536",
+                "type": "match_winner"
+              },
+              {
+                "match_id": "400021538",
+                "type": "match_winner"
+              }
+            ],
+            "id": "400021541"
+          },
+          {
+            "entrants": [
+              {
+                "match_id": "400021539",
+                "type": "match_winner"
+              },
+              {
+                "match_id": "400021537",
+                "type": "match_winner"
+              }
+            ],
+            "id": "400021540"
+          }
+        ]
+      },
+      "type": "knockout"
+    },
+    {
+      "aggregate_tiebreak": "extra_time_then_penalties",
+      "away_goals_rule": false,
+      "home_away_order": "listed_team_first_leg_home",
+      "id": "final",
+      "legs": 1,
+      "metadata": {
+        "home_advantage_rating_points": 0
+      },
+      "pairing": {
+        "mode": "fixed",
+        "ties": [
+          {
+            "entrants": [
+              {
+                "match_id": "400021541",
+                "type": "match_winner"
+              },
+              {
+                "match_id": "400021540",
+                "type": "match_winner"
+              }
+            ],
+            "id": "400021543"
+          }
+        ]
+      },
+      "terminal": "championship",
+      "type": "knockout"
+    }
+  ],
+  "teams": [
+    {
+      "display_name": "Algeria",
+      "id": "algeria"
+    },
+    {
+      "display_name": "Argentina",
+      "id": "argentina"
+    },
+    {
+      "display_name": "Australia",
+      "id": "australia"
+    },
+    {
+      "display_name": "Austria",
+      "id": "austria"
+    },
+    {
+      "display_name": "Belgium",
+      "id": "belgium"
+    },
+    {
+      "display_name": "Bosnia and Herzegovina",
+      "id": "bosnia-and-herzegovina"
+    },
+    {
+      "display_name": "Brazil",
+      "id": "brazil"
+    },
+    {
+      "display_name": "Cabo Verde",
+      "id": "cabo-verde"
+    },
+    {
+      "display_name": "Canada",
+      "id": "canada"
+    },
+    {
+      "display_name": "Colombia",
+      "id": "colombia"
+    },
+    {
+      "display_name": "Congo DR",
+      "id": "congo-dr"
+    },
+    {
+      "display_name": "Côte d'Ivoire",
+      "id": "cote-d-ivoire"
+    },
+    {
+      "display_name": "Croatia",
+      "id": "croatia"
+    },
+    {
+      "display_name": "Curaçao",
+      "id": "curacao"
+    },
+    {
+      "display_name": "Czechia",
+      "id": "czechia"
+    },
+    {
+      "display_name": "Ecuador",
+      "id": "ecuador"
+    },
+    {
+      "display_name": "Egypt",
+      "id": "egypt"
+    },
+    {
+      "display_name": "England",
+      "id": "england"
+    },
+    {
+      "display_name": "France",
+      "id": "france"
+    },
+    {
+      "display_name": "Germany",
+      "id": "germany"
+    },
+    {
+      "display_name": "Ghana",
+      "id": "ghana"
+    },
+    {
+      "display_name": "Haiti",
+      "id": "haiti"
+    },
+    {
+      "display_name": "IR Iran",
+      "id": "ir-iran"
+    },
+    {
+      "display_name": "Iraq",
+      "id": "iraq"
+    },
+    {
+      "display_name": "Japan",
+      "id": "japan"
+    },
+    {
+      "display_name": "Jordan",
+      "id": "jordan"
+    },
+    {
+      "display_name": "Korea Republic",
+      "id": "korea-republic"
+    },
+    {
+      "display_name": "Mexico",
+      "id": "mexico"
+    },
+    {
+      "display_name": "Morocco",
+      "id": "morocco"
+    },
+    {
+      "display_name": "Netherlands",
+      "id": "netherlands"
+    },
+    {
+      "display_name": "New Zealand",
+      "id": "new-zealand"
+    },
+    {
+      "display_name": "Norway",
+      "id": "norway"
+    },
+    {
+      "display_name": "Panama",
+      "id": "panama"
+    },
+    {
+      "display_name": "Paraguay",
+      "id": "paraguay"
+    },
+    {
+      "display_name": "Portugal",
+      "id": "portugal"
+    },
+    {
+      "display_name": "Qatar",
+      "id": "qatar"
+    },
+    {
+      "display_name": "Saudi Arabia",
+      "id": "saudi-arabia"
+    },
+    {
+      "display_name": "Scotland",
+      "id": "scotland"
+    },
+    {
+      "display_name": "Senegal",
+      "id": "senegal"
+    },
+    {
+      "display_name": "South Africa",
+      "id": "south-africa"
+    },
+    {
+      "display_name": "Spain",
+      "id": "spain"
+    },
+    {
+      "display_name": "Sweden",
+      "id": "sweden"
+    },
+    {
+      "display_name": "Switzerland",
+      "id": "switzerland"
+    },
+    {
+      "display_name": "Tunisia",
+      "id": "tunisia"
+    },
+    {
+      "display_name": "Türkiye",
+      "id": "turkiye"
+    },
+    {
+      "display_name": "Uruguay",
+      "id": "uruguay"
+    },
+    {
+      "display_name": "USA",
+      "id": "usa"
+    },
+    {
+      "display_name": "Uzbekistan",
+      "id": "uzbekistan"
+    }
+  ],
+  "tournament": {
+    "display_name": "FIFA World Cup 2026",
+    "id": "fifa-world-cup-2026-live",
+    "season": "2026"
+  }
+}

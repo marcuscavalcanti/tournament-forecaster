@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tournament-forecaster.example/schemas/backtest.schema.json",
+  "title": "Tournament Forecaster backtest document",
+  "$defs": {
+    "finite_number": {
+      "type": "number",
+      "minimum": -1.7976931348623157e308,
+      "maximum": 1.7976931348623157e308
+    },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^(?!0000-)(?:(?:[0-9]{4}-(?:(?:01|03|05|07|08|10|12)-(?:0[1-9]|[12][0-9]|3[01])|(?:04|06|09|11)-(?:0[1-9]|[12][0-9]|30)|02-(?:0[1-9]|1[0-9]|2[0-8])))|(?:(?:[0-9]{2}(?:0[48]|[2468][048]|[13579][26])|(?:0[48]|[2468][048]|[13579][26])00)-02-29))T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\\.[0-9]+)?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])(?![\\s\\S])"
+    },
+    "score": {
+      "type": "object",
+      "required": ["home", "away"],
+      "properties": {
+        "home": {"type": "integer", "minimum": 0},
+        "away": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "case": {
+      "type": "object",
+      "required": [
+        "source_id",
+        "captured_at",
+        "kickoff_at",
+        "home_team_id",
+        "away_team_id",
+        "result"
+      ],
+      "properties": {
+        "source_id": {"type": "string", "minLength": 1},
+        "captured_at": {"$ref": "#/$defs/timestamp"},
+        "kickoff_at": {"$ref": "#/$defs/timestamp"},
+        "home_team_id": {"type": "string", "minLength": 1},
+        "away_team_id": {"type": "string", "minLength": 1},
+        "result": {
+          "oneOf": [
+            {"$ref": "#/$defs/score"},
+            {"type": "null"}
+          ]
+        },
+        "metadata": {"type": "object", "additionalProperties": true}
+      },
+      "additionalProperties": false
+    }
+  },
+  "type": "object",
+  "required": [
+    "schema_version",
+    "model_version",
+    "home_advantage_rating_points",
+    "ratings",
+    "ratings_sha256",
+    "cases"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "model_version": {"enum": ["poisson-elo-v1"]},
+    "home_advantage_rating_points": {"$ref": "#/$defs/finite_number"},
+    "ratings": {
+      "type": "object",
+      "propertyNames": {"type": "string", "minLength": 1},
+      "additionalProperties": {"$ref": "#/$defs/finite_number"}
+    },
+    "ratings_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "cases": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/case"}
+    },
+    "metadata": {"type": "object", "additionalProperties": true}
+  },
+  "additionalProperties": false
+}

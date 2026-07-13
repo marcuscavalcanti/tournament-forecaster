@@ -3,7 +3,7 @@
 - **Status:** Target architecture contract for the open-source migration
 - **Product:** Tournament Forecaster
 
-The architecture keeps tournament rules and probability computation deterministic and offline. Network providers, model providers, local executable bridges, and publishing templates are adapters around that core, not owners of tournament truth.
+The architecture keeps tournament rules and probability computation deterministic and offline. Network providers, model providers, local executable bridges, and publishing templates are reserved adapter boundaries, not owners of tournament truth. The current generic CLI implements local normalized-file imports and does not implement model providers, command bridges, or publishing adapters.
 
 ## Component Architecture
 

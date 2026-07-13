@@ -1,0 +1,37 @@
+{
+  "schema_version": 2,
+  "tournament": {"id": "group-two-leg-knockout-template", "display_name": "Group Two-Leg Knockout Template", "season": "2026"},
+  "focus_team_id": "alpha-club",
+  "teams": [
+    {"id": "alpha-club", "display_name": "Alpha Club"}, {"id": "bravo-town", "display_name": "Bravo Town"},
+    {"id": "charlie-fc", "display_name": "Charlie FC"}, {"id": "delta-united", "display_name": "Delta United"},
+    {"id": "echo-athletic", "display_name": "Echo Athletic"}, {"id": "foxtrot-rovers", "display_name": "Foxtrot Rovers"},
+    {"id": "golf-city", "display_name": "Golf City"}, {"id": "hotel-club", "display_name": "Hotel Club"}
+  ],
+  "stages": [
+    {
+      "id": "group-stage", "type": "round_robin_groups",
+      "groups": {"A": ["alpha-club", "bravo-town", "charlie-fc", "delta-united"], "B": ["echo-athletic", "foxtrot-rovers", "golf-city", "hotel-club"]},
+      "rounds_per_pair": 2,
+      "points": {"win": 3, "draw": 1, "loss": 0},
+      "tiebreakers": ["points", "goal_difference", "goals_for", "wins", "rating", "team_id"],
+      "qualification": {"direct_per_group": 2, "best_additional": 0, "additional_rank": 3}
+    },
+    {
+      "id": "semi-finals", "type": "knockout",
+      "pairing": {"mode": "fixed", "ties": [
+        {"id": "semi-final-1", "entrants": [{"type": "group_rank", "stage_id": "group-stage", "group": "A", "rank": 1}, {"type": "group_rank", "stage_id": "group-stage", "group": "B", "rank": 2}]},
+        {"id": "semi-final-2", "entrants": [{"type": "group_rank", "stage_id": "group-stage", "group": "B", "rank": 1}, {"type": "group_rank", "stage_id": "group-stage", "group": "A", "rank": 2}]}
+      ]},
+      "legs": 2, "home_away_order": "listed_team_first_leg_home", "aggregate_tiebreak": "extra_time_then_penalties", "away_goals_rule": false
+    },
+    {
+      "id": "final", "type": "knockout",
+      "pairing": {"mode": "fixed", "ties": [{"id": "final-1", "entrants": [{"type": "match_winner", "match_id": "semi-final-1"}, {"type": "match_winner", "match_id": "semi-final-2"}]}]},
+      "legs": 1, "home_away_order": "listed_team_first_leg_home", "aggregate_tiebreak": "extra_time_then_penalties", "away_goals_rule": false, "terminal": "championship"
+    }
+  ],
+  "ratings": {"alpha-club": 1600, "bravo-town": 1560, "charlie-fc": 1520, "delta-united": 1480, "echo-athletic": 1590, "foxtrot-rovers": 1550, "golf-city": 1510, "hotel-club": 1470},
+  "completed_matches": [],
+  "metadata": {"data_status": "project-authored synthetic redistributable template data"}
+}

@@ -1,13 +1,271 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
-name = "worldcup2026-brazil-radar"
+name = "tournament-forecaster"
 version = "0.1.0"
-description = "Daily/three-day Brazil World Cup 2026 LinkedIn forecasting script."
+description = "Configuration-driven tournament forecasting."
+readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "Marcus Cavalcanti" }]
 dependencies = []
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Information Analysis",
+]
+
+[project.optional-dependencies]
+dev = [
+  "build>=1.2,<2",
+  "hatchling>=1.27,<2",
+  "jsonschema>=4.23,<5",
+  "mypy>=1.13,<2",
+  "Pillow>=11,<13",
+  "pytest>=8.3,<10",
+  "pytest-socket>=0.7,<1",
+  "ruff>=0.9,<1",
+  "twine>=6,<7",
+  "types-jsonschema>=4.23,<5",
+]
+
+[project.urls]
+Homepage = "https://github.com/marcuscavalcanti/worldcup2026"
+Documentation = "https://github.com/marcuscavalcanti/worldcup2026#readme"
+Issues = "https://github.com/marcuscavalcanti/worldcup2026/issues"
+Source = "https://github.com/marcuscavalcanti/worldcup2026"
 
 [project.scripts]
+tournament-forecast = "tournament_forecaster.cli:main"
 worldcup-brazil-report = "worldcup_brazil.cli:main"
 
+[tool.hatch.build.targets.wheel]
+sources = ["src"]
+include = [
+  "/src/tournament_forecaster/__init__.py",
+  "/src/tournament_forecaster/__main__.py",
+  "/src/tournament_forecaster/atomic_io.py",
+  "/src/tournament_forecaster/backtest.py",
+  "/src/tournament_forecaster/cli.py",
+  "/src/tournament_forecaster/compatibility/__init__.py",
+  "/src/tournament_forecaster/compatibility/worldcup_brazil.py",
+  "/src/tournament_forecaster/config.py",
+  "/src/tournament_forecaster/data/presets/champions-league-style/tournament.json",
+  "/src/tournament_forecaster/data/presets/libertadores-style/tournament.json",
+  "/src/tournament_forecaster/data/presets/synthetic-cup/tournament.json",
+  "/src/tournament_forecaster/data/presets/world-cup-style/tournament.json",
+  "/src/tournament_forecaster/data/templates/group-knockout/README.md",
+  "/src/tournament_forecaster/data/templates/group-knockout/tournament.json",
+  "/src/tournament_forecaster/data/templates/group-two-leg-knockout/README.md",
+  "/src/tournament_forecaster/data/templates/group-two-leg-knockout/tournament.json",
+  "/src/tournament_forecaster/data/templates/league-knockout/README.md",
+  "/src/tournament_forecaster/data/templates/league-knockout/tournament.json",
+  "/src/tournament_forecaster/domain.py",
+  "/src/tournament_forecaster/errors.py",
+  "/src/tournament_forecaster/group_fixtures.py",
+  "/src/tournament_forecaster/pairing.py",
+  "/src/tournament_forecaster/probabilities.py",
+  "/src/tournament_forecaster/providers/__init__.py",
+  "/src/tournament_forecaster/providers/odds.py",
+  "/src/tournament_forecaster/providers/results.py",
+  "/src/tournament_forecaster/providers/security.py",
+  "/src/tournament_forecaster/qualification.py",
+  "/src/tournament_forecaster/reports/__init__.py",
+  "/src/tournament_forecaster/reports/bracket_svg.py",
+  "/src/tournament_forecaster/reports/json_report.py",
+  "/src/tournament_forecaster/reports/markdown_report.py",
+  "/src/tournament_forecaster/reports/publication.py",
+  "/src/tournament_forecaster/resources.py",
+  "/src/tournament_forecaster/schemas/backtest.schema.json",
+  "/src/tournament_forecaster/schemas/forecast.schema.json",
+  "/src/tournament_forecaster/schemas/odds.import.schema.json",
+  "/src/tournament_forecaster/schemas/results.import.schema.json",
+  "/src/tournament_forecaster/schemas/tournament.schema.json",
+  "/src/tournament_forecaster/simulation.py",
+  "/src/tournament_forecaster/stages/__init__.py",
+  "/src/tournament_forecaster/stages/group_stage.py",
+  "/src/tournament_forecaster/stages/knockout_stage.py",
+  "/src/tournament_forecaster/stages/league_stage.py",
+  "/src/tournament_forecaster/standings.py",
+  "/src/tournament_forecaster/validation.py",
+  "/worldcup_brazil/__init__.py",
+  "/worldcup_brazil/agents.py",
+  "/worldcup_brazil/atomic_io.py",
+  "/worldcup_brazil/bracket.py",
+  "/worldcup_brazil/calibration.py",
+  "/worldcup_brazil/cli.py",
+  "/worldcup_brazil/consensus.py",
+  "/worldcup_brazil/debate_report.py",
+  "/worldcup_brazil/infographic.py",
+  "/worldcup_brazil/meeting.py",
+  "/worldcup_brazil/models.py",
+  "/worldcup_brazil/monte_carlo.py",
+  "/worldcup_brazil/pipeline.py",
+  "/worldcup_brazil/post_template.py",
+  "/worldcup_brazil/probabilities.py",
+  "/worldcup_brazil/renderer.py",
+  "/worldcup_brazil/scheduler.py",
+  "/worldcup_brazil/source_memory.py",
+  "/worldcup_brazil/sources.py",
+  "/worldcup_brazil/watchdog.py",
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/.env.example",
+  "/.gitignore",
+  "/CODE_OF_CONDUCT.md",
+  "/CONTRIBUTING.md",
+  "/LICENSE",
+  "/Makefile",
+  "/NOTICE.md",
+  "/README.md",
+  "/SECURITY.md",
+  "/config/worldcup_brazil.example.json",
+  "/docs/ADDING_A_COMPETITION.md",
+  "/docs/ADDING_A_PROVIDER.md",
+  "/docs/ARCHITECTURE.md",
+  "/docs/CONFIGURATION.md",
+  "/docs/DATA_POLICY.md",
+  "/docs/MIGRATION_FROM_WORLDCUP_BRAZIL.md",
+  "/docs/PRODUCT_FLOW.md",
+  "/docs/PROVIDERS.md",
+  "/docs/assets/architecture/README.md",
+  "/docs/assets/architecture/generate.py",
+  "/docs/assets/architecture/manifest.json",
+  "/docs/assets/architecture/product-flow.png",
+  "/docs/assets/architecture/product-flow.svg",
+  "/docs/assets/architecture/technical-architecture.png",
+  "/docs/assets/architecture/technical-architecture.svg",
+  "/docs/knockout-stage-output-contract.md",
+  "/examples/world-cup-2026-live/DATA_SOURCES.md",
+  "/examples/world-cup-2026-live/README.md",
+  "/examples/world-cup-2026-live/backtest-report.json",
+  "/examples/world-cup-2026-live/backtest-report.md",
+  "/examples/world-cup-2026-live/backtest.json",
+  "/examples/world-cup-2026-live/tournament.json",
+  "/presets/champions-league-style/DATA_SOURCES.md",
+  "/presets/champions-league-style/tournament.json",
+  "/presets/libertadores-style/DATA_SOURCES.md",
+  "/presets/libertadores-style/tournament.json",
+  "/presets/synthetic-cup/DATA_SOURCES.md",
+  "/presets/synthetic-cup/tournament.json",
+  "/presets/world-cup-style/DATA_SOURCES.md",
+  "/presets/world-cup-style/tournament.json",
+  "/pyproject.toml",
+  "/src/tournament_forecaster/__init__.py",
+  "/src/tournament_forecaster/__main__.py",
+  "/src/tournament_forecaster/atomic_io.py",
+  "/src/tournament_forecaster/backtest.py",
+  "/src/tournament_forecaster/cli.py",
+  "/src/tournament_forecaster/compatibility/__init__.py",
+  "/src/tournament_forecaster/compatibility/worldcup_brazil.py",
+  "/src/tournament_forecaster/config.py",
+  "/src/tournament_forecaster/data/presets/champions-league-style/tournament.json",
+  "/src/tournament_forecaster/data/presets/libertadores-style/tournament.json",
+  "/src/tournament_forecaster/data/presets/synthetic-cup/tournament.json",
+  "/src/tournament_forecaster/data/presets/world-cup-style/tournament.json",
+  "/src/tournament_forecaster/data/templates/group-knockout/README.md",
+  "/src/tournament_forecaster/data/templates/group-knockout/tournament.json",
+  "/src/tournament_forecaster/data/templates/group-two-leg-knockout/README.md",
+  "/src/tournament_forecaster/data/templates/group-two-leg-knockout/tournament.json",
+  "/src/tournament_forecaster/data/templates/league-knockout/README.md",
+  "/src/tournament_forecaster/data/templates/league-knockout/tournament.json",
+  "/src/tournament_forecaster/domain.py",
+  "/src/tournament_forecaster/errors.py",
+  "/src/tournament_forecaster/group_fixtures.py",
+  "/src/tournament_forecaster/pairing.py",
+  "/src/tournament_forecaster/probabilities.py",
+  "/src/tournament_forecaster/providers/__init__.py",
+  "/src/tournament_forecaster/providers/odds.py",
+  "/src/tournament_forecaster/providers/results.py",
+  "/src/tournament_forecaster/providers/security.py",
+  "/src/tournament_forecaster/qualification.py",
+  "/src/tournament_forecaster/reports/__init__.py",
+  "/src/tournament_forecaster/reports/bracket_svg.py",
+  "/src/tournament_forecaster/reports/json_report.py",
+  "/src/tournament_forecaster/reports/markdown_report.py",
+  "/src/tournament_forecaster/reports/publication.py",
+  "/src/tournament_forecaster/resources.py",
+  "/src/tournament_forecaster/schemas/backtest.schema.json",
+  "/src/tournament_forecaster/schemas/forecast.schema.json",
+  "/src/tournament_forecaster/schemas/odds.import.schema.json",
+  "/src/tournament_forecaster/schemas/results.import.schema.json",
+  "/src/tournament_forecaster/schemas/tournament.schema.json",
+  "/src/tournament_forecaster/simulation.py",
+  "/src/tournament_forecaster/stages/__init__.py",
+  "/src/tournament_forecaster/stages/group_stage.py",
+  "/src/tournament_forecaster/stages/knockout_stage.py",
+  "/src/tournament_forecaster/stages/league_stage.py",
+  "/src/tournament_forecaster/standings.py",
+  "/src/tournament_forecaster/validation.py",
+  "/worldcup_brazil/__init__.py",
+  "/worldcup_brazil/agents.py",
+  "/worldcup_brazil/atomic_io.py",
+  "/worldcup_brazil/bracket.py",
+  "/worldcup_brazil/calibration.py",
+  "/worldcup_brazil/cli.py",
+  "/worldcup_brazil/consensus.py",
+  "/worldcup_brazil/debate_report.py",
+  "/worldcup_brazil/infographic.py",
+  "/worldcup_brazil/meeting.py",
+  "/worldcup_brazil/models.py",
+  "/worldcup_brazil/monte_carlo.py",
+  "/worldcup_brazil/pipeline.py",
+  "/worldcup_brazil/post_template.py",
+  "/worldcup_brazil/probabilities.py",
+  "/worldcup_brazil/renderer.py",
+  "/worldcup_brazil/scheduler.py",
+  "/worldcup_brazil/source_memory.py",
+  "/worldcup_brazil/sources.py",
+  "/worldcup_brazil/watchdog.py",
+]
+exclude = [
+  "/.github",
+  "/.superpowers",
+  "/.venv",
+  "/attachments",
+  "/build",
+  "/data",
+  "/dist",
+  "/docs/superpowers",
+  "/outputs",
+  "/provider_raw",
+  "/raw_provider_payloads",
+  "/scripts",
+  "/tests",
+  "/uv.lock",
+  "/**/__pycache__",
+  "/**/*.local.*",
+  "/**/*.pyc",
+  "/**/*.pyo",
+  "/**/outputs/**",
+]
+
 [tool.pytest.ini_options]
-pythonpath = ["."]
+pythonpath = [".", "src"]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unreachable = true
+exclude = [
+  "^worldcup_brazil/",
+]

@@ -1,0 +1,98 @@
+{
+  "schema_version": 2,
+  "tournament": {
+    "id": "libertadores-style",
+    "display_name": "Groups and Two-Leg Knockout Style Contract",
+    "season": "2026"
+  },
+  "focus_team_id": "acorn-city",
+  "teams": [
+    {"id": "acorn-city", "display_name": "Acorn City"},
+    {"id": "boulder-town", "display_name": "Boulder Town"},
+    {"id": "canyon-fc", "display_name": "Canyon FC"},
+    {"id": "dune-united", "display_name": "Dune United"},
+    {"id": "evergreen-club", "display_name": "Evergreen Club"},
+    {"id": "frontier-rovers", "display_name": "Frontier Rovers"},
+    {"id": "granite-athletic", "display_name": "Granite Athletic"},
+    {"id": "harvest-town", "display_name": "Harvest Town"},
+    {"id": "indigo-city", "display_name": "Indigo City"},
+    {"id": "jetty-fc", "display_name": "Jetty FC"},
+    {"id": "knoll-united", "display_name": "Knoll United"},
+    {"id": "lagoon-club", "display_name": "Lagoon Club"},
+    {"id": "mesa-rovers", "display_name": "Mesa Rovers"},
+    {"id": "nimbus-athletic", "display_name": "Nimbus Athletic"},
+    {"id": "oasis-town", "display_name": "Oasis Town"},
+    {"id": "pine-city", "display_name": "Pine City"}
+  ],
+  "stages": [
+    {
+      "id": "group-stage",
+      "type": "round_robin_groups",
+      "groups": {
+        "A": ["acorn-city", "boulder-town", "canyon-fc", "dune-united"],
+        "B": ["evergreen-club", "frontier-rovers", "granite-athletic", "harvest-town"],
+        "C": ["indigo-city", "jetty-fc", "knoll-united", "lagoon-club"],
+        "D": ["mesa-rovers", "nimbus-athletic", "oasis-town", "pine-city"]
+      },
+      "rounds_per_pair": 2,
+      "points": {"win": 3, "draw": 1, "loss": 0},
+      "tiebreakers": ["points", "goal_difference", "goals_for", "wins", "rating", "team_id"],
+      "qualification": {"direct_per_group": 2, "best_additional": 0}
+    },
+    {
+      "id": "quarter-finals",
+      "type": "knockout",
+      "pairing": {
+        "mode": "fixed",
+        "ties": [
+          {"id": "quarter-final-1", "entrants": [{"type": "group_rank", "stage_id": "group-stage", "group": "A", "rank": 1}, {"type": "group_rank", "stage_id": "group-stage", "group": "B", "rank": 2}]},
+          {"id": "quarter-final-2", "entrants": [{"type": "group_rank", "stage_id": "group-stage", "group": "B", "rank": 1}, {"type": "group_rank", "stage_id": "group-stage", "group": "A", "rank": 2}]},
+          {"id": "quarter-final-3", "entrants": [{"type": "group_rank", "stage_id": "group-stage", "group": "C", "rank": 1}, {"type": "group_rank", "stage_id": "group-stage", "group": "D", "rank": 2}]},
+          {"id": "quarter-final-4", "entrants": [{"type": "group_rank", "stage_id": "group-stage", "group": "D", "rank": 1}, {"type": "group_rank", "stage_id": "group-stage", "group": "C", "rank": 2}]}
+        ]
+      },
+      "legs": 2,
+      "home_away_order": "listed_team_first_leg_home",
+      "aggregate_tiebreak": "extra_time_then_penalties",
+      "away_goals_rule": false
+    },
+    {
+      "id": "semi-finals",
+      "type": "knockout",
+      "pairing": {
+        "mode": "fixed",
+        "ties": [
+          {"id": "semi-final-1", "entrants": [{"type": "match_winner", "match_id": "quarter-final-1"}, {"type": "match_winner", "match_id": "quarter-final-2"}]},
+          {"id": "semi-final-2", "entrants": [{"type": "match_winner", "match_id": "quarter-final-3"}, {"type": "match_winner", "match_id": "quarter-final-4"}]}
+        ]
+      },
+      "legs": 2,
+      "home_away_order": "listed_team_first_leg_home",
+      "aggregate_tiebreak": "extra_time_then_penalties",
+      "away_goals_rule": false
+    },
+    {
+      "id": "final",
+      "type": "knockout",
+      "pairing": {
+        "mode": "fixed",
+        "ties": [
+          {"id": "final-1", "entrants": [{"type": "match_winner", "match_id": "semi-final-1"}, {"type": "match_winner", "match_id": "semi-final-2"}]}
+        ]
+      },
+      "legs": 1,
+      "home_away_order": "listed_team_first_leg_home",
+      "aggregate_tiebreak": "extra_time_then_penalties",
+      "away_goals_rule": false,
+      "terminal": "championship"
+    }
+  ],
+  "ratings": {
+    "acorn-city": 1640, "boulder-town": 1590, "canyon-fc": 1530, "dune-united": 1480,
+    "evergreen-club": 1630, "frontier-rovers": 1580, "granite-athletic": 1520, "harvest-town": 1470,
+    "indigo-city": 1620, "jetty-fc": 1570, "knoll-united": 1510, "lagoon-club": 1460,
+    "mesa-rovers": 1610, "nimbus-athletic": 1560, "oasis-town": 1500, "pine-city": 1450
+  },
+  "completed_matches": [],
+  "metadata": {"data_status": "project-authored synthetic redistributable test data"}
+}

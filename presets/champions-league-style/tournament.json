@@ -1,0 +1,103 @@
+{
+  "schema_version": 2,
+  "tournament": {
+    "id": "champions-league-style",
+    "display_name": "League and Knockout Style Contract",
+    "season": "2026"
+  },
+  "focus_team_id": "aster-vale-orbitals",
+  "teams": [
+    {"id": "aster-vale-orbitals", "display_name": "Aster Vale Orbitals"},
+    {"id": "beacon-town", "display_name": "Beacon Town"},
+    {"id": "comet-city", "display_name": "Comet City"},
+    {"id": "drift-united", "display_name": "Drift United"},
+    {"id": "ember-athletic", "display_name": "Ember Athletic"},
+    {"id": "forge-club", "display_name": "Forge Club"},
+    {"id": "grove-rangers", "display_name": "Grove Rangers"},
+    {"id": "horizon-fc", "display_name": "Horizon FC"}
+  ],
+  "stages": [
+    {
+      "id": "league-stage",
+      "type": "league_table",
+      "fixtures": [
+        {"match_id": "league-1", "home_team_id": "aster-vale-orbitals", "away_team_id": "beacon-town"},
+        {"match_id": "league-2", "home_team_id": "comet-city", "away_team_id": "drift-united"},
+        {"match_id": "league-3", "home_team_id": "ember-athletic", "away_team_id": "forge-club"},
+        {"match_id": "league-4", "home_team_id": "grove-rangers", "away_team_id": "horizon-fc"},
+        {"match_id": "league-5", "home_team_id": "aster-vale-orbitals", "away_team_id": "comet-city"},
+        {"match_id": "league-6", "home_team_id": "beacon-town", "away_team_id": "drift-united"},
+        {"match_id": "league-7", "home_team_id": "ember-athletic", "away_team_id": "grove-rangers"},
+        {"match_id": "league-8", "home_team_id": "forge-club", "away_team_id": "horizon-fc"},
+        {"match_id": "league-9", "home_team_id": "aster-vale-orbitals", "away_team_id": "drift-united"},
+        {"match_id": "league-10", "home_team_id": "beacon-town", "away_team_id": "comet-city"},
+        {"match_id": "league-11", "home_team_id": "ember-athletic", "away_team_id": "horizon-fc"},
+        {"match_id": "league-12", "home_team_id": "forge-club", "away_team_id": "grove-rangers"}
+      ],
+      "points": {"win": 3, "draw": 1, "loss": 0},
+      "tiebreakers": ["points", "goal_difference", "goals_for", "wins", "rating", "team_id"],
+      "qualification_bands": [
+        {"ranks": [1, 8], "destination": "quarter-finals"}
+      ]
+    },
+    {
+      "id": "quarter-finals",
+      "type": "knockout",
+      "pairing": {
+        "mode": "seeded_draw",
+        "ties": [
+          {"id": "quarter-final-1", "entrants": [{"type": "league_rank", "stage_id": "league-stage", "rank": 1}, {"type": "league_rank", "stage_id": "league-stage", "rank": 8}]},
+          {"id": "quarter-final-2", "entrants": [{"type": "league_rank", "stage_id": "league-stage", "rank": 2}, {"type": "league_rank", "stage_id": "league-stage", "rank": 7}]},
+          {"id": "quarter-final-3", "entrants": [{"type": "league_rank", "stage_id": "league-stage", "rank": 3}, {"type": "league_rank", "stage_id": "league-stage", "rank": 6}]},
+          {"id": "quarter-final-4", "entrants": [{"type": "league_rank", "stage_id": "league-stage", "rank": 4}, {"type": "league_rank", "stage_id": "league-stage", "rank": 5}]}
+        ]
+      },
+      "legs": 2,
+      "home_away_order": "seeded_team_second_leg_home",
+      "aggregate_tiebreak": "extra_time_then_penalties",
+      "away_goals_rule": false
+    },
+    {
+      "id": "semi-finals",
+      "type": "knockout",
+      "pairing": {
+        "mode": "fixed",
+        "ties": [
+          {"id": "semi-final-1", "entrants": [{"type": "match_winner", "match_id": "quarter-final-1"}, {"type": "match_winner", "match_id": "quarter-final-2"}]},
+          {"id": "semi-final-2", "entrants": [{"type": "match_winner", "match_id": "quarter-final-3"}, {"type": "match_winner", "match_id": "quarter-final-4"}]}
+        ]
+      },
+      "legs": 2,
+      "home_away_order": "listed_team_first_leg_home",
+      "aggregate_tiebreak": "extra_time_then_penalties",
+      "away_goals_rule": false
+    },
+    {
+      "id": "final",
+      "type": "knockout",
+      "pairing": {
+        "mode": "fixed",
+        "ties": [
+          {"id": "final-1", "entrants": [{"type": "match_winner", "match_id": "semi-final-1"}, {"type": "match_winner", "match_id": "semi-final-2"}]}
+        ]
+      },
+      "legs": 1,
+      "home_away_order": "listed_team_first_leg_home",
+      "aggregate_tiebreak": "extra_time_then_penalties",
+      "away_goals_rule": false,
+      "terminal": "championship"
+    }
+  ],
+  "ratings": {
+    "aster-vale-orbitals": 1660,
+    "beacon-town": 1620,
+    "comet-city": 1590,
+    "drift-united": 1560,
+    "ember-athletic": 1530,
+    "forge-club": 1510,
+    "grove-rangers": 1480,
+    "horizon-fc": 1450
+  },
+  "completed_matches": [],
+  "metadata": {"data_status": "project-authored synthetic redistributable test data"}
+}

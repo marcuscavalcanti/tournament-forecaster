@@ -1,0 +1,131 @@
+{
+  "schema_version": 2,
+  "tournament": {
+    "id": "world-cup-style",
+    "display_name": "World Cup Style Contract",
+    "season": "2026"
+  },
+  "focus_team_id": "amber-town",
+  "teams": [
+    {"id": "amber-town", "display_name": "Amber Town"},
+    {"id": "blue-harbor", "display_name": "Blue Harbor"},
+    {"id": "cedar-fc", "display_name": "Cedar FC"},
+    {"id": "dawn-united", "display_name": "Dawn United"},
+    {"id": "elm-city", "display_name": "Elm City"},
+    {"id": "flint-rovers", "display_name": "Flint Rovers"},
+    {"id": "glen-athletic", "display_name": "Glen Athletic"},
+    {"id": "heather-club", "display_name": "Heather Club"},
+    {"id": "iron-bay", "display_name": "Iron Bay"},
+    {"id": "jasper-town", "display_name": "Jasper Town"},
+    {"id": "kelp-fc", "display_name": "Kelp FC"},
+    {"id": "lantern-united", "display_name": "Lantern United"},
+    {"id": "maple-city", "display_name": "Maple City"},
+    {"id": "noble-rovers", "display_name": "Noble Rovers"},
+    {"id": "orchard-athletic", "display_name": "Orchard Athletic"},
+    {"id": "prairie-club", "display_name": "Prairie Club"},
+    {"id": "quartz-bay", "display_name": "Quartz Bay"},
+    {"id": "ridge-town", "display_name": "Ridge Town"},
+    {"id": "solar-fc", "display_name": "Solar FC"},
+    {"id": "timber-united", "display_name": "Timber United"},
+    {"id": "umber-city", "display_name": "Umber City"},
+    {"id": "verdant-rovers", "display_name": "Verdant Rovers"},
+    {"id": "willow-athletic", "display_name": "Willow Athletic"},
+    {"id": "zephyr-club", "display_name": "Zephyr Club"}
+  ],
+  "stages": [
+    {
+      "id": "group-stage",
+      "type": "round_robin_groups",
+      "groups": {
+        "A": ["amber-town", "blue-harbor", "cedar-fc", "dawn-united"],
+        "B": ["elm-city", "flint-rovers", "glen-athletic", "heather-club"],
+        "C": ["iron-bay", "jasper-town", "kelp-fc", "lantern-united"],
+        "D": ["maple-city", "noble-rovers", "orchard-athletic", "prairie-club"],
+        "E": ["quartz-bay", "ridge-town", "solar-fc", "timber-united"],
+        "F": ["umber-city", "verdant-rovers", "willow-athletic", "zephyr-club"]
+      },
+      "rounds_per_pair": 1,
+      "points": {"win": 3, "draw": 1, "loss": 0},
+      "tiebreakers": ["points", "goal_difference", "goals_for", "wins", "rating", "team_id"],
+      "qualification": {"direct_per_group": 2, "best_additional": 4, "additional_rank": 3}
+    },
+    {
+      "id": "round-of-16",
+      "type": "knockout",
+      "pairing": {
+        "mode": "fixed",
+        "ties": [
+          {"id": "round-of-16-1", "entrants": [{"type": "group_rank", "stage_id": "group-stage", "group": "A", "rank": 1}, {"type": "group_rank", "stage_id": "group-stage", "group": "C", "rank": 2}]},
+          {"id": "round-of-16-2", "entrants": [{"type": "group_rank", "stage_id": "group-stage", "group": "B", "rank": 1}, {"type": "group_rank", "stage_id": "group-stage", "group": "D", "rank": 2}]},
+          {"id": "round-of-16-3", "entrants": [{"type": "group_rank", "stage_id": "group-stage", "group": "C", "rank": 1}, {"type": "group_rank", "stage_id": "group-stage", "group": "E", "rank": 2}]},
+          {"id": "round-of-16-4", "entrants": [{"type": "group_rank", "stage_id": "group-stage", "group": "D", "rank": 1}, {"type": "group_rank", "stage_id": "group-stage", "group": "F", "rank": 2}]},
+          {"id": "round-of-16-5", "entrants": [{"type": "group_rank", "stage_id": "group-stage", "group": "E", "rank": 1}, {"type": "group_rank", "stage_id": "group-stage", "group": "A", "rank": 2}]},
+          {"id": "round-of-16-6", "entrants": [{"type": "group_rank", "stage_id": "group-stage", "group": "F", "rank": 1}, {"type": "group_rank", "stage_id": "group-stage", "group": "B", "rank": 2}]},
+          {"id": "round-of-16-7", "entrants": [{"type": "best_additional", "stage_id": "group-stage", "rank": 1}, {"type": "best_additional", "stage_id": "group-stage", "rank": 4}]},
+          {"id": "round-of-16-8", "entrants": [{"type": "best_additional", "stage_id": "group-stage", "rank": 2}, {"type": "best_additional", "stage_id": "group-stage", "rank": 3}]}
+        ]
+      },
+      "legs": 1,
+      "home_away_order": "listed_team_first_leg_home",
+      "aggregate_tiebreak": "extra_time_then_penalties",
+      "away_goals_rule": false
+    },
+    {
+      "id": "quarter-finals",
+      "type": "knockout",
+      "pairing": {
+        "mode": "fixed",
+        "ties": [
+          {"id": "quarter-final-1", "entrants": [{"type": "match_winner", "match_id": "round-of-16-1"}, {"type": "match_winner", "match_id": "round-of-16-2"}]},
+          {"id": "quarter-final-2", "entrants": [{"type": "match_winner", "match_id": "round-of-16-3"}, {"type": "match_winner", "match_id": "round-of-16-4"}]},
+          {"id": "quarter-final-3", "entrants": [{"type": "match_winner", "match_id": "round-of-16-5"}, {"type": "match_winner", "match_id": "round-of-16-6"}]},
+          {"id": "quarter-final-4", "entrants": [{"type": "match_winner", "match_id": "round-of-16-7"}, {"type": "match_winner", "match_id": "round-of-16-8"}]}
+        ]
+      },
+      "legs": 1,
+      "home_away_order": "listed_team_first_leg_home",
+      "aggregate_tiebreak": "extra_time_then_penalties",
+      "away_goals_rule": false
+    },
+    {
+      "id": "semi-finals",
+      "type": "knockout",
+      "pairing": {
+        "mode": "fixed",
+        "ties": [
+          {"id": "semi-final-1", "entrants": [{"type": "match_winner", "match_id": "quarter-final-1"}, {"type": "match_winner", "match_id": "quarter-final-2"}]},
+          {"id": "semi-final-2", "entrants": [{"type": "match_winner", "match_id": "quarter-final-3"}, {"type": "match_winner", "match_id": "quarter-final-4"}]}
+        ]
+      },
+      "legs": 1,
+      "home_away_order": "listed_team_first_leg_home",
+      "aggregate_tiebreak": "extra_time_then_penalties",
+      "away_goals_rule": false
+    },
+    {
+      "id": "final",
+      "type": "knockout",
+      "pairing": {
+        "mode": "fixed",
+        "ties": [
+          {"id": "final-1", "entrants": [{"type": "match_winner", "match_id": "semi-final-1"}, {"type": "match_winner", "match_id": "semi-final-2"}]}
+        ]
+      },
+      "legs": 1,
+      "home_away_order": "listed_team_first_leg_home",
+      "aggregate_tiebreak": "extra_time_then_penalties",
+      "away_goals_rule": false,
+      "terminal": "championship"
+    }
+  ],
+  "ratings": {
+    "amber-town": 1640, "blue-harbor": 1595, "cedar-fc": 1540, "dawn-united": 1490,
+    "elm-city": 1630, "flint-rovers": 1585, "glen-athletic": 1535, "heather-club": 1485,
+    "iron-bay": 1620, "jasper-town": 1575, "kelp-fc": 1530, "lantern-united": 1480,
+    "maple-city": 1610, "noble-rovers": 1565, "orchard-athletic": 1525, "prairie-club": 1475,
+    "quartz-bay": 1600, "ridge-town": 1555, "solar-fc": 1520, "timber-united": 1470,
+    "umber-city": 1590, "verdant-rovers": 1545, "willow-athletic": 1515, "zephyr-club": 1465
+  },
+  "completed_matches": [],
+  "metadata": {"data_status": "project-authored synthetic redistributable test data"}
+}

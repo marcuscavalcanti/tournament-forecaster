@@ -42,7 +42,7 @@
   <rect class="canvas" x="0" y="0" width="1600" height="1100"/>
   <rect x="0" y="0" width="1600" height="12" fill="#ff9900"/>
   <text class="title" x="54" y="58">Tournament Forecaster</text>
-  <text class="subtitle" x="54" y="86">From a five-minute offline quickstart to a continuously updated tournament forecast</text>
+  <text class="subtitle" x="54" y="86">From an offline quickstart to a reproducible tournament forecast</text>
   <rect x="1324" y="34" width="222" height="38" rx="19" fill="#fff3e0" stroke="#ff9900" stroke-width="2"/>
   <text class="badge" x="1435" y="58" text-anchor="middle">PRODUCT FLOW</text>
 
@@ -103,7 +103,7 @@
   <path class="zone-head" d="M58 448 H1542 A8 8 0 0 1 1550 456 V494 H50 V456 A8 8 0 0 1 58 448 Z"/>
   <circle cx="78" cy="471" r="16" fill="#ff9900"/>
   <text class="step-text" x="78" y="471">2</text>
-  <text class="zone-title" x="106" y="478">Validate facts, simulate the whole tournament, then optionally challenge context</text>
+  <text class="zone-title" x="106" y="478">Validate facts and simulate the whole tournament through the authoritative offline core</text>
 
   <rect class="card-green" x="104" y="520" width="296" height="184" rx="8"/>
   <rect class="icon-green" x="128" y="544" width="58" height="58" rx="8"/>
@@ -112,7 +112,7 @@
   <text class="card-title" x="211" y="579">Validate tournament facts</text>
   <text class="body" x="128" y="626">Schema, stage graph, fixtures, aliases,</text>
   <text class="body" x="128" y="648">freshness, and locked-result coherence.</text>
-  <text class="body" x="128" y="678">Invalid inputs fail before paid calls.</text>
+  <text class="body" x="128" y="678">Invalid inputs fail before simulation.</text>
 
   <rect class="card-orange" x="470" y="520" width="330" height="184" rx="8"/>
   <rect class="icon-orange" x="494" y="544" width="58" height="58" rx="8"/>
@@ -131,11 +131,11 @@
   <circle class="icon-line" cx="913" cy="565" r="7"/>
   <circle class="icon-line" cx="935" cy="565" r="7"/>
   <path class="icon-line" d="M900 588 C903 577 923 577 926 588 M922 588 C925 577 945 577 948 588"/>
-  <text class="small" x="977" y="552">OPTIONAL</text>
-  <text class="card-title" x="977" y="579">Optional council</text>
-  <text class="body" x="894" y="626">Research evidence, debate uncertainty,</text>
-  <text class="body" x="894" y="648">and propose bounded context changes.</text>
-  <text class="body" x="894" y="678">It cannot change tournament topology.</text>
+  <text class="small" x="977" y="552">FUTURE EXTENSION</text>
+  <text class="card-title" x="977" y="579">Optional council boundary</text>
+  <text class="body" x="894" y="626">Not implemented by the generic CLI.</text>
+  <text class="body" x="894" y="648">Any extension must remain bounded</text>
+  <text class="body" x="894" y="678">and cannot change tournament topology.</text>
 
   <rect class="card-green" x="1240" y="520" width="260" height="184" rx="8"/>
   <rect class="icon-green" x="1264" y="544" width="58" height="58" rx="8"/>
@@ -183,9 +183,9 @@
   <rect class="card" x="982" y="882" width="270" height="112" rx="8"/>
   <circle class="icon-bg" cx="1019" cy="919" r="22"/>
   <path class="icon-line" d="M1008 907 H1030 V931 H1008 Z M1013 913 H1025 M1013 919 H1025 M1013 925 H1021"/>
-  <text class="card-title" x="1053" y="912">Audit and publish</text>
+  <text class="card-title" x="1053" y="912">Inspect and share</text>
   <text class="body" x="1053" y="936">Warnings, provenance,</text>
-  <text class="body" x="1053" y="956">watchdog, and reports.</text>
+  <text class="body" x="1053" y="956">schema, and reports.</text>
 
   <rect class="card-orange" x="1300" y="870" width="210" height="136" rx="8"/>
   <circle class="icon-orange" cx="1337" cy="914" r="24"/>
@@ -205,5 +205,5 @@
   <path class="flow-loop" d="M1405 1006 V1068 H28 V612 H104"/>
   <text class="small" x="715" y="1084" text-anchor="middle" fill="#b15f00">RESULT-TO-RERUN FEEDBACK LOOP</text>
 
-  <text class="small" x="1528" y="1036" text-anchor="end">OFFLINE CORE | OPTIONAL NETWORK | AUDITABLE OUTPUT</text>
+  <text class="small" x="1528" y="1036" text-anchor="end">OFFLINE CORE | EXPLICIT LOCAL IMPORTS | AUDITABLE OUTPUT</text>
 </svg>
