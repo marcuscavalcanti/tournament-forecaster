@@ -14,6 +14,7 @@ from pathlib import Path
 
 from .errors import TournamentValidationError
 from .probabilities import predict_match_outcomes
+from .validation import bounded_finite_number
 
 
 def _packaged_timestamp_pattern() -> re.Pattern[str]:
@@ -162,16 +163,6 @@ def _text(value: object, label: str) -> str:
     return value
 
 
-def _finite_number(value: object, label: str) -> float:
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, (int, float))
-        or not math.isfinite(float(value))
-    ):
-        raise TournamentValidationError(f"{label} must be finite numeric")
-    return float(value)
-
-
 def _timestamp(value: object, label: str) -> datetime:
     text = _text(value, label)
     if not _TIMESTAMP_PATTERN.fullmatch(text):
@@ -212,14 +203,17 @@ def evaluate_backtest(
     model_version = _text(root.get("model_version"), "model_version")
     if model_version not in _SUPPORTED_MODEL_VERSIONS:
         raise TournamentValidationError(f"unsupported model_version: {model_version}")
-    home_advantage = _finite_number(
+    home_advantage = bounded_finite_number(
         root["home_advantage_rating_points"],
         "home_advantage_rating_points",
     )
     ratings_document = _mapping(root.get("ratings"), "ratings")
     ratings: dict[str, float] = {}
     for team_id, value in ratings_document.items():
-        ratings[_text(team_id, "rating team id")] = _finite_number(value, f"rating {team_id}")
+        ratings[_text(team_id, "rating team id")] = bounded_finite_number(
+            value,
+            f"rating {team_id}",
+        )
     declared_hash = _text(root.get("ratings_sha256"), "ratings_sha256")
     if not _SHA256.fullmatch(declared_hash) or declared_hash != ratings_sha256(ratings):
         raise TournamentValidationError("ratings_sha256 does not match the canonical ratings object")

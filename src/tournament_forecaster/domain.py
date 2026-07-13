@@ -14,6 +14,7 @@ from .group_fixtures import group_fixture_contract
 from .pairing import resolve_ties, validate_locked_pairs
 from .qualification import QualificationState, resolve_entrant
 from .standings import TableMatch, calculate_group_tables, calculate_league_table
+from .validation import bounded_finite_number
 
 
 _STABLE_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
@@ -259,15 +260,10 @@ def _validate_tiebreakers(value: object, label: str) -> None:
 def _validate_stage_metadata(stage: Mapping[str, object], label: str) -> None:
     if "metadata" in stage:
         metadata = _mapping(stage["metadata"], f"{label} metadata")
-        home_advantage = metadata.get("home_advantage_rating_points", 0.0)
-        if (
-            isinstance(home_advantage, bool)
-            or not isinstance(home_advantage, (int, float))
-            or not math.isfinite(float(home_advantage))
-        ):
-            raise TournamentValidationError(
-                f"{label} metadata home_advantage_rating_points must be finite numeric"
-            )
+        bounded_finite_number(
+            metadata.get("home_advantage_rating_points", 0.0),
+            f"{label} metadata home_advantage_rating_points",
+        )
 
 
 def _freeze(value: object) -> object:
@@ -802,6 +798,22 @@ def _validate_entrant(source_value: object) -> Mapping[str, object]:
     return source
 
 
+def _entrant_source_identity(source: Mapping[str, object]) -> tuple[str, ...]:
+    source_type = str(source["type"])
+    if source_type == "team":
+        return (source_type, str(source["team_id"]))
+    if source_type == "group_rank":
+        return (
+            source_type,
+            str(source["stage_id"]),
+            str(source["group"]),
+            str(source["rank"]),
+        )
+    if source_type in {"best_additional", "league_rank"}:
+        return (source_type, str(source["stage_id"]), str(source["rank"]))
+    return (source_type, str(source["match_id"]))
+
+
 def _validate_knockout_stage(
     stage: Mapping[str, object],
 ) -> tuple[int, set[str], tuple[Mapping[str, object], ...]]:
@@ -870,6 +882,9 @@ def _validate_knockout_stage(
             raise TournamentValidationError(
                 "championship terminal must contain exactly one tie"
             )
+    source_identities = tuple(_entrant_source_identity(source) for source in entrant_sources)
+    if len(source_identities) != len(set(source_identities)):
+        raise TournamentValidationError("knockout stage contains a duplicate entrant source")
     return int(legs), tie_ids, tuple(entrant_sources)
 
 
@@ -1158,12 +1173,7 @@ def validate_tournament(tournament: Tournament) -> None:
         _stable_id(team_id, "rating team id")
         if team_id not in team_ids:
             raise TournamentValidationError("ratings must reference configured teams")
-        if (
-            isinstance(rating, bool)
-            or not isinstance(rating, (int, float))
-            or not math.isfinite(float(rating))
-        ):
-            raise TournamentValidationError("ratings must be finite numeric values")
+        bounded_finite_number(rating, f"rating {team_id}")
     completed_keys: set[tuple[str, int]] = set()
     completed_identities: dict[str, tuple[str, frozenset[str]]] = {}
     completed_knockout_ties: dict[tuple[str, str], list[CompletedMatch]] = {}

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .domain import CompletedMatch, Score, Team, Tournament
 from .errors import TournamentValidationError
+from .validation import bounded_finite_number
 
 
 _ROOT_PROPERTIES = frozenset(
@@ -158,13 +159,7 @@ def load_tournament_document(document: Mapping[str, object]) -> Tournament:
     ratings_document = _mapping(root.get("ratings"), "ratings")
     ratings: dict[str, float] = {}
     for team_id, rating in ratings_document.items():
-        if (
-            isinstance(rating, bool)
-            or not isinstance(rating, (int, float))
-            or not math.isfinite(float(rating))
-        ):
-            raise TournamentValidationError("ratings must contain finite numeric values")
-        ratings[team_id] = float(rating)
+        ratings[team_id] = bounded_finite_number(rating, f"rating {team_id}")
     completed_matches = tuple(
         _completed_match(_mapping(value, f"completed_matches[{index}]"), index)
         for index, value in enumerate(

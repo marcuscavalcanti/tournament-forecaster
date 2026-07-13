@@ -195,6 +195,7 @@ def normalize_fifa_fixture(
     payload: object,
     *,
     known_codes: set[str] | frozenset[str],
+    canonical_team_ids: Mapping[str, str] | None = None,
     retrieved_at: datetime | None = None,
 ) -> NormalizedFixture:
     """Normalize saved or fetched FIFA rows and never promote a non-final score."""
@@ -219,6 +220,15 @@ def normalize_fifa_fixture(
         away_code = _code(raw, "Away")
         home_fifa_team_id = _team_id(raw, "Home")
         away_fifa_team_id = _team_id(raw, "Away")
+        if canonical_team_ids is not None:
+            for code, provider_id in (
+                (home_code, home_fifa_team_id),
+                (away_code, away_fifa_team_id),
+            ):
+                if provider_id and canonical_team_ids.get(code) != provider_id:
+                    raise TournamentValidationError(
+                        f"FIFA team ID conflicts with group topology for {code}"
+                    )
         for code in (home_code, away_code):
             if code not in known_codes and not re.fullmatch(r"(?:W|RU)\d+", code):
                 raise TournamentValidationError(f"unknown FIFA team code: {code or '<missing>'}")
@@ -405,9 +415,14 @@ def build_documents(
 
     parsed_retrieved_at = _timestamp(retrieved_at, "retrieved_at")
     teams_by_code, group_codes = _extract_teams_and_groups(payload)
+    canonical_team_ids = {
+        code: team["fifa_team_id"]
+        for code, team in teams_by_code.items()
+    }
     normalized = normalize_fifa_fixture(
         payload,
         known_codes=set(teams_by_code),
+        canonical_team_ids=canonical_team_ids,
         retrieved_at=parsed_retrieved_at,
     )
     all_rows = (*normalized.completed, *normalized.pending)

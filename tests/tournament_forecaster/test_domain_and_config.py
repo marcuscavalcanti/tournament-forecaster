@@ -219,6 +219,122 @@ def test_explicit_team_rejects_overlap_with_an_unresolved_match_winner() -> None
         load_tournament_document(document)
 
 
+def test_identical_unresolved_match_winner_sources_are_duplicate_entrants() -> None:
+    from tournament_forecaster.config import load_tournament_document
+    from tournament_forecaster.errors import TournamentValidationError
+
+    document = _document()
+    teams = cast(list[dict[str, object]], document["teams"])
+    teams.extend(
+        [
+            {"id": "east-city", "display_name": "East City"},
+            {"id": "west-city", "display_name": "West City"},
+        ]
+    )
+    ratings = cast(dict[str, float], document["ratings"])
+    ratings.update({"east-city": 1450, "west-city": 1400})
+    semi_finals = _terminal_stage(
+        "semi-finals",
+        entrants=[
+            {"type": "team", "team_id": "north-city"},
+            {"type": "team", "team_id": "south-city"},
+        ],
+    )
+    del semi_finals["terminal"]
+    ties = cast(dict[str, object], semi_finals["pairing"])["ties"]
+    assert isinstance(ties, list)
+    ties.append(
+        {
+            "id": "semi-finals-2",
+            "entrants": [
+                {"type": "team", "team_id": "east-city"},
+                {"type": "team", "team_id": "west-city"},
+            ],
+        }
+    )
+    document["stages"] = [
+        semi_finals,
+        _terminal_stage(
+            entrants=[
+                {"type": "match_winner", "match_id": "semi-finals-1"},
+                {"type": "match_winner", "match_id": "semi-finals-1"},
+            ]
+        ),
+    ]
+    document["completed_matches"] = []
+
+    with pytest.raises(TournamentValidationError, match="duplicate entrant source"):
+        load_tournament_document(document)
+
+
+def test_distinct_correlated_winner_sources_remain_valid() -> None:
+    from tournament_forecaster.config import load_tournament_document
+    from tournament_forecaster.domain import SimulationOptions
+    from tournament_forecaster.simulation import simulate_tournament
+
+    document = _document()
+    teams = cast(list[dict[str, object]], document["teams"])
+    teams.extend(
+        [
+            {"id": "east-city", "display_name": "East City"},
+            {"id": "west-city", "display_name": "West City"},
+        ]
+    )
+    ratings = cast(dict[str, float], document["ratings"])
+    ratings.update({"east-city": 1450, "west-city": 1400})
+    group_stage = cast(list[dict[str, object]], document["stages"])[0]
+    group_stage["groups"] = {
+        "A": ["north-city", "south-city", "east-city", "west-city"]
+    }
+    semi_finals = _terminal_stage(
+        "semi-finals",
+        entrants=[
+            {"type": "group_rank", "stage_id": "group-stage", "group": "A", "rank": 1},
+            {"type": "group_rank", "stage_id": "group-stage", "group": "A", "rank": 4},
+        ],
+    )
+    del semi_finals["terminal"]
+    ties = cast(dict[str, object], semi_finals["pairing"])["ties"]
+    assert isinstance(ties, list)
+    ties.append(
+        {
+            "id": "semi-finals-2",
+            "entrants": [
+                {
+                    "type": "group_rank",
+                    "stage_id": "group-stage",
+                    "group": "A",
+                    "rank": 2,
+                },
+                {
+                    "type": "group_rank",
+                    "stage_id": "group-stage",
+                    "group": "A",
+                    "rank": 3,
+                },
+            ],
+        }
+    )
+    document["stages"] = [
+        group_stage,
+        semi_finals,
+        _terminal_stage(
+            entrants=[
+                {"type": "match_winner", "match_id": "semi-finals-1"},
+                {"type": "match_winner", "match_id": "semi-finals-2"},
+            ]
+        ),
+    ]
+    document["completed_matches"] = []
+
+    tournament = load_tournament_document(document)
+    for seed in range(5):
+        simulate_tournament(
+            tournament,
+            options=SimulationOptions(seed=seed, iterations=1),
+        )
+
+
 def _source_group_stage() -> dict[str, object]:
     return {
         "id": "source-groups",

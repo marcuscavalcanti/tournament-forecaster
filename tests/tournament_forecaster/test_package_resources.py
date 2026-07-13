@@ -264,6 +264,60 @@ def test_tournament_schema_and_runtime_reject_non_finite_behavior_numbers(
         load_tournament_document(document)
 
 
+@pytest.mark.parametrize("target", ["rating", "group", "league", "knockout"])
+@pytest.mark.parametrize(
+    "value",
+    [
+        int(sys.float_info.max) + 1,
+        -(int(sys.float_info.max) + 1),
+        10**400,
+        -(10**400),
+    ],
+)
+def test_tournament_schema_and_runtime_reject_integers_outside_finite_float_bounds(
+    target: str,
+    value: int,
+) -> None:
+    from tournament_forecaster.config import load_tournament_document
+    from tournament_forecaster.errors import TournamentValidationError
+
+    document = _representative_tournament_document()
+    if target == "rating":
+        document["ratings"]["north-city"] = value  # type: ignore[index]
+    else:
+        stage_index = {"group": 0, "league": 1, "knockout": 2}[target]
+        document["stages"][stage_index]["metadata"] = {  # type: ignore[index]
+            "home_advantage_rating_points": value
+        }
+    validator = _draft_2020_validator()(_schema_resources()["tournament.schema.json"])
+
+    assert list(validator.iter_errors(document))
+    with pytest.raises(TournamentValidationError, match="finite numeric bounds"):
+        load_tournament_document(document)
+
+
+@pytest.mark.parametrize("target", ["rating", "group", "league", "knockout"])
+@pytest.mark.parametrize("value", [sys.float_info.max, -sys.float_info.max])
+def test_tournament_schema_and_runtime_accept_exact_finite_float_bounds(
+    target: str,
+    value: float,
+) -> None:
+    from tournament_forecaster.config import load_tournament_document
+
+    document = _representative_tournament_document()
+    if target == "rating":
+        document["ratings"]["north-city"] = value  # type: ignore[index]
+    else:
+        stage_index = {"group": 0, "league": 1, "knockout": 2}[target]
+        document["stages"][stage_index]["metadata"] = {  # type: ignore[index]
+            "home_advantage_rating_points": value
+        }
+    validator = _draft_2020_validator()(_schema_resources()["tournament.schema.json"])
+
+    assert list(validator.iter_errors(document)) == []
+    load_tournament_document(document)
+
+
 def test_schema_and_loader_accept_explicit_additional_rank() -> None:
     from tournament_forecaster.config import load_tournament_document
 

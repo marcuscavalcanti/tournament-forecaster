@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import sys
 from copy import deepcopy
 from pathlib import Path
 
@@ -14,7 +15,7 @@ from tournament_forecaster.errors import TournamentValidationError
 from tournament_forecaster.probabilities import predict_match_outcomes
 
 
-def _ratings_hash(ratings: dict[str, float]) -> str:
+def _ratings_hash(ratings: dict[str, int | float]) -> str:
     payload = json.dumps(ratings, allow_nan=False, separators=(",", ":"), sort_keys=True)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -188,3 +189,118 @@ def test_evaluator_enforces_the_shipped_backtest_schema(malformation: str) -> No
     assert list(Draft202012Validator(schema).iter_errors(document))
     with pytest.raises(TournamentValidationError):
         evaluate_backtest(document)
+
+
+@pytest.mark.parametrize("target", ["home_advantage", "rating"])
+@pytest.mark.parametrize(
+    "value",
+    [
+        int(sys.float_info.max) + 1,
+        -(int(sys.float_info.max) + 1),
+        10**400,
+        -(10**400),
+    ],
+)
+def test_backtest_schema_and_runtime_reject_integers_outside_finite_float_bounds(
+    target: str,
+    value: int,
+) -> None:
+    document = _document()
+    if target == "home_advantage":
+        document["home_advantage_rating_points"] = value
+    else:
+        ratings = document["ratings"]
+        assert isinstance(ratings, dict)
+        ratings["alpha"] = value
+        document["ratings_sha256"] = _ratings_hash(ratings)
+    schema_path = (
+        Path(__file__).parents[2]
+        / "src"
+        / "tournament_forecaster"
+        / "schemas"
+        / "backtest.schema.json"
+    )
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+
+    assert list(Draft202012Validator(schema).iter_errors(document))
+    with pytest.raises(TournamentValidationError, match="finite numeric bounds"):
+        evaluate_backtest(document)
+
+
+@pytest.mark.parametrize("target", ["home_advantage", "rating"])
+@pytest.mark.parametrize("value", [sys.float_info.max, -sys.float_info.max])
+def test_backtest_schema_and_runtime_accept_exact_finite_float_bounds(
+    target: str,
+    value: float,
+) -> None:
+    document = _document()
+    if target == "home_advantage":
+        document["home_advantage_rating_points"] = value
+    else:
+        ratings = document["ratings"]
+        assert isinstance(ratings, dict)
+        ratings["alpha"] = value
+        document["ratings_sha256"] = _ratings_hash(ratings)
+    schema_path = (
+        Path(__file__).parents[2]
+        / "src"
+        / "tournament_forecaster"
+        / "schemas"
+        / "backtest.schema.json"
+    )
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+
+    assert list(Draft202012Validator(schema).iter_errors(document)) == []
+    assert evaluate_backtest(document).ok is True
+
+
+@pytest.mark.parametrize(
+    "timestamp",
+    [
+        "2026-13-40T25:61:61Z",
+        "2026-06-09Tnot-a-timeZ",
+        "2026-06-09T12:00:00Z\n",
+        "2025-02-29T12:00:00Z",
+        "0000-01-01T12:00:00Z",
+    ],
+)
+def test_backtest_schema_and_runtime_reject_the_same_invalid_timestamps(
+    timestamp: str,
+) -> None:
+    document = _document()
+    document["cases"][0]["captured_at"] = timestamp  # type: ignore[index]
+    schema_path = (
+        Path(__file__).parents[2]
+        / "src"
+        / "tournament_forecaster"
+        / "schemas"
+        / "backtest.schema.json"
+    )
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+
+    assert list(Draft202012Validator(schema).iter_errors(document))
+    with pytest.raises(TournamentValidationError, match="timestamp"):
+        evaluate_backtest(document)
+
+
+@pytest.mark.parametrize(
+    "timestamp",
+    [
+        "2024-02-29T23:59:59.123456+23:59",
+        "2026-06-09T12:00:00Z",
+    ],
+)
+def test_backtest_schema_and_runtime_accept_the_same_valid_timestamps(timestamp: str) -> None:
+    document = _document()
+    document["cases"][0]["captured_at"] = timestamp  # type: ignore[index]
+    schema_path = (
+        Path(__file__).parents[2]
+        / "src"
+        / "tournament_forecaster"
+        / "schemas"
+        / "backtest.schema.json"
+    )
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+
+    assert list(Draft202012Validator(schema).iter_errors(document)) == []
+    assert evaluate_backtest(document).ok is True

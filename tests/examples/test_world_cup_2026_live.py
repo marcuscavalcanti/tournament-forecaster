@@ -184,6 +184,30 @@ def test_fifa_fixture_rejects_coercive_provider_match_ids(provider_id: object) -
         )
 
 
+def test_fifa_fixture_rejects_team_id_that_conflicts_with_group_topology() -> None:
+    payload = json.loads(EDGE_FIXTURE.read_text(encoding="utf-8"))
+    france_quarter_final = payload["Results"][2]
+    france_quarter_final["Home"]["IdTeam"] = "43924"
+    france_quarter_final["Winner"] = "43924"
+    canonical_team_ids = {
+        "BEL": "43935",
+        "SEN": "43879",
+        "ARG": "43922",
+        "CPV": "43850",
+        "FRA": "43946",
+        "MAR": "43872",
+        "NOR": "43961",
+        "ENG": "43942",
+    }
+
+    with pytest.raises(TournamentValidationError, match="group topology for FRA"):
+        normalize_fifa_fixture(
+            payload,
+            known_codes=set(canonical_team_ids),
+            canonical_team_ids=canonical_team_ids,
+        )
+
+
 def test_pending_bracket_row_reads_top_level_winner_placeholders() -> None:
     payload = {
         "Results": [
@@ -203,7 +227,11 @@ def test_pending_bracket_row_reads_top_level_winner_placeholders() -> None:
         ]
     }
 
-    fixture = normalize_fifa_fixture(payload, known_codes=set())
+    fixture = normalize_fifa_fixture(
+        payload,
+        known_codes=set(),
+        canonical_team_ids={},
+    )
 
     assert fixture.pending[0]["home_code"] == "W101"
     assert fixture.pending[0]["away_code"] == "W102"

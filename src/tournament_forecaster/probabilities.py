@@ -11,6 +11,7 @@ from statistics import NormalDist
 
 from .domain import Score
 from .standings import DEFAULT_RATING as DEFAULT_RATING
+from .validation import bounded_finite_number
 
 
 def rating_win_probability(first_rating: float, second_rating: float) -> float:
@@ -44,12 +45,7 @@ class OutcomeProbabilities:
 
 
 def _finite_rating(value: float, label: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"{label} must be a finite numeric value")
-    normalized = float(value)
-    if not math.isfinite(normalized):
-        raise ValueError(f"{label} must be a finite numeric value")
-    return normalized
+    return bounded_finite_number(value, label)
 
 
 def compose_rating(rating: float, adjustment: float) -> float:
