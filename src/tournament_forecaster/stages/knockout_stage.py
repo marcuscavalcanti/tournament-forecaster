@@ -11,6 +11,7 @@ from ..errors import TournamentValidationError
 from ..pairing import Pairing, build_pairings
 from ..probabilities import (
     DEFAULT_RATING,
+    compose_rating,
     resolve_knockout_draw,
     resolve_penalty_shootout,
     simulate_score,
@@ -52,8 +53,14 @@ def _winner_from_draw(
         )
     else:
         first_wins = resolve_knockout_draw(
-            float(ratings.get(first_team_id, DEFAULT_RATING)) + first_advantage,
-            float(ratings.get(second_team_id, DEFAULT_RATING)) + second_advantage,
+            compose_rating(
+                float(ratings.get(first_team_id, DEFAULT_RATING)),
+                first_advantage,
+            ),
+            compose_rating(
+                float(ratings.get(second_team_id, DEFAULT_RATING)),
+                second_advantage,
+            ),
             rng,
         )
     return first_team_id if first_wins else second_team_id
@@ -195,7 +202,10 @@ def simulate_knockout_stage(
                         home_team_id,
                         away_team_id,
                         score_simulator(
-                            float(ratings.get(home_team_id, DEFAULT_RATING)) + home_advantage,
+                            compose_rating(
+                                float(ratings.get(home_team_id, DEFAULT_RATING)),
+                                home_advantage,
+                            ),
                             float(ratings.get(away_team_id, DEFAULT_RATING)),
                             rng,
                         ),

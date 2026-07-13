@@ -9,13 +9,35 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from importlib.resources import files
 from pathlib import Path
 
 from .errors import TournamentValidationError
 from .probabilities import predict_match_outcomes
 
 
+def _packaged_timestamp_pattern() -> re.Pattern[str]:
+    schema_value = json.loads(
+        files("tournament_forecaster")
+        .joinpath("schemas/backtest.schema.json")
+        .read_text(encoding="utf-8")
+    )
+    if not isinstance(schema_value, Mapping):
+        raise RuntimeError("packaged backtest schema must be an object")
+    definitions = schema_value.get("$defs")
+    if not isinstance(definitions, Mapping):
+        raise RuntimeError("packaged backtest schema requires $defs")
+    timestamp = definitions.get("timestamp")
+    if not isinstance(timestamp, Mapping):
+        raise RuntimeError("packaged backtest schema requires a timestamp definition")
+    pattern = timestamp.get("pattern")
+    if not isinstance(pattern, str):
+        raise RuntimeError("packaged backtest timestamp requires a string pattern")
+    return re.compile(pattern)
+
+
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_TIMESTAMP_PATTERN = _packaged_timestamp_pattern()
 _SUPPORTED_MODEL_VERSIONS = frozenset({"poisson-elo-v1"})
 _ROOT_PROPERTIES = frozenset(
     {
@@ -152,6 +174,8 @@ def _finite_number(value: object, label: str) -> float:
 
 def _timestamp(value: object, label: str) -> datetime:
     text = _text(value, label)
+    if not _TIMESTAMP_PATTERN.fullmatch(text):
+        raise TournamentValidationError(f"{label} must match the packaged timestamp format")
     try:
         parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError as error:

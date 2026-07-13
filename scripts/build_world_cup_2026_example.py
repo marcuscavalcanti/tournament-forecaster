@@ -137,7 +137,19 @@ def _code(row: Mapping[str, object], side: str) -> str:
 
 def _team_id(row: Mapping[str, object], side: str) -> str:
     value = _side(row, side).get("IdTeam")
-    return str(value or "").strip()
+    return _provider_id(value, "FIFA team ID")
+
+
+def _provider_id(value: object, label: str) -> str:
+    if value is None or value == "":
+        return ""
+    if type(value) is int and value > 0:
+        return str(value)
+    if isinstance(value, str) and re.fullmatch(r"[1-9][0-9]*", value):
+        return value
+    raise TournamentValidationError(
+        f"{label} must be a positive integer or canonical decimal string"
+    )
 
 
 def _strict_integer(value: object, label: str, *, minimum: int | None = None) -> int:
@@ -197,7 +209,8 @@ def normalize_fifa_fixture(
     for raw in rows:
         if not isinstance(raw, Mapping):
             raise TournamentValidationError("FIFA match row must be an object")
-        source_id = str(raw.get("IdMatch") or raw.get("idMatch") or "").strip()
+        source_value = raw["IdMatch"] if "IdMatch" in raw else raw.get("idMatch")
+        source_id = _provider_id(source_value, "FIFA match ID")
         if not source_id:
             raise TournamentValidationError("FIFA match row requires IdMatch")
         stage_id = _stage_id(raw)
@@ -213,7 +226,8 @@ def normalize_fifa_fixture(
         away_score = _score(raw, "Away")
         kickoff_text = str(raw.get("Date") or raw.get("date") or "").strip()
         kickoff_at = _timestamp(kickoff_text, f"FIFA match {source_id} kickoff_at")
-        winner_id = str(raw.get("Winner") or raw.get("winner") or "").strip()
+        winner_value = raw["Winner"] if "Winner" in raw else raw.get("winner")
+        winner_id = _provider_id(winner_value, "FIFA winner team ID")
         winner_code: str | None = None
         if winner_id:
             if winner_id == home_fifa_team_id:
@@ -228,13 +242,17 @@ def normalize_fifa_fixture(
                 raise TournamentValidationError(
                     f"final FIFA match {source_id} requires both provider team IDs"
                 )
-            if retrieved_at is not None and kickoff_at > retrieved_at:
+            if retrieved_at is not None and retrieved_at <= kickoff_at:
                 raise TournamentValidationError(
-                    f"FIFA match {source_id} kickoff_at must not be after retrieved_at"
+                    f"FIFA match {source_id} retrieved_at must be after kickoff_at"
                 )
             if home_score is None or away_score is None:
                 raise TournamentValidationError(f"final FIFA match {source_id} has no score")
             inferred = home_code if home_score > away_score else away_code if away_score > home_score else None
+            if stage_id == "group-stage" and inferred is None and winner_code is not None:
+                raise TournamentValidationError(
+                    f"final FIFA group draw cannot declare a winner for match {source_id}"
+                )
             if winner_code is None:
                 winner_code = inferred
             if winner_code is None and stage_id != "group-stage":
@@ -503,12 +521,18 @@ def build_documents(
         away_id = code_to_id[str(row["away_code"])]
         score_home = row["home_score"]
         score_away = row["away_score"]
+        fifa_home_team_id = row["fifa_home_team_id"]
+        fifa_away_team_id = row["fifa_away_team_id"]
         if row["stage_id"] == "group-stage":
             fixture = fixtures_by_pair[frozenset((home_id, away_id))]
             match_id = fixture.match_id
             if (home_id, away_id) != (fixture.home_team_id, fixture.away_team_id):
                 home_id, away_id = away_id, home_id
                 score_home, score_away = score_away, score_home
+                fifa_home_team_id, fifa_away_team_id = (
+                    fifa_away_team_id,
+                    fifa_home_team_id,
+                )
         else:
             match_id = str(row["source_id"])
         match: dict[str, object] = {
@@ -519,8 +543,8 @@ def build_documents(
             "score": {"home": score_home, "away": score_away},
             "metadata": {
                 **_source_metadata(row),
-                "fifa_home_team_id": row["fifa_home_team_id"],
-                "fifa_away_team_id": row["fifa_away_team_id"],
+                "fifa_home_team_id": fifa_home_team_id,
+                "fifa_away_team_id": fifa_away_team_id,
             },
         }
         if row["stage_id"] != "group-stage":
@@ -714,7 +738,10 @@ python scripts/build_world_cup_2026_example.py --fetch \
 
 For deterministic fixture tests, use `--fixture PATH --retrieved-at TIMESTAMP`.
 The builder rejects unknown teams, conflicting duplicate matches, invalid winners,
-unsupported stages/result types, and any non-final row as a completed fact.
+unsupported stages/result types, any non-final row as a completed fact, and completed
+rows unless `retrieved_at` is strictly after kickoff. FIFA calendar rows do not expose
+a trusted result-finalization timestamp, so this prevents at-or-before-kickoff
+backdating but cannot prove when the provider first made a final result available.
 """
 
 

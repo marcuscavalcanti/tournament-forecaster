@@ -152,6 +152,8 @@ def test_empty_and_insufficient_samples_are_non_ok_with_null_metrics() -> None:
         "missing_home_advantage",
         "missing_result",
         "invalid_schema_version_type",
+        "timestamp_space_separator",
+        "non_finite_home_advantage",
         "invalid_root_metadata",
         "invalid_case_metadata",
     ],
@@ -165,6 +167,10 @@ def test_evaluator_enforces_the_shipped_backtest_schema(malformation: str) -> No
         del case["result"]
     elif malformation == "invalid_schema_version_type":
         document["schema_version"] = True
+    elif malformation == "timestamp_space_separator":
+        case["captured_at"] = "2026-06-09 12:00:00+00:00"
+    elif malformation == "non_finite_home_advantage":
+        document["home_advantage_rating_points"] = float("inf")
     elif malformation == "invalid_root_metadata":
         document["metadata"] = []
     else:

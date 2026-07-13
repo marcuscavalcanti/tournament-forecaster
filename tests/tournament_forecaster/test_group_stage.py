@@ -57,6 +57,23 @@ def test_group_stage_applies_only_explicit_home_advantage() -> None:
     assert calls == [(1540.0, 1500.0)]
 
 
+def test_group_stage_composes_extreme_finite_home_advantage_without_overflow() -> None:
+    result = simulate_group_stage(
+        {
+            "id": "groups",
+            "type": "round_robin_groups",
+            "groups": {"A": ["alpha", "bravo"]},
+            "rounds_per_pair": 1,
+            "metadata": {"home_advantage_rating_points": 1e308},
+        },
+        ratings={"alpha": 1e308, "bravo": 0.0},
+        completed_matches=(),
+        rng=random.Random(0),
+    )
+
+    assert len(result.matches) == 1
+
+
 def test_group_fixture_ids_are_collision_free_for_delimiter_like_team_ids() -> None:
     stage = {
         "id": "groups",

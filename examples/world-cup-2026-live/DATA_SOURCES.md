@@ -33,4 +33,7 @@ python scripts/build_world_cup_2026_example.py --fetch   --output-dir examples/w
 
 For deterministic fixture tests, use `--fixture PATH --retrieved-at TIMESTAMP`.
 The builder rejects unknown teams, conflicting duplicate matches, invalid winners,
-unsupported stages/result types, and any non-final row as a completed fact.
+unsupported stages/result types, any non-final row as a completed fact, and completed
+rows unless `retrieved_at` is strictly after kickoff. FIFA calendar rows do not expose
+a trusted result-finalization timestamp, so this prevents at-or-before-kickoff
+backdating but cannot prove when the provider first made a final result available.

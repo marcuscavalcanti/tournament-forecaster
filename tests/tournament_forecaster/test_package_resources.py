@@ -211,6 +211,59 @@ def test_schema_resources_validate_representative_domain_documents() -> None:
     assert backtest_errors == []
 
 
+@pytest.mark.parametrize("stage_index", [0, 1, 2])
+def test_stage_home_advantage_schema_matches_runtime_for_every_stage_type(
+    stage_index: int,
+) -> None:
+    from tournament_forecaster.config import load_tournament_document
+    from tournament_forecaster.errors import TournamentValidationError
+
+    document = _representative_tournament_document()
+    stage = document["stages"][stage_index]  # type: ignore[index]
+    stage["metadata"] = {"home_advantage_rating_points": "sixty-five"}
+    validator = _draft_2020_validator()(_schema_resources()["tournament.schema.json"])
+
+    assert list(validator.iter_errors(document))
+    with pytest.raises(TournamentValidationError, match="home_advantage_rating_points"):
+        load_tournament_document(document)
+
+
+def test_stage_metadata_schema_preserves_intentional_extension_fields() -> None:
+    from tournament_forecaster.config import load_tournament_document
+
+    document = _representative_tournament_document()
+    for stage in document["stages"]:  # type: ignore[union-attr]
+        stage["metadata"] = {
+            "home_advantage_rating_points": 0,
+            "source_note": {"kind": "project-authored"},
+        }
+
+    load_tournament_document(document)
+    validator = _draft_2020_validator()(_schema_resources()["tournament.schema.json"])
+    assert list(validator.iter_errors(document)) == []
+
+
+@pytest.mark.parametrize("target", ["rating", "stage_advantage"])
+def test_tournament_schema_and_runtime_reject_non_finite_behavior_numbers(
+    target: str,
+) -> None:
+    from tournament_forecaster.config import load_tournament_document
+    from tournament_forecaster.errors import TournamentValidationError
+
+    document = _representative_tournament_document()
+    if target == "rating":
+        document["ratings"]["north-city"] = float("inf")  # type: ignore[index]
+    else:
+        document["stages"][0]["metadata"] = {  # type: ignore[index]
+            "home_advantage_rating_points": float("inf")
+        }
+    validator = _draft_2020_validator()(_schema_resources()["tournament.schema.json"])
+
+    assert list(validator.iter_errors(document))
+    with pytest.raises(TournamentValidationError, match="finite"):
+        load_tournament_document(document)
+
+
 def test_schema_and_loader_accept_explicit_additional_rank() -> None:
     from tournament_forecaster.config import load_tournament_document
 

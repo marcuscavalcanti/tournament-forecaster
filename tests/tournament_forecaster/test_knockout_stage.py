@@ -313,6 +313,21 @@ def test_two_leg_stage_applies_home_advantage_to_each_actual_home_side() -> None
     assert calls == [(1525.0, 1500.0), (1525.0, 1500.0)]
 
 
+def test_knockout_stage_composes_extreme_finite_home_advantage_without_overflow() -> None:
+    stage = _stage()
+    stage["metadata"] = {"home_advantage_rating_points": 1e308}
+
+    result = simulate_knockout_stage(
+        stage,
+        state=_state(),
+        ratings={"alpha": 1e308, "bravo": 0.0},
+        completed_matches=(),
+        rng=random.Random(0),
+    )
+
+    assert len(result.matches) == 1
+
+
 def test_two_leg_aggregate_tie_applies_configured_away_goals_rule() -> None:
     completed = (
         CompletedMatch(

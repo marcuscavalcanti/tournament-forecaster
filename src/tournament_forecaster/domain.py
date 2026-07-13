@@ -12,7 +12,7 @@ from typing import ClassVar
 from .errors import TournamentValidationError
 from .group_fixtures import group_fixture_contract
 from .pairing import resolve_ties, validate_locked_pairs
-from .qualification import QualificationState
+from .qualification import QualificationState, resolve_entrant
 from .standings import TableMatch, calculate_group_tables, calculate_league_table
 
 
@@ -189,6 +189,44 @@ def _tie_is_resolved(
             for source in entrants
         )
     )
+
+
+def _possible_entrant_teams(
+    source: Mapping[str, object],
+    *,
+    state: QualificationState,
+    possible_tie_winners: Mapping[str, frozenset[str]],
+    group_memberships: Mapping[str, Mapping[str, str]],
+    league_fixtures: Mapping[str, Mapping[str, tuple[str, str]]],
+) -> frozenset[str]:
+    if _entrant_is_resolved(source, state):
+        return frozenset({resolve_entrant(source, state)})
+    source_type = source.get("type")
+    if source_type == "group_rank":
+        stage_id = str(source["stage_id"])
+        group = str(source["group"])
+        return frozenset(
+            team_id
+            for team_id, team_group in group_memberships[stage_id].items()
+            if team_group == group
+        )
+    if source_type == "best_additional":
+        return frozenset(group_memberships[str(source["stage_id"])])
+    if source_type == "league_rank":
+        return frozenset(
+            team_id
+            for pair in league_fixtures[str(source["stage_id"])].values()
+            for team_id in pair
+        )
+    if source_type == "match_winner":
+        match_id = str(source["match_id"])
+        possibilities = possible_tie_winners.get(match_id)
+        if possibilities is None:
+            raise TournamentValidationError(
+                "match_winner entrant possibilities must resolve in dependency order"
+            )
+        return possibilities
+    raise TournamentValidationError("unsupported knockout entrant type")
 
 
 def _boolean(value: object, label: str) -> bool:
@@ -1104,6 +1142,7 @@ def validate_tournament(tournament: Tournament) -> None:
             "championship terminal must be a graph sink"
         )
     completed_stage_ids: set[str] = set()
+    stage_dependency_order: list[str] = []
     while len(completed_stage_ids) < len(stage_ids):
         ready = {
             stage_id
@@ -1112,7 +1151,9 @@ def validate_tournament(tournament: Tournament) -> None:
         }
         if not ready:
             raise TournamentValidationError("tournament stage dependencies must form a directed acyclic graph")
-        completed_stage_ids.update(ready)
+        ordered_ready = sorted(ready)
+        completed_stage_ids.update(ordered_ready)
+        stage_dependency_order.extend(ordered_ready)
     for team_id, rating in tournament.ratings.items():
         _stable_id(team_id, "rating team id")
         if team_id not in team_ids:
@@ -1347,6 +1388,65 @@ def validate_tournament(tournament: Tournament) -> None:
         resolved_state.league_rankings[stage_id] = tuple(
             row.team_id for row in league_rankings
         )
+
+    possible_tie_winners: dict[str, frozenset[str]] = {}
+    for stage_id in stage_dependency_order:
+        stage = stages_by_id[stage_id]
+        if stage.get("type") != "knockout":
+            continue
+        pairing = stage["pairing"]
+        assert isinstance(pairing, Mapping)
+        ties = pairing["ties"]
+        assert isinstance(ties, Sequence)
+        stage_sources: list[tuple[Mapping[str, object], frozenset[str]]] = []
+        fixed_winners: dict[str, frozenset[str]] = {}
+        for tie in ties:
+            assert isinstance(tie, Mapping)
+            entrants = tie["entrants"]
+            assert isinstance(entrants, Sequence)
+            tie_possibilities: list[frozenset[str]] = []
+            for source in entrants:
+                assert isinstance(source, Mapping)
+                possibilities = _possible_entrant_teams(
+                    source,
+                    state=resolved_state,
+                    possible_tie_winners=possible_tie_winners,
+                    group_memberships=group_memberships,
+                    league_fixtures=league_fixtures,
+                )
+                stage_sources.append((source, possibilities))
+                tie_possibilities.append(possibilities)
+            fixed_winners[str(tie["id"])] = frozenset(
+                team_id
+                for possibilities in tie_possibilities
+                for team_id in possibilities
+            )
+        for source_index, (source, _possibilities) in enumerate(stage_sources):
+            if source.get("type") != "team":
+                continue
+            team_id = str(source["team_id"])
+            if any(
+                source_index != other_index
+                and other_source.get("type") != "team"
+                and team_id in other_possibilities
+                for other_index, (other_source, other_possibilities) in enumerate(stage_sources)
+            ):
+                raise TournamentValidationError(
+                    "explicit team entrant overlaps another possible knockout entrant"
+                )
+        if pairing["mode"] == "fixed":
+            possible_tie_winners.update(fixed_winners)
+        else:
+            stage_pool = frozenset(
+                team_id
+                for _source, possibilities in stage_sources
+                for team_id in possibilities
+            )
+            possible_tie_winners.update(
+                (str(tie["id"]), stage_pool)
+                for tie in ties
+                if isinstance(tie, Mapping)
+            )
 
     for stage_id, stage in sorted(stages_by_id.items()):
         if stage.get("type") != "knockout":

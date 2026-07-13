@@ -52,3 +52,25 @@ def test_league_stage_consumes_explicit_fixtures_locks_results_and_builds_bands(
         "next-stage": ("bravo", "alpha"),
         "eliminated": ("charlie",),
     }
+
+
+def test_league_stage_composes_extreme_finite_home_advantage_without_overflow() -> None:
+    result = simulate_league_stage(
+        {
+            "id": "league",
+            "type": "league_table",
+            "fixtures": [
+                {
+                    "match_id": "league-1",
+                    "home_team_id": "alpha",
+                    "away_team_id": "bravo",
+                }
+            ],
+            "metadata": {"home_advantage_rating_points": 1e308},
+        },
+        ratings={"alpha": 1e308, "bravo": 0.0},
+        completed_matches=(),
+        rng=random.Random(0),
+    )
+
+    assert len(result.matches) == 1

@@ -95,11 +95,22 @@ def test_fifa_fixture_rejects_completed_kickoff_after_retrieval() -> None:
     payload = json.loads(EDGE_FIXTURE.read_text(encoding="utf-8"))
     payload["Results"][2]["Date"] = "2099-01-01T00:00:00Z"
 
-    with pytest.raises(TournamentValidationError, match="kickoff_at must not be after retrieved_at"):
+    with pytest.raises(TournamentValidationError, match="retrieved_at must be after kickoff_at"):
         normalize_fifa_fixture(
             payload,
             known_codes={"BEL", "SEN", "ARG", "CPV", "FRA", "MAR", "NOR", "ENG"},
             retrieved_at=datetime.fromisoformat("2026-07-13T12:21:03+00:00"),
+        )
+
+
+def test_fifa_fixture_rejects_a_completed_result_at_the_kickoff_instant() -> None:
+    payload = json.loads(EDGE_FIXTURE.read_text(encoding="utf-8"))
+
+    with pytest.raises(TournamentValidationError, match="retrieved_at must be after kickoff_at"):
+        normalize_fifa_fixture(
+            payload,
+            known_codes={"BEL", "SEN", "ARG", "CPV", "FRA", "MAR", "NOR", "ENG"},
+            retrieved_at=datetime.fromisoformat("2026-07-09T20:00:00+00:00"),
         )
 
 
@@ -124,6 +135,53 @@ def test_final_group_draw_does_not_require_a_winner_id() -> None:
     fixture = normalize_fifa_fixture(payload, known_codes={"BEL", "SEN"})
 
     assert fixture.completed[0]["winner_code"] is None
+
+
+def test_final_group_draw_rejects_a_declared_winner_id() -> None:
+    payload = {
+        "Results": [
+            {
+                "IdMatch": "400021449",
+                "StageName": [{"Description": "First Stage"}],
+                "Date": "2026-06-15T20:00:00Z",
+                "Home": {"Abbreviation": "BEL", "IdTeam": "43935"},
+                "Away": {"Abbreviation": "SEN", "IdTeam": "43879"},
+                "HomeTeamScore": 1,
+                "AwayTeamScore": 1,
+                "Winner": "43935",
+                "ResultType": 1,
+                "MatchNumber": 9,
+            }
+        ]
+    }
+
+    with pytest.raises(TournamentValidationError, match="group draw cannot declare a winner"):
+        normalize_fifa_fixture(payload, known_codes={"BEL", "SEN"})
+
+
+@pytest.mark.parametrize("provider_id", [43935.5, True, " 43935 "])
+def test_fifa_fixture_rejects_coercive_provider_team_ids(provider_id: object) -> None:
+    payload = json.loads(EDGE_FIXTURE.read_text(encoding="utf-8"))
+    payload["Results"][0]["Home"]["IdTeam"] = provider_id
+    payload["Results"][0]["Winner"] = provider_id
+
+    with pytest.raises(TournamentValidationError, match="team ID must be a positive integer"):
+        normalize_fifa_fixture(
+            payload,
+            known_codes={"BEL", "SEN", "ARG", "CPV", "FRA", "MAR", "NOR", "ENG"},
+        )
+
+
+@pytest.mark.parametrize("provider_id", [400021525.5, True, " 400021525 "])
+def test_fifa_fixture_rejects_coercive_provider_match_ids(provider_id: object) -> None:
+    payload = json.loads(EDGE_FIXTURE.read_text(encoding="utf-8"))
+    payload["Results"][0]["IdMatch"] = provider_id
+
+    with pytest.raises(TournamentValidationError, match="match ID must be a positive integer"):
+        normalize_fifa_fixture(
+            payload,
+            known_codes={"BEL", "SEN", "ARG", "CPV", "FRA", "MAR", "NOR", "ENG"},
+        )
 
 
 def test_pending_bracket_row_reads_top_level_winner_placeholders() -> None:
@@ -225,18 +283,21 @@ def test_checked_live_example_has_100_facts_and_simulates_full_path() -> None:
     assert forecast.stage_probabilities["semi-finals"] == 1.0
 
 
-def test_checked_completed_match_metadata_uses_raw_fifa_team_ids() -> None:
+def test_checked_completed_match_metadata_aligns_fifa_ids_to_normalized_sides() -> None:
     document = json.loads((EXAMPLE / "tournament.json").read_text(encoding="utf-8"))
     fifa_team_ids = {
-        team["metadata"]["fifa_team_id"]
+        team["id"]: team["metadata"]["fifa_team_id"]
         for team in document["teams"]
     }
     completed = document["completed_matches"]
 
     assert all(
-        match["metadata"][field] in fifa_team_ids
+        match["metadata"][field] == fifa_team_ids[match[side]]
         for match in completed
-        for field in ("fifa_home_team_id", "fifa_away_team_id")
+        for field, side in (
+            ("fifa_home_team_id", "home_team_id"),
+            ("fifa_away_team_id", "away_team_id"),
+        )
     )
     france_morocco = next(match for match in completed if match["match_id"] == "400021536")
     assert france_morocco["metadata"]["fifa_home_team_id"] == "43946"

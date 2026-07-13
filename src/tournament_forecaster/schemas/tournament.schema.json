@@ -16,8 +16,20 @@
       "minimum": 0,
       "maximum": 1
     },
+    "finite_number": {
+      "type": "number",
+      "minimum": -1.7976931348623157e308,
+      "maximum": 1.7976931348623157e308
+    },
     "metadata": {
       "type": "object",
+      "additionalProperties": true
+    },
+    "stage_metadata": {
+      "type": "object",
+      "properties": {
+        "home_advantage_rating_points": {"$ref": "#/$defs/finite_number"}
+      },
       "additionalProperties": true
     },
     "score": {
@@ -120,7 +132,7 @@
             }
           ]
         },
-        "metadata": {"$ref": "#/$defs/metadata"}
+        "metadata": {"$ref": "#/$defs/stage_metadata"}
       },
       "additionalProperties": false
     },
@@ -226,7 +238,7 @@
           "type": "array",
           "items": {"$ref": "#/$defs/qualification_band"}
         },
-        "metadata": {"$ref": "#/$defs/metadata"}
+        "metadata": {"$ref": "#/$defs/stage_metadata"}
       },
       "additionalProperties": false
     },
@@ -256,7 +268,7 @@
         "aggregate_tiebreak": {"enum": ["extra_time_then_penalties", "penalties"]},
         "away_goals_rule": {"type": "boolean"},
         "terminal": {"enum": ["championship", "placement"]},
-        "metadata": {"$ref": "#/$defs/metadata"}
+        "metadata": {"$ref": "#/$defs/stage_metadata"}
       },
       "additionalProperties": false,
       "allOf": [
@@ -365,7 +377,7 @@
     "ratings": {
       "type": "object",
       "propertyNames": {"$ref": "#/$defs/stable_id"},
-      "additionalProperties": {"type": "number"}
+      "additionalProperties": {"$ref": "#/$defs/finite_number"}
     },
     "completed_matches": {
       "type": "array",

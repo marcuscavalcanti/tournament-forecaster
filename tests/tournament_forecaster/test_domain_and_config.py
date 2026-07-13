@@ -191,6 +191,34 @@ def test_completed_fixed_pair_rejects_a_pure_team_source_contradiction() -> None
         load_tournament_document(document)
 
 
+def test_explicit_team_rejects_overlap_with_an_unresolved_match_winner() -> None:
+    from tournament_forecaster.config import load_tournament_document
+    from tournament_forecaster.errors import TournamentValidationError
+
+    document = _document()
+    semi_final = _terminal_stage(
+        "semi-final",
+        entrants=[
+            {"type": "team", "team_id": "north-city"},
+            {"type": "team", "team_id": "south-city"},
+        ],
+    )
+    del semi_final["terminal"]
+    document["stages"] = [
+        semi_final,
+        _terminal_stage(
+            entrants=[
+                {"type": "team", "team_id": "north-city"},
+                {"type": "match_winner", "match_id": "semi-final-1"},
+            ]
+        ),
+    ]
+    document["completed_matches"] = []
+
+    with pytest.raises(TournamentValidationError, match="explicit team entrant overlaps"):
+        load_tournament_document(document)
+
+
 def _source_group_stage() -> dict[str, object]:
     return {
         "id": "source-groups",

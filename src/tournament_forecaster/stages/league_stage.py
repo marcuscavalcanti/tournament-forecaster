@@ -8,7 +8,12 @@ from dataclasses import dataclass
 
 from ..domain import CompletedMatch, Score
 from ..errors import TournamentValidationError
-from ..probabilities import DEFAULT_RATING, simulate_score, stage_home_advantage_points
+from ..probabilities import (
+    DEFAULT_RATING,
+    compose_rating,
+    simulate_score,
+    stage_home_advantage_points,
+)
 from ..standings import (
     Fixture,
     StandingRow,
@@ -86,7 +91,10 @@ def simulate_league_stage(
                     fixture.home_team_id,
                     fixture.away_team_id,
                     score_simulator(
-                        float(ratings.get(fixture.home_team_id, DEFAULT_RATING)) + home_advantage,
+                        compose_rating(
+                            float(ratings.get(fixture.home_team_id, DEFAULT_RATING)),
+                            home_advantage,
+                        ),
                         float(ratings.get(fixture.away_team_id, DEFAULT_RATING)),
                         rng,
                     ),

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import random
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from statistics import NormalDist
@@ -51,6 +52,17 @@ def _finite_rating(value: float, label: str) -> float:
     return normalized
 
 
+def compose_rating(rating: float, adjustment: float) -> float:
+    """Add two finite rating values without producing an infinite intermediate."""
+
+    base = _finite_rating(rating, "rating")
+    delta = _finite_rating(adjustment, "rating adjustment")
+    combined = base + delta
+    if math.isfinite(combined):
+        return combined
+    return math.copysign(sys.float_info.max, combined)
+
+
 def _goal_rates(
     home_rating: float,
     away_rating: float,
@@ -59,7 +71,7 @@ def _goal_rates(
     home = _finite_rating(home_rating, "home rating")
     away = _finite_rating(away_rating, "away rating")
     advantage = _finite_rating(home_advantage_points, "home advantage points")
-    home_share = rating_win_probability(home + advantage, away)
+    home_share = rating_win_probability(compose_rating(home, advantage), away)
     expected_total = 2.6
     return (
         max(0.15, expected_total * home_share),
