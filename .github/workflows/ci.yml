@@ -80,36 +80,10 @@ jobs:
           tests/tournament_forecaster/test_odds_provider.py
           docs/assets/architecture/generate.py
           --select E,F,I,UP,B,SIM
-      - name: Targeted strict Mypy for green public modules and release tooling
+      - name: Package-wide strict Mypy for public package
         run: >-
           mypy
-          src/tournament_forecaster/__init__.py
-          src/tournament_forecaster/__main__.py
-          src/tournament_forecaster/atomic_io.py
-          src/tournament_forecaster/backtest.py
-          src/tournament_forecaster/cli.py
-          src/tournament_forecaster/config.py
-          src/tournament_forecaster/domain.py
-          src/tournament_forecaster/errors.py
-          src/tournament_forecaster/group_fixtures.py
-          src/tournament_forecaster/pairing.py
-          src/tournament_forecaster/probabilities.py
-          src/tournament_forecaster/providers/__init__.py
-          src/tournament_forecaster/providers/odds.py
-          src/tournament_forecaster/providers/results.py
-          src/tournament_forecaster/providers/security.py
-          src/tournament_forecaster/qualification.py
-          src/tournament_forecaster/reports/__init__.py
-          src/tournament_forecaster/reports/bracket_svg.py
-          src/tournament_forecaster/reports/markdown_report.py
-          src/tournament_forecaster/resources.py
-          src/tournament_forecaster/stages/__init__.py
-          src/tournament_forecaster/stages/group_stage.py
-          src/tournament_forecaster/stages/knockout_stage.py
-          src/tournament_forecaster/stages/league_stage.py
-          src/tournament_forecaster/validation.py
-          scripts/check_english_surface.py
-          docs/assets/architecture/generate.py
+          src/tournament_forecaster
       - name: English public surface
         run: python scripts/check_english_surface.py
       - name: Architecture asset manifest

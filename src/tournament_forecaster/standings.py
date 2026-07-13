@@ -168,7 +168,7 @@ def calculate_group_tables(
     assert isinstance(tiebreakers, Sequence)
     rankings: dict[str, tuple[StandingRow, ...]] = {}
     for group_id in sorted(groups):
-        roster = tuple(str(team_id) for team_id in groups[group_id])  # type: ignore[arg-type]
+        roster = tuple(str(team_id) for team_id in groups[group_id])
         roster_set = set(roster)
         group_matches = tuple(
             match
@@ -179,8 +179,8 @@ def calculate_group_tables(
             roster,
             group_matches,
             ratings=ratings,
-            points=points,  # type: ignore[arg-type]
-            tiebreakers=tiebreakers,  # type: ignore[arg-type]
+            points=points,
+            tiebreakers=tiebreakers,
         )
 
     qualification = stage.get("qualification", {})
@@ -239,6 +239,6 @@ def calculate_league_table(
         team_ids,
         matches,
         ratings=ratings,
-        points=points,  # type: ignore[arg-type]
-        tiebreakers=tiebreakers,  # type: ignore[arg-type]
+        points=points,
+        tiebreakers=tiebreakers,
     )

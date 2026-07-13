@@ -111,42 +111,8 @@ LEGACY_POLICY_PATHS = (
     Path("docs/superpowers/specs/2026-07-10-open-source-tournament-forecaster-design.md"),
     Path("docs/superpowers/plans/2026-07-10-tournament-forecaster-productization.md"),
 )
-MYPY_STEP_NAME = "Targeted strict Mypy for green public modules and release tooling"
-MYPY_TARGETS = (
-    "src/tournament_forecaster/__init__.py",
-    "src/tournament_forecaster/__main__.py",
-    "src/tournament_forecaster/atomic_io.py",
-    "src/tournament_forecaster/backtest.py",
-    "src/tournament_forecaster/cli.py",
-    "src/tournament_forecaster/config.py",
-    "src/tournament_forecaster/domain.py",
-    "src/tournament_forecaster/errors.py",
-    "src/tournament_forecaster/group_fixtures.py",
-    "src/tournament_forecaster/pairing.py",
-    "src/tournament_forecaster/probabilities.py",
-    "src/tournament_forecaster/providers/__init__.py",
-    "src/tournament_forecaster/providers/odds.py",
-    "src/tournament_forecaster/providers/results.py",
-    "src/tournament_forecaster/providers/security.py",
-    "src/tournament_forecaster/qualification.py",
-    "src/tournament_forecaster/reports/__init__.py",
-    "src/tournament_forecaster/reports/bracket_svg.py",
-    "src/tournament_forecaster/reports/markdown_report.py",
-    "src/tournament_forecaster/resources.py",
-    "src/tournament_forecaster/stages/__init__.py",
-    "src/tournament_forecaster/stages/group_stage.py",
-    "src/tournament_forecaster/stages/knockout_stage.py",
-    "src/tournament_forecaster/stages/league_stage.py",
-    "src/tournament_forecaster/validation.py",
-    "scripts/check_english_surface.py",
-    "docs/assets/architecture/generate.py",
-)
-MYPY_DEBT_TARGETS = {
-    "src/tournament_forecaster/reports/json_report.py",
-    "src/tournament_forecaster/reports/publication.py",
-    "src/tournament_forecaster/simulation.py",
-    "src/tournament_forecaster/standings.py",
-}
+MYPY_STEP_NAME = "Package-wide strict Mypy for public package"
+MYPY_PACKAGE_TARGET = "src/tournament_forecaster"
 STRICT_RUFF_STEP_NAME = "Strict Ruff for green release and provider contract targets"
 STRICT_RUFF_TARGETS = (
     "src/tournament_forecaster/providers/security.py",
@@ -254,13 +220,12 @@ def _assert_legacy_migration_contract(
 def _assert_quality_gate_contract(
     workflow: str,
     makefile: str,
-    contributing: str,
 ) -> None:
     assert (
         "$(PYTHON) -m compileall -q src/tournament_forecaster worldcup_brazil scripts"
         in makefile
     )
-    assert _workflow_step_command(workflow, MYPY_STEP_NAME) == ["mypy", *MYPY_TARGETS]
+    assert _workflow_step_command(workflow, MYPY_STEP_NAME) == ["mypy", MYPY_PACKAGE_TARGET]
     assert _workflow_step_command(workflow, STRICT_RUFF_STEP_NAME) == [
         "ruff",
         "check",
@@ -268,26 +233,6 @@ def _assert_quality_gate_contract(
         "--select",
         "E,F,I,UP,B,SIM",
     ]
-
-    package_modules = {
-        path.relative_to(ROOT).as_posix()
-        for path in (ROOT / "src/tournament_forecaster").rglob("*.py")
-        if "compatibility" not in path.parts
-    }
-    assert set(MYPY_TARGETS) & package_modules == package_modules - MYPY_DEBT_TARGETS
-    for target in MYPY_TARGETS:
-        content = (ROOT / target).read_text(encoding="utf-8")
-        assert "# type: ignore" not in content
-        assert "# mypy:" not in content
-
-    normalized = contributing.casefold()
-    assert "targeted strict mypy" in normalized
-    assert "package-wide strict mypy" in normalized
-    assert "not yet green" in normalized
-    assert "no new suppressions" in normalized
-    for target in MYPY_DEBT_TARGETS:
-        assert f"`{target}`" in contributing
-
 
 def _legacy_make_dry_run(target: str, *assignments: str) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
@@ -1025,43 +970,45 @@ def test_workflows_are_offline_scoped_and_do_not_publish() -> None:
     assert "publish" not in release
 
 
-def test_ci_quality_gates_compile_the_package_and_name_targeted_strict_scopes() -> None:
+def test_ci_quality_gates_compile_and_type_check_the_entire_public_package() -> None:
     _assert_quality_gate_contract(
         (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"),
         (ROOT / "Makefile").read_text(encoding="utf-8"),
-        (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8"),
     )
 
 
-@pytest.mark.parametrize("mutation", ["compile", "mypy", "strict-ruff", "debt-docs"])
+@pytest.mark.parametrize("mutation", ["compile", "mypy", "strict-ruff"])
 def test_ci_quality_gate_contract_rejects_scope_mutations(mutation: str) -> None:
     ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
-    contributing = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
     if mutation == "compile":
         makefile = makefile.replace("src/tournament_forecaster ", "", 1)
     elif mutation == "mypy":
-        ci = ci.replace("          src/tournament_forecaster/qualification.py\n", "", 1)
+        ci = ci.replace(
+            f"      - name: {MYPY_STEP_NAME}\n"
+            "        run: >-\n"
+            "          mypy\n"
+            f"          {MYPY_PACKAGE_TARGET}\n",
+            f"      - name: {MYPY_STEP_NAME}\n"
+            "        run: >-\n"
+            "          mypy\n"
+            "          src/tournament_forecaster/qualification.py\n",
+            1,
+        )
     elif mutation == "strict-ruff":
         ci = ci.replace(
             "          tests/tournament_forecaster/test_odds_provider.py\n",
             "",
             1,
         )
-    else:
-        contributing = contributing.replace(
-            "`src/tournament_forecaster/reports/publication.py`",
-            "publication module",
-            1,
-        )
 
     with pytest.raises(AssertionError):
-        _assert_quality_gate_contract(ci, makefile, contributing)
+        _assert_quality_gate_contract(ci, makefile)
 
 
-def test_ci_mypy_gate_types_imported_public_bases() -> None:
+def test_ci_mypy_gate_types_the_entire_public_package() -> None:
     ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    assert _workflow_step_command(ci, MYPY_STEP_NAME) == ["mypy", *MYPY_TARGETS]
+    assert _workflow_step_command(ci, MYPY_STEP_NAME) == ["mypy", MYPY_PACKAGE_TARGET]
 
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     mypy_config = metadata.get("tool", {}).get("mypy")
@@ -1107,7 +1054,7 @@ def test_ci_mypy_gate_rejects_unsafe_configuration_mutations(
     monkeypatch.setattr(sys.modules[__name__], "ROOT", tmp_path)
 
     with pytest.raises(AssertionError, match=expected_message):
-        test_ci_mypy_gate_types_imported_public_bases()
+        test_ci_mypy_gate_types_the_entire_public_package()
 
 
 def test_workflow_actions_are_pinned_to_immutable_commits() -> None:

@@ -139,7 +139,7 @@ def _canonical_stage(stage: Mapping[str, object]) -> dict[str, object]:
         groups = stage["groups"]
         assert isinstance(groups, Mapping)
         canonical["groups"] = {
-            str(group_id): sorted(str(team_id) for team_id in groups[group_id])  # type: ignore[index]
+            str(group_id): sorted(str(team_id) for team_id in groups[group_id])
             for group_id in sorted(groups)
         }
     elif stage["type"] == "league_table":
@@ -149,7 +149,7 @@ def _canonical_stage(stage: Mapping[str, object]) -> dict[str, object]:
             _canonical_value(fixture)
             for fixture in sorted(
                 fixtures,
-                key=lambda fixture: str(fixture["match_id"]),  # type: ignore[index]
+                key=lambda fixture: str(fixture["match_id"]),
             )
         ]
     else:
@@ -163,7 +163,7 @@ def _canonical_stage(stage: Mapping[str, object]) -> dict[str, object]:
             _canonical_value(tie)
             for tie in sorted(
                 ties,
-                key=lambda tie: str(tie["id"]),  # type: ignore[index]
+                key=lambda tie: str(tie["id"]),
             )
         ]
     return canonical

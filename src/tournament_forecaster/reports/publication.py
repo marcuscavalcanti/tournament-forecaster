@@ -853,7 +853,7 @@ def _owned_json_matches(path: Path, expected: dict[str, object]) -> bool:
     if _is_symlink_or_junction(info) or not stat.S_ISREG(info.st_mode):
         return False
     try:
-        return json.loads(path.read_text(encoding="utf-8")) == expected
+        return bool(json.loads(path.read_text(encoding="utf-8")) == expected)
     except (OSError, json.JSONDecodeError):
         return False
 
