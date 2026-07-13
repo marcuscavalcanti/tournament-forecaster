@@ -536,7 +536,7 @@ def test_focus_team_override_uses_the_requested_configured_team() -> None:
     assert forecast.stage_probabilities["semi-finals"] == 1.0
 
 
-def test_generic_engine_sources_never_import_legacy_worldcup_package() -> None:
+def test_generic_engine_sources_are_self_contained() -> None:
     package_root = Path(__file__).parents[2] / "src" / "tournament_forecaster"
     task_files = (
         "group_fixtures.py",
@@ -551,4 +551,6 @@ def test_generic_engine_sources_never_import_legacy_worldcup_package() -> None:
     )
 
     for relative_path in task_files:
-        assert "worldcup_brazil" not in (package_root / relative_path).read_text(encoding="utf-8")
+        assert "tournament_forecaster.compatibility" not in (
+            package_root / relative_path
+        ).read_text(encoding="utf-8")

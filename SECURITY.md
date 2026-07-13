@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-Security fixes are provided for the latest release and the current default branch. The deprecated `worldcup_brazil` compatibility surface receives only critical fixes throughout `v0.1.x`. Its aliases may be removed only at `v0.2.0` or later and on or after `2026-10-01`.
+Security fixes are provided for the latest release and the current default branch.
 
 ## Reporting A Vulnerability
 
@@ -18,7 +18,6 @@ Maintainers will acknowledge a complete report, investigate it privately, coordi
 - **Provider key boundary:** Credentials belong in environment variables or an external secret manager. They must never be written to tournament configuration, provider payloads, logs, reports, or source control.
 - **Council network boundary:** The optional council performs direct HTTPS requests only after a user supplies a validated council file and enables it. Endpoint configuration rejects inline credentials, query strings, fragments, and non-HTTPS URLs. The generic council never executes local commands.
 - **Council failure boundary:** Provider errors are classified, bounded, and sanitized before audit persistence. Missing credentials, quota exhaustion, authentication failure, timeout, and malformed provider output cannot weaken deterministic invariants; an unavailable quorum falls back to the deterministic baseline.
-- **Deprecated bridge boundary:** Legacy `worldcup_brazil` command bridges are explicit opt-ins, execute argument arrays without a shell, and receive an allowlisted process environment containing only operational variables plus the credential declared for that provider. Remote provider endpoints require HTTPS; plain HTTP is accepted only for loopback development endpoints.
 - **Data provenance boundary:** Normalized facts retain provider and retrieval metadata. Provenance is evidence about origin, not a guarantee that an external fact is accurate, licensed for every use, or unchanged upstream.
 
 Race-resistant provider apply and durable report publication require POSIX no-follow and directory-descriptor primitives in `v0.1.0`. macOS and Linux are native targets. Native Windows is not supported; Windows operators must use WSL2 and Linux paths.

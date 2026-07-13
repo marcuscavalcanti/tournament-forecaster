@@ -108,11 +108,6 @@ The committed diagrams describe the authoritative offline core, the first-class 
 - [Asset manifest and generation contract](docs/assets/architecture/README.md)
 - [Architecture contract](docs/ARCHITECTURE.md)
 - [Product flow](docs/PRODUCT_FLOW.md)
-- [Decision records](docs/decisions/README.md)
-
-## Legacy Compatibility
-
-The Brazil-focused `worldcup_brazil` workflow is deprecated compatibility, not the product entry point. Its package and command aliases remain throughout `v0.1.x` and may be removed only when the release is `v0.2.0` or later and the date is `2026-10-01` or later. See [Migration from World Cup Brazil](docs/MIGRATION_FROM_WORLDCUP_BRAZIL.md) for explicit environment-file, bridge, and command-array opt-ins.
 
 ## Trust And Governance
 
