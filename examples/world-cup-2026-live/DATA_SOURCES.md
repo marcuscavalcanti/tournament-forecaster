@@ -15,6 +15,16 @@ The snapshot has 100 completed facts. At retrieval,
 `0/2` semi-finals, and
 `0/1` final were complete.
 
+## Redistribution basis
+
+- Terms reviewed: FIFA [Terms of Service](https://inside.fifa.com/terms-of-service), last reviewed `2026-07-13`.
+- Status: this directory contains a project-authored normalized factual compilation of match identities, participants, kickoff times, stages, and final scores for reproducible non-commercial analysis.
+- Scope: no raw FIFA API response, commentary, article text, photograph, audiovisual work, logo, competition emblem, or other expressive FIFA content is redistributed.
+- License boundary: this factual snapshot is not covered by the MIT License. MIT covers the project-authored software, documentation, schemas, and synthetic presets; no FIFA license, endorsement, trademark right, or ownership of FIFA source content is claimed.
+- Attribution: provider IDs and the source endpoint are retained so every normalized fact can be traced back to FIFA. Users who refresh or redistribute the dataset must review the then-current source terms and applicable database or contract rights for their jurisdiction.
+
+The repository includes the minimal normalized facts, rather than FIFA's source database or response structure, to make the checked-in simulation and backtest reproducible while keeping the source-rights boundary explicit.
+
 ## Ratings
 
 - Source: project-authored `team_ratings` seed frozen in git commit `a7b6e694`

@@ -8,13 +8,13 @@ The repository may contain:
 - schemas and minimal examples needed to explain public contracts; and
 - normalized, cited factual example data with a retrieval timestamp and documented transformation.
 
-The World Cup 2026 example is allowed because it stores normalized fixture/result facts and cited provenance, not a raw provider response or protected visual asset.
+The World Cup 2026 example is allowed because it stores a project-authored normalized factual compilation with cited provenance and a directory-level redistribution notice, not a raw provider response or protected visual asset. Its source notice must state the source terms reviewed, what was transformed, what rights are not claimed, and that the factual snapshot is outside the repository's MIT grant.
 
 The repository must not contain raw provider payloads, credentials, cookies, authorization headers, local `.env` files, personal absolute paths, browser captures, attachments, caches, runtime outputs, or protected provider and governing-body logos.
 
 ## Provenance Minimum
 
-Every factual dataset must identify the source, `retrieved_at` timestamp, source IDs when available, normalization steps, rating provenance, redistribution basis, and known limitations. A citation is not an endorsement and does not transfer the source's rights.
+Every factual dataset must identify the source, `retrieved_at` timestamp, source IDs when available, normalization steps, rating provenance, redistribution basis, license boundary, and known limitations. A citation is not an endorsement and does not transfer the source's rights. The repository MIT license applies only to material the project is entitled to license under MIT.
 
 ## Acquisition And Retention
 

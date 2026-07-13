@@ -24,6 +24,16 @@ EXAMPLE = ROOT / "examples" / "world-cup-2026-live"
 EDGE_FIXTURE = Path(__file__).parent / "fixtures" / "fifa-calendar-edge-cases.json"
 
 
+def test_fifa_example_declares_its_non_mit_redistribution_basis() -> None:
+    sources = (EXAMPLE / "DATA_SOURCES.md").read_text(encoding="utf-8").casefold()
+
+    assert "## redistribution basis" in sources
+    assert "https://inside.fifa.com/terms-of-service" in sources
+    assert "not covered by the mit license" in sources
+    assert "normalized factual compilation" in sources
+    assert "no raw fifa api response" in sources
+
+
 def test_saved_fifa_fixture_is_deterministic_and_handles_extra_time_and_quarter_final() -> None:
     payload = json.loads(EDGE_FIXTURE.read_text(encoding="utf-8"))
     codes = {"BEL", "SEN", "ARG", "CPV", "FRA", "MAR", "NOR", "ENG"}
