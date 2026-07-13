@@ -955,6 +955,7 @@ def test_workflows_are_offline_scoped_and_do_not_publish() -> None:
     assert "workflow_call" in gitleaks
     assert "workflow_call" in gate
     assert "pull-requests: read" in gitleaks
+    assert "astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990" in ci
     assert '["3.11", "3.12", "3.13"]' in ci
     for check in (
         "ruff",
