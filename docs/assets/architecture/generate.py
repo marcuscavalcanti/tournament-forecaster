@@ -387,7 +387,7 @@ def _regenerate(manifest: Manifest) -> None:
             for source, destination in commit_plan:
                 _commit_file(source, destination)
             _check(updated)
-        except Exception as error:
+        except BaseException as error:
             rollback_errors: list[str] = []
             for backup, destination in reversed(backups):
                 try:
@@ -396,12 +396,12 @@ def _regenerate(manifest: Manifest) -> None:
                     rollback_errors.append(f"{destination.name}: {rollback_error}")
             if rollback_errors:
                 details = "; ".join(rollback_errors)
-                raise ContractError(
-                    f"architecture regeneration failed and rollback was incomplete: {details}"
-                ) from error
-            raise ContractError(
-                f"architecture regeneration failed and was rolled back: {error}"
-            ) from error
+                error.add_note(
+                    f"architecture regeneration was not fully rolled back: {details}"
+                )
+            else:
+                error.add_note("architecture regeneration was rolled back")
+            raise
 
 
 def main(argv: Sequence[str] | None = None) -> int:

@@ -4,11 +4,13 @@ import json
 import os
 import re
 import runpy
+import shlex
 import shutil
 import subprocess
 import sys
 import tarfile
 import tomllib
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
@@ -67,6 +69,7 @@ TASK6_OVERLAY_PATHS = (
     Path("tests/test_clean_wheel.py"),
     Path("tests/test_public_repository_contract.py"),
     Path("tests/test_readme_diagrams.py"),
+    Path("tests/tournament_forecaster/test_package_resources.py"),
     Path("uv.lock"),
 )
 
@@ -79,6 +82,24 @@ def _tracked_files() -> tuple[Path, ...]:
         capture_output=True,
     )
     return tuple(Path(item.decode()) for item in completed.stdout.split(b"\0") if item)
+
+
+def _workflow_job(workflow: str, job_name: str) -> str:
+    match = re.search(
+        rf"^  {re.escape(job_name)}:\n(?P<body>.*?)(?=^  [a-z0-9-]+:\n|\Z)",
+        workflow,
+        flags=re.DOTALL | re.MULTILINE,
+    )
+    assert match is not None, f"missing workflow job: {job_name}"
+    return match.group("body")
+
+
+def _tracked_package_files() -> set[str]:
+    return {
+        f"/{path.as_posix()}"
+        for path in _tracked_files()
+        if path.as_posix().startswith(("src/tournament_forecaster/", "worldcup_brazil/"))
+    }
 
 
 def test_required_public_repository_files_exist() -> None:
@@ -357,7 +378,7 @@ def test_workflows_are_offline_scoped_and_do_not_publish() -> None:
     assert "tournament-forecast backtest" not in ci
     assert "tournament_forecast_offline" not in ci
     assert "./.github/workflows/ci.yml" in gate
-    assert "./.github/workflows/gitleaks.yml" in gate
+    assert "full-history-secret-scan" in gate
     assert "ubuntu-latest" in gate
     assert "macos-latest" in gate
     assert "windows-latest" in gate
@@ -388,6 +409,71 @@ def test_workflow_actions_are_pinned_to_immutable_commits() -> None:
             assert re.fullmatch(r"v\d+(?:\.\d+){0,2}", version_comment), (
                 f"{workflow.name} must retain a Dependabot-readable version comment for {action}"
             )
+
+    gitleaks = (ROOT / ".github/workflows/gitleaks.yml").read_text(encoding="utf-8")
+    assert (
+        "gitleaks/gitleaks-action@f586c14365d4643c6aa59d472ae6e984bf47bb34 # v2.3.8"
+        in gitleaks
+    )
+
+
+def test_release_secret_gate_scans_full_history_for_an_empty_tag_payload(
+    tmp_path: Path,
+) -> None:
+    gate = (ROOT / ".github/workflows/release-gate.yml").read_text(encoding="utf-8")
+    job = _workflow_job(gate, "full-history-secret-scan")
+    expected_checksum = "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+
+    assert "fetch-depth: 0" in job
+    assert "gitleaks_8.30.1_linux_x64.tar.gz" in job
+    assert expected_checksum in job
+    assert "sha256sum --check" in job
+    assert "github.event" not in job.casefold()
+    assert "gitleaks/gitleaks-action" not in job
+
+    scan_match = re.search(
+        r"^\s+run:\s+(gitleaks git \. --redact --log-opts=--all)\s*$",
+        job,
+        flags=re.MULTILINE,
+    )
+    assert scan_match is not None
+
+    event = {
+        "created": True,
+        "ref": "refs/tags/v0.1.0",
+        "commits": [],
+    }
+    event_path = tmp_path / "event.json"
+    event_path.write_text(json.dumps(event), encoding="utf-8")
+    assert json.loads(event_path.read_text(encoding="utf-8"))["commits"] == []
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    capture = tmp_path / "arguments.txt"
+    fake_gitleaks = fake_bin / "gitleaks"
+    fake_gitleaks.write_text(
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$CAPTURE\"\n",
+        encoding="utf-8",
+    )
+    fake_gitleaks.chmod(0o755)
+    environment = os.environ.copy()
+    environment["CAPTURE"] = str(capture)
+    environment["GITHUB_EVENT_PATH"] = str(event_path)
+    environment["PATH"] = f"{fake_bin}{os.pathsep}{environment['PATH']}"
+    completed = subprocess.run(
+        shlex.split(scan_match.group(1)),
+        cwd=ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert capture.read_text(encoding="utf-8").splitlines() == [
+        "git",
+        ".",
+        "--redact",
+        "--log-opts=--all",
+    ]
 
 
 def test_english_public_surface_scanner_passes() -> None:
@@ -461,23 +547,33 @@ def test_pristine_clone_make_validate_installs_declared_test_dependencies(
     assert validated.returncode == 0, validated.stdout + validated.stderr
 
 
-def test_sdist_is_an_explicit_public_allowlist_without_local_material(
-    tmp_path: Path,
-) -> None:
+def test_package_build_targets_use_exact_tracked_file_allowlists() -> None:
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    wheel = metadata["tool"]["hatch"]["build"]["targets"]["wheel"]
     sdist = metadata["tool"]["hatch"]["build"]["targets"]["sdist"]
-    includes = set(sdist["include"])
+    tracked_packages = _tracked_package_files()
+    wheel_includes = set(wheel["include"])
+    sdist_includes = set(sdist["include"])
     excludes = set(sdist["exclude"])
+
+    assert "packages" not in wheel
+    assert wheel["sources"] == ["src"]
+    assert wheel_includes == tracked_packages
+    assert {
+        path
+        for path in sdist_includes
+        if path.startswith(("/src/tournament_forecaster/", "/worldcup_brazil/"))
+    } == tracked_packages
+    assert "/src/tournament_forecaster" not in sdist_includes
+    assert "/worldcup_brazil" not in sdist_includes
     for required in (
-        "/src/tournament_forecaster",
-        "/worldcup_brazil",
         "/README.md",
         "/LICENSE",
         "/NOTICE.md",
         "/docs/PROVIDERS.md",
         "/examples/world-cup-2026-live/tournament.json",
     ):
-        assert required in includes
+        assert required in sdist_includes
     for forbidden in (
         "/.github",
         "/.superpowers",
@@ -489,39 +585,100 @@ def test_sdist_is_an_explicit_public_allowlist_without_local_material(
     ):
         assert forbidden in excludes
 
-    probe_root = ROOT / f"task6-untracked-output-{os.getpid()}-{tmp_path.name}"
-    marker = "TASK6_UNTRACKED_OUTPUT_MUST_NOT_SHIP"
-    probe_root.mkdir()
-    (probe_root / "forecast.json").write_text(marker, encoding="utf-8")
+
+def test_contaminated_package_trees_cannot_enter_sdist_or_wheel(
+    tmp_path: Path,
+) -> None:
+    metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    sdist_includes = set(
+        metadata["tool"]["hatch"]["build"]["targets"]["sdist"]["include"]
+    )
+    tracked_packages = _tracked_package_files()
+    token = f"{os.getpid()}-{tmp_path.name}"
+    generated_root = ROOT / "src/tournament_forecaster" / f"strict-outputs-{token}"
+    generic_marker_root = (
+        ROOT / "src/tournament_forecaster" / f"adversarial-export-{token}"
+    )
+    legacy_marker_root = ROOT / "worldcup_brazil" / f"adversarial-export-{token}"
+    arbitrary_modules = (
+        ROOT / "src/tournament_forecaster" / f"adversarial_module_{os.getpid()}.py",
+        ROOT / "worldcup_brazil" / f"adversarial_module_{os.getpid()}.py",
+    )
+    marker = "TASK6_PACKAGE_TREE_MARKER_MUST_NOT_SHIP"
+    macos_path = "/Users/" + "marcus/private-source"
+    windows_path = "C:\\Users\\" + "marcus\\private-source"
     dist = tmp_path / "dist"
+
+    for path in (generated_root, generic_marker_root, legacy_marker_root, *arbitrary_modules):
+        assert not path.exists()
     try:
-        built = subprocess.run(
+        simulated = subprocess.run(
             [
                 sys.executable,
                 "-m",
-                "build",
-                "--sdist",
-                "--no-isolation",
-                "--outdir",
-                str(dist),
+                "tournament_forecaster",
+                "simulate",
+                "--config",
+                "presets/synthetic-cup/tournament.json",
+                "--iterations",
+                "8",
+                "--output-dir",
+                str(generated_root),
             ],
             cwd=ROOT,
             text=True,
             capture_output=True,
         )
-    finally:
-        shutil.rmtree(probe_root, ignore_errors=True)
-    assert built.returncode == 0, built.stdout + built.stderr
+        assert simulated.returncode == 0, simulated.stdout + simulated.stderr
+        assert generated_root.is_dir()
 
-    archives = list(dist.glob("*.tar.gz"))
-    assert len(archives) == 1
-    with tarfile.open(archives[0], mode="r:gz") as archive:
+        generic_marker_root.mkdir()
+        legacy_marker_root.mkdir()
+        (generic_marker_root / "forecast.json").write_text(
+            f"{marker}\n{macos_path}\n",
+            encoding="utf-8",
+        )
+        (legacy_marker_root / "report.md").write_text(
+            f"{marker}\n{windows_path}\n",
+            encoding="utf-8",
+        )
+        for module in arbitrary_modules:
+            module.write_text(f'# {marker}\n', encoding="utf-8")
+
+        for artifact_type in ("--sdist", "--wheel"):
+            built = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "build",
+                    artifact_type,
+                    "--no-isolation",
+                    "--outdir",
+                    str(dist),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+            )
+            assert built.returncode == 0, built.stdout + built.stderr
+    finally:
+        for directory in (generated_root, generic_marker_root, legacy_marker_root):
+            shutil.rmtree(directory, ignore_errors=True)
+        for module in arbitrary_modules:
+            module.unlink(missing_ok=True)
+
+    sdist_archives = list(dist.glob("*.tar.gz"))
+    wheel_archives = list(dist.glob("*.whl"))
+    assert len(sdist_archives) == 1
+    assert len(wheel_archives) == 1
+
+    with tarfile.open(sdist_archives[0], mode="r:gz") as archive:
         files = [member for member in archive.getmembers() if member.isfile()]
-        relative_names = [member.name.split("/", 1)[1] for member in files]
-        allowlisted_paths = tuple(item.removeprefix("/") for item in includes)
+        sdist_names = [member.name.split("/", 1)[1] for member in files]
+        allowlisted_paths = tuple(item.removeprefix("/") for item in sdist_includes)
         unexpected = [
             name
-            for name in relative_names
+            for name in sdist_names
             if name != "PKG-INFO"
             and not any(
                 name == allowed or name.startswith(f"{allowed.rstrip('/')}/")
@@ -529,35 +686,49 @@ def test_sdist_is_an_explicit_public_allowlist_without_local_material(
             )
         ]
         assert not unexpected, f"sdist members outside the allowlist: {unexpected}"
-        assert not any(
-            name.startswith(
-                (
-                    ".github/",
-                    ".superpowers/",
-                    "docs/superpowers/",
-                    "outputs/",
-                    "scripts/",
-                    "tests/",
-                )
-            )
-            for name in relative_names
-        )
-        assert not any(probe_root.name in name for name in relative_names)
-        text_members = []
-        for member in files:
-            if member.size > 2_000_000:
-                continue
-            stream = archive.extractfile(member)
-            if stream is None:
-                continue
-            try:
-                text_members.append(stream.read().decode("utf-8"))
-            except UnicodeDecodeError:
-                continue
-    archive_text = "\n".join(text_members)
-    assert marker not in archive_text
-    assert "/Users/" not in archive_text
-    assert "C:\\Users\\" not in archive_text
+        sdist_text = b"\n".join(
+            stream.read()
+            for member in files
+            if member.size <= 2_000_000
+            for stream in [archive.extractfile(member)]
+            if stream is not None
+        ).decode("utf-8", errors="ignore")
+
+    with zipfile.ZipFile(wheel_archives[0]) as archive:
+        wheel_names = [name for name in archive.namelist() if not name.endswith("/")]
+        wheel_text = b"\n".join(
+            archive.read(name)
+            for name in wheel_names
+            if archive.getinfo(name).file_size <= 2_000_000
+        ).decode("utf-8", errors="ignore")
+
+    expected_sdist_packages = {path.removeprefix("/") for path in tracked_packages}
+    actual_sdist_packages = {
+        name
+        for name in sdist_names
+        if name.startswith(("src/tournament_forecaster/", "worldcup_brazil/"))
+    }
+    assert actual_sdist_packages == expected_sdist_packages
+    expected_wheel_packages = {
+        path.removeprefix("/src/")
+        if path.startswith("/src/")
+        else path.removeprefix("/")
+        for path in tracked_packages
+    }
+    actual_wheel_packages = {
+        name
+        for name in wheel_names
+        if name.startswith(("tournament_forecaster/", "worldcup_brazil/"))
+    }
+    assert actual_wheel_packages == expected_wheel_packages
+    for archive_names, archive_text in (
+        (sdist_names, sdist_text),
+        (wheel_names, wheel_text),
+    ):
+        assert not any(token in name for name in archive_names)
+        assert marker not in archive_text
+        assert "/Users/" not in archive_text
+        assert "C:\\Users\\" not in archive_text
 
 
 def test_internal_docs_are_unshipped_and_knockout_contract_is_public_english() -> None:

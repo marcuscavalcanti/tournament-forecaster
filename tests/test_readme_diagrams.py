@@ -151,11 +151,13 @@ with output.open("ab") as stream:
     assert {path.name: path.read_bytes() for path in protected} == before
 
 
-@pytest.mark.parametrize("failure_index", [1, 2, 3])
-def test_architecture_regeneration_rolls_back_every_commit_boundary(
+@pytest.mark.parametrize("failure_type", [OSError, KeyboardInterrupt, SystemExit])
+@pytest.mark.parametrize("failure_boundary", [1, 2, 3, 4])
+def test_architecture_regeneration_rolls_back_after_every_commit_boundary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    failure_index: int,
+    failure_type: type[BaseException],
+    failure_boundary: int,
 ) -> None:
     copied_assets = tmp_path / "architecture"
     shutil.copytree(ASSET_DIRECTORY, copied_assets)
@@ -173,20 +175,30 @@ def test_architecture_regeneration_rolls_back_every_commit_boundary(
             stream.write(b"changed")
 
     commit_calls = 0
+    message = f"injected {failure_type.__name__} at boundary {failure_boundary}"
 
-    def fail_at_boundary(source: Path, destination: Path) -> None:
+    def fail_after_boundary(source: Path, destination: Path) -> None:
         nonlocal commit_calls
         commit_calls += 1
-        if commit_calls == failure_index:
-            raise OSError(f"injected commit failure {failure_index}")
         os.replace(source, destination)
+        if commit_calls == failure_boundary:
+            raise failure_type(message)
+
+    original_check = generator._check
+
+    def fail_after_final_check(manifest: object) -> None:
+        original_check(manifest)
+        if failure_boundary == 4:
+            raise failure_type(message)
 
     monkeypatch.setattr(generator, "_render", render_changed)
     monkeypatch.setattr(generator, "_renderer_version", lambda: "sips-test")
-    monkeypatch.setattr(generator, "_commit_file", fail_at_boundary)
+    monkeypatch.setattr(generator, "_commit_file", fail_after_boundary)
+    monkeypatch.setattr(generator, "_check", fail_after_final_check)
 
-    with pytest.raises(generator.ContractError, match="rolled back"):
+    with pytest.raises(failure_type, match=message) as raised:
         generator._regenerate(generator._load_manifest())
 
-    assert commit_calls == failure_index
+    assert any("rolled back" in note for note in getattr(raised.value, "__notes__", ()))
+    assert commit_calls == min(failure_boundary, 3)
     assert {path.name: path.read_bytes() for path in protected} == before

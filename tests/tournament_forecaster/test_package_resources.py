@@ -588,10 +588,19 @@ def test_hatchling_packages_generic_and_legacy_surfaces() -> None:
         "tournament-forecast": "tournament_forecaster.cli:main",
         "worldcup-brazil-report": "worldcup_brazil.cli:main",
     }
-    assert pyproject["tool"]["hatch"]["build"]["targets"]["wheel"]["packages"] == [
-        "src/tournament_forecaster",
-        "worldcup_brazil",
-    ]
+    wheel = pyproject["tool"]["hatch"]["build"]["targets"]["wheel"]
+    assert "packages" not in wheel
+    assert wheel["sources"] == ["src"]
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z", "src/tournament_forecaster", "worldcup_brazil"],
+        cwd=repository_root,
+        check=True,
+        capture_output=True,
+    )
+    expected = {
+        f"/{item.decode()}" for item in tracked.stdout.split(b"\0") if item
+    }
+    assert set(wheel["include"]) == expected
 
 
 def test_built_wheel_exposes_packages_scripts_and_schema_resources_in_isolation(
