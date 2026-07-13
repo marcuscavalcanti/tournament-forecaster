@@ -326,13 +326,13 @@ tournament-forecast backtest --input PATH [--output PATH] [--min-resolved INT]
 **Files:**
 - Modify only files required by review findings.
 
-- [ ] Run `make validate` and all generic preset contracts.
-- [ ] Run Ruff, mypy, package build, schema validation, and public English scan.
-- [ ] Install the wheel in a new temporary venv and run quickstart with network denied and credentials cleared.
-- [ ] Run the clean source-install quickstart with package-index/build-dependency access on native Linux and macOS.
-- [ ] Verify the three generated outputs are non-empty, coherent, and free of local paths or secrets.
-- [ ] Run `gitleaks git --redact --log-opts="--all"` when the binary is available; otherwise record it as a visibility blocker rather than claiming release-ready.
-- [ ] Dispatch a broad adversarial code review over the complete branch diff and fix every Critical or Important finding.
-- [ ] Confirm the legacy World Cup seeded goldens and 534-test baseline still pass.
-- [ ] Commit fixes as `fix: close productization release findings` when needed.
-- [ ] Leave the structured final-fix commits local; do not push as part of this controller-owned wave.
+- [x] Run `make validate` and all generic preset contracts.
+- [x] Run Ruff, mypy, package build, schema validation, and public English scan.
+- [x] Install the wheel in a new temporary venv and run quickstart with network denied and credentials cleared.
+- [x] Run the clean source-install quickstart with package-index/build-dependency access on native Linux and macOS.
+- [x] Verify the three generated outputs are non-empty, coherent, and free of local paths or secrets.
+- [x] Run `gitleaks git --redact --log-opts="--all"` over all 171 commits and confirm no leaks.
+- [x] Dispatch broad adversarial reviews over the complete branch diff and fix every Critical or Important finding.
+- [x] Confirm the legacy World Cup seeded goldens and the expanded 1,178-test baseline still pass.
+- [x] Commit release findings as focused `fix:`, `ci:`, and `test:` commits.
+- [x] Push the structured final-fix commits after explicit controller authorization and require green PR checks before merge.
