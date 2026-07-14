@@ -17,7 +17,7 @@ def test_clean_source_install_executes_literal_readme_quickstart(
 ) -> None:
     if os.environ.get("TOURNAMENT_FORECASTER_INNER_MAKE_VALIDATE") == "1":
         pytest.skip("the outer clean source-install test owns this recursive boundary")
-    assert os.name == "posix", "v0.1.1 source onboarding is native POSIX only"
+    assert os.name == "posix", "v0.1.2 source onboarding is native POSIX only"
 
     readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
     shell_blocks = re.findall(r"```(?:bash|sh)\n(.*?)```", readme, flags=re.DOTALL)
