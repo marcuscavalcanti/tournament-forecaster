@@ -202,3 +202,12 @@ def test_readme_keeps_the_optional_council_and_offline_boundary_explicit() -> No
     ):
         assert phrase in normalized
     assert "vendor or governing-body affiliation" in normalized
+
+
+def test_readme_keeps_both_ready_to_run_competition_examples_visible() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "### FIFA World Cup 2026: France" in readme
+    assert "examples/world-cup-2026-live/tournament.json" in readme
+    assert "### Copa Libertadores 2026: Palmeiras" in readme
+    assert "examples/copa-libertadores-2026-live/tournament.json" in readme
