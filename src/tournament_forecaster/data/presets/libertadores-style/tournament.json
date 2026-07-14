@@ -53,7 +53,7 @@
       },
       "legs": 2,
       "home_away_order": "listed_team_first_leg_home",
-      "aggregate_tiebreak": "extra_time_then_penalties",
+      "aggregate_tiebreak": "penalties",
       "away_goals_rule": false
     },
     {
@@ -68,7 +68,7 @@
       },
       "legs": 2,
       "home_away_order": "listed_team_first_leg_home",
-      "aggregate_tiebreak": "extra_time_then_penalties",
+      "aggregate_tiebreak": "penalties",
       "away_goals_rule": false
     },
     {
