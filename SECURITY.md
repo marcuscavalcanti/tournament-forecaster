@@ -20,7 +20,7 @@ Maintainers will acknowledge a complete report, investigate it privately, coordi
 - **Council failure boundary:** Provider errors are classified, bounded, and sanitized before audit persistence. Missing credentials, quota exhaustion, authentication failure, timeout, and malformed provider output cannot weaken deterministic invariants; an unavailable quorum falls back to the deterministic baseline.
 - **Data provenance boundary:** Normalized facts retain provider and retrieval metadata. Provenance is evidence about origin, not a guarantee that an external fact is accurate, licensed for every use, or unchanged upstream.
 
-Race-resistant provider apply and durable report publication require POSIX no-follow and directory-descriptor primitives in `v0.1.0`. macOS and Linux are native targets. Native Windows is not supported; Windows operators must use WSL2 and Linux paths.
+Race-resistant provider apply and durable report publication require POSIX no-follow and directory-descriptor primitives in `v0.1.1`. macOS and Linux are native targets. Native Windows is not supported; Windows operators must use WSL2 and Linux paths.
 
 ## Deployment Assumptions
 

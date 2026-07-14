@@ -23,7 +23,7 @@ Each run first creates an immutable generation directory. The CLI labels the sta
 
 Output publication fails closed when the lexical output path contains an ancestor symlink or junction. Use a canonical path instead. For example, macOS exposes `/tmp` as a symlink to `/private/tmp`, so use `--output-dir /private/tmp/tournament-forecaster-outputs` rather than a path below `/tmp`.
 
-`v0.1.0` supports macOS and Linux natively. On Windows, use WSL2 and run the four POSIX quickstart commands inside the Linux distribution; native Windows is not supported in `v0.1.0`.
+`v0.1.1` supports macOS and Linux natively. On Windows, use WSL2 and run the four POSIX quickstart commands inside the Linux distribution; native Windows is not supported in `v0.1.1`.
 
 For a fully synthetic offline smoke test after installation:
 
