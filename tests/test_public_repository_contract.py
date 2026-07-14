@@ -39,6 +39,9 @@ REQUIRED_PUBLIC_FILES = {
     "docs/DATA_POLICY.md",
     "docs/PRODUCT_FLOW.md",
     "docs/PROVIDERS.md",
+    "examples/copa-libertadores-2026-live/DATA_SOURCES.md",
+    "examples/copa-libertadores-2026-live/README.md",
+    "examples/copa-libertadores-2026-live/tournament.json",
     "examples/council.example.json",
 }
 
@@ -81,6 +84,18 @@ def test_public_package_exposes_only_the_generic_cli() -> None:
         metadata["tool"]["hatch"]["build"]["targets"]["wheel"]["include"]
     )
     assert "compatibility" not in packaged
+
+
+def test_source_distribution_includes_live_examples() -> None:
+    metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    included = set(metadata["tool"]["hatch"]["build"]["targets"]["sdist"]["include"])
+
+    assert {
+        "/examples/copa-libertadores-2026-live/DATA_SOURCES.md",
+        "/examples/copa-libertadores-2026-live/README.md",
+        "/examples/copa-libertadores-2026-live/tournament.json",
+        "/examples/world-cup-2026-live/tournament.json",
+    } <= included
 
 
 def test_makefile_advertises_only_generic_public_commands() -> None:
@@ -127,6 +142,13 @@ def test_pristine_clone_make_validate_installs_declared_test_dependencies(
             capture_output=True,
         )
         assert applied.returncode == 0, applied.stderr.decode("utf-8")
+        staged = subprocess.run(
+            ["git", "add", "--all"],
+            cwd=clone,
+            text=True,
+            capture_output=True,
+        )
+        assert staged.returncode == 0, staged.stderr
 
     environment = os.environ.copy()
     environment["PYTHONDONTWRITEBYTECODE"] = "1"

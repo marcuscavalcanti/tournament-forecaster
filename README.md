@@ -31,6 +31,23 @@ For a fully synthetic offline smoke test after installation:
 tournament-forecast quickstart --iterations 10000 --output-dir outputs
 ```
 
+## Copa Libertadores 2026 Example
+
+The repository also includes a ready-to-run [Copa Libertadores 2026 round-of-16
+snapshot](examples/copa-libertadores-2026-live/README.md) focused on Palmeiras. It
+uses the official CONMEBOL field, seed order, fixed draw, and two-leg rules from a
+frozen snapshot; ratings remain explicitly synthetic project inputs.
+
+```bash
+tournament-forecast validate --config examples/copa-libertadores-2026-live/tournament.json
+tournament-forecast simulate --config examples/copa-libertadores-2026-live/tournament.json --iterations 10000 --output-dir outputs
+```
+
+The configuration models the official `A-H`, `B-G`, `C-F`, and `D-E` quarter-final
+path. Better group-stage seeds host leg two through the semi-finals; aggregate ties
+before the final go directly to penalties, while the one-leg final uses extra time
+and then penalties. See the example's [source record](examples/copa-libertadores-2026-live/DATA_SOURCES.md) before refreshing the snapshot.
+
 ## Multi-LLM Council
 
 The debriefing council is a core product capability but an optional runtime dependency. With no council configuration, every command keeps the zero-key offline behavior above. When enabled, the default policy is **55% deterministic engine / 45% council consensus**. The deterministic engine still owns completed facts, standings, legal opponents, bracket topology, and matchup probabilities.
