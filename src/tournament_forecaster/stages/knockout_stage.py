@@ -66,9 +66,25 @@ def _winner_from_draw(
     return first_team_id if first_wins else second_team_id
 
 
-def _expected_legs(pairing: Pairing, legs: int, home_away_order: str) -> tuple[tuple[str, str], ...]:
+def _expected_legs(
+    pairing: Pairing,
+    legs: int,
+    home_away_order: str,
+    knockout_seeds: Mapping[str, int],
+) -> tuple[tuple[str, str], ...]:
     if legs == 1:
         return ((pairing.first_team_id, pairing.second_team_id),)
+    if home_away_order == "better_seed_second_leg_home":
+        try:
+            better_seed, worse_seed = sorted(
+                (pairing.first_team_id, pairing.second_team_id),
+                key=knockout_seeds.__getitem__,
+            )
+        except KeyError as error:
+            raise TournamentValidationError(
+                "knockout seeds must cover every entrant in a better-seed home stage"
+            ) from error
+        return ((worse_seed, better_seed), (better_seed, worse_seed))
     if home_away_order == "seeded_team_second_leg_home":
         return (
             (pairing.second_team_id, pairing.first_team_id),
@@ -84,6 +100,7 @@ def _locked_pairs(
     stage_id: str,
     legs: int,
     home_away_order: str,
+    knockout_seeds: Mapping[str, int],
     completed_matches: Sequence[CompletedMatch],
 ) -> tuple[tuple[CompletedMatch, ...], dict[str, tuple[str, str]]]:
     relevant = tuple(
@@ -104,6 +121,17 @@ def _locked_pairs(
         first_fact = facts[0]
         if legs == 1:
             oriented = (first_fact.home_team_id, first_fact.away_team_id)
+        elif home_away_order == "better_seed_second_leg_home":
+            try:
+                better_seed, worse_seed = sorted(
+                    team_pair,
+                    key=knockout_seeds.__getitem__,
+                )
+                oriented = (better_seed, worse_seed)
+            except KeyError as error:
+                raise TournamentValidationError(
+                    "knockout seeds must cover every entrant in a better-seed home stage"
+                ) from error
         else:
             first_is_home = (
                 home_away_order == "listed_team_first_leg_home" and first_fact.leg == 1
@@ -129,6 +157,7 @@ def simulate_knockout_stage(
     *,
     state: QualificationState,
     ratings: Mapping[str, float],
+    knockout_seeds: Mapping[str, int] | None = None,
     completed_matches: Sequence[CompletedMatch],
     rng: random.Random,
     score_simulator: ScoreSimulator = simulate_score,
@@ -150,10 +179,12 @@ def simulate_knockout_stage(
         raise TournamentValidationError("knockout legs must be an integer")
     legs = legs_value
     home_away_order = str(stage.get("home_away_order", "listed_team_first_leg_home"))
+    seed_ranks = knockout_seeds or {}
     relevant, locked = _locked_pairs(
         stage_id,
         legs,
         home_away_order,
+        seed_ranks,
         completed_matches,
     )
     pairings = build_pairings(
@@ -162,6 +193,7 @@ def simulate_knockout_stage(
         state,
         rng,
         locked_pairs=locked,
+        fixed_pair_order=home_away_order != "better_seed_second_leg_home",
     )
     away_goals_rule = bool(stage.get("away_goals_rule", False))
     aggregate_tiebreak = str(stage.get("aggregate_tiebreak", "extra_time_then_penalties"))
@@ -177,7 +209,7 @@ def simulate_knockout_stage(
             stage,
             tuple(facts_by_leg.values()),
         )
-        expected_legs = _expected_legs(pairing, legs, home_away_order)
+        expected_legs = _expected_legs(pairing, legs, home_away_order, seed_ranks)
         tie_matches: list[TableMatch] = []
         for leg, (home_team_id, away_team_id) in enumerate(expected_legs, start=1):
             fact = facts_by_leg.get(leg)

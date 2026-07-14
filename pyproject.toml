@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tournament-forecaster"
-version = "0.1.0"
+version = "0.1.1"
 description = "Configuration-driven tournament forecasting."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -130,6 +130,9 @@ include = [
   "/docs/assets/architecture/product-flow.svg",
   "/docs/assets/architecture/technical-architecture.png",
   "/docs/assets/architecture/technical-architecture.svg",
+  "/examples/copa-libertadores-2026-live/DATA_SOURCES.md",
+  "/examples/copa-libertadores-2026-live/README.md",
+  "/examples/copa-libertadores-2026-live/tournament.json",
   "/examples/world-cup-2026-live/DATA_SOURCES.md",
   "/examples/world-cup-2026-live/README.md",
   "/examples/world-cup-2026-live/backtest-report.json",

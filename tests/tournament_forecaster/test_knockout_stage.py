@@ -166,6 +166,54 @@ def _stage(*, legs: int = 1, away_goals_rule: bool = False) -> dict[str, object]
     }
 
 
+def test_better_seed_hosts_second_leg_when_pairing_order_is_not_seed_order() -> None:
+    stage = _stage(legs=2)
+    stage["home_away_order"] = "better_seed_second_leg_home"
+
+    result = simulate_knockout_stage(
+        stage,
+        state=_state(),
+        ratings={"alpha": 1600.0, "bravo": 1600.0},
+        knockout_seeds={"alpha": 11, "bravo": 3},
+        completed_matches=(),
+        rng=random.Random(7),
+    )
+
+    assert [(match.home_team_id, match.away_team_id) for match in result.matches] == [
+        ("alpha", "bravo"),
+        ("bravo", "alpha"),
+    ]
+
+
+def test_better_seed_hosts_second_leg_after_match_winner_resolution() -> None:
+    stage = _stage(legs=2)
+    pairing = stage["pairing"]
+    assert isinstance(pairing, dict)
+    ties = pairing["ties"]
+    assert isinstance(ties, list)
+    ties[0]["entrants"] = [
+        {"type": "match_winner", "match_id": "round-of-16-a"},
+        {"type": "match_winner", "match_id": "round-of-16-b"},
+    ]
+    stage["home_away_order"] = "better_seed_second_leg_home"
+
+    result = simulate_knockout_stage(
+        stage,
+        state=QualificationState(
+            match_winners={"round-of-16-a": "alpha", "round-of-16-b": "bravo"}
+        ),
+        ratings={"alpha": 1600.0, "bravo": 1600.0},
+        knockout_seeds={"alpha": 14, "bravo": 2},
+        completed_matches=(),
+        rng=random.Random(7),
+    )
+
+    assert [(match.home_team_id, match.away_team_id) for match in result.matches] == [
+        ("alpha", "bravo"),
+        ("bravo", "alpha"),
+    ]
+
+
 def test_locked_one_leg_draw_uses_completed_winner_without_resimulation() -> None:
     completed = CompletedMatch(
         match_id="final-1",

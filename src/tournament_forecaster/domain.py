@@ -27,7 +27,11 @@ _ENTRANT_TYPES = frozenset(
 )
 _AGGREGATE_TIEBREAKS = frozenset({"extra_time_then_penalties", "penalties"})
 _HOME_AWAY_ORDERS = frozenset(
-    {"listed_team_first_leg_home", "seeded_team_second_leg_home"}
+    {
+        "listed_team_first_leg_home",
+        "seeded_team_second_leg_home",
+        "better_seed_second_leg_home",
+    }
 )
 _KNOCKOUT_TERMINALS = frozenset({"championship", "placement"})
 _TIEBREAKERS = frozenset(
@@ -380,6 +384,7 @@ class Tournament:
     ratings: Mapping[str, float]
     completed_matches: tuple[CompletedMatch, ...]
     season: str | None = None
+    knockout_seeds: Mapping[str, int] = field(default_factory=dict)
     metadata: Mapping[str, object] = field(default_factory=dict)
     schema_version: int = 2
 
@@ -395,6 +400,8 @@ class Tournament:
             raise TournamentValidationError("ratings must be a mapping")
         if not isinstance(self.metadata, Mapping):
             raise TournamentValidationError("tournament metadata must be a mapping")
+        if not isinstance(self.knockout_seeds, Mapping):
+            raise TournamentValidationError("knockout seeds must be a mapping")
         frozen_stages: list[Mapping[str, object]] = []
         for stage in self.stages:
             if not isinstance(stage, Mapping):
@@ -406,6 +413,19 @@ class Tournament:
             for team_id, rating in self.ratings.items()
         }
         object.__setattr__(self, "ratings", MappingProxyType(normalized_ratings))
+        normalized_knockout_seeds = {
+            _stable_id(team_id, "knockout seed team id"): _integer(
+                seed,
+                f"knockout seed {team_id}",
+                minimum=1,
+            )
+            for team_id, seed in self.knockout_seeds.items()
+        }
+        object.__setattr__(
+            self,
+            "knockout_seeds",
+            MappingProxyType(normalized_knockout_seeds),
+        )
         object.__setattr__(self, "metadata", _freeze_mapping(self.metadata))
         validate_tournament(self)
 
@@ -874,7 +894,7 @@ def _validate_knockout_stage(
     )
     if home_away_order not in _HOME_AWAY_ORDERS:
         raise TournamentValidationError(
-            "knockout home away order must be listed_team_first_leg_home or seeded_team_second_leg_home"
+            "knockout home away order must be listed_team_first_leg_home, seeded_team_second_leg_home, or better_seed_second_leg_home"
         )
     if "aggregate_tiebreak" in stage:
         aggregate_tiebreak = _text(
@@ -999,6 +1019,9 @@ def _knockout_fact_pair(
     if legs == 1:
         return match.home_team_id, match.away_team_id
     home_away_order = str(stage.get("home_away_order"))
+    if home_away_order == "better_seed_second_leg_home":
+        first_team, second_team = sorted((match.home_team_id, match.away_team_id))
+        return first_team, second_team
     first_team_is_home = (
         home_away_order == "listed_team_first_leg_home" and match.leg == 1
     ) or (
@@ -1007,6 +1030,35 @@ def _knockout_fact_pair(
     if first_team_is_home:
         return match.home_team_id, match.away_team_id
     return match.away_team_id, match.home_team_id
+
+
+def _validate_better_seed_completed_leg_venue(
+    stage: Mapping[str, object],
+    match: CompletedMatch,
+    knockout_seeds: Mapping[str, int],
+) -> None:
+    """Require historical legs to preserve the configured seed-based venue order."""
+
+    if stage.get("home_away_order") != "better_seed_second_leg_home":
+        return
+    try:
+        better_seed, worse_seed = sorted(
+            (match.home_team_id, match.away_team_id),
+            key=knockout_seeds.__getitem__,
+        )
+    except KeyError as error:
+        raise TournamentValidationError(
+            "knockout seeds must cover every entrant in a better-seed home stage"
+        ) from error
+    expected = (
+        (worse_seed, better_seed)
+        if match.leg == 1
+        else (better_seed, worse_seed)
+    )
+    if (match.home_team_id, match.away_team_id) != expected:
+        raise TournamentValidationError(
+            "completed knockout leg home-away order contradicts its tie"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1044,6 +1096,11 @@ def _validate_tournament_structure(tournament: Tournament) -> _TournamentStructu
         raise TournamentValidationError("tournament team ids must be unique")
     if tournament.focus_team_id not in team_ids:
         raise TournamentValidationError("focus team id must reference a configured team")
+    unknown_seed_teams = sorted(set(tournament.knockout_seeds) - team_ids)
+    if unknown_seed_teams:
+        raise TournamentValidationError("knockout seeds must reference configured teams")
+    if len(tournament.knockout_seeds.values()) != len(set(tournament.knockout_seeds.values())):
+        raise TournamentValidationError("knockout seeds must use unique numeric ranks")
     if not tournament.stages:
         raise TournamentValidationError("tournament must define at least one stage")
     stage_ids: list[str] = []
@@ -1268,6 +1325,11 @@ def _validate_completed_match_facts(
                 raise TournamentValidationError(
                     "completed knockout match is not a configured tie"
                 )
+            _validate_better_seed_completed_leg_venue(
+                stage,
+                match,
+                tournament.knockout_seeds,
+            )
             completed_knockout_ties.setdefault(
                 (match.stage_id, match.match_id),
                 [],
@@ -1495,6 +1557,7 @@ def _resolved_qualification_state(
 def _validate_knockout_entrant_possibilities(
     structure: _TournamentStructure,
     resolved_state: QualificationState,
+    knockout_seeds: Mapping[str, int],
 ) -> None:
     """Reject explicit entrants that overlap a dynamic entrant source."""
 
@@ -1542,6 +1605,19 @@ def _validate_knockout_entrant_possibilities(
             ):
                 raise TournamentValidationError(
                     "explicit team entrant overlaps another possible knockout entrant"
+                )
+        if stage.get("home_away_order") == "better_seed_second_leg_home":
+            missing_seed_teams = sorted(
+                {
+                    team_id
+                    for _source, possibilities in stage_sources
+                    for team_id in possibilities
+                }
+                - set(knockout_seeds)
+            )
+            if missing_seed_teams:
+                raise TournamentValidationError(
+                    "knockout seeds must cover every possible entrant in a better-seed home stage"
                 )
         if pairing["mode"] == "fixed":
             possible_tie_winners.update(fixed_winners)
@@ -1591,6 +1667,8 @@ def _validate_locked_knockout_pairs(
                 for tie in ties
                 if isinstance(tie, Mapping)
             ),
+            fixed_pair_order=stage.get("home_away_order")
+            != "better_seed_second_leg_home",
         )
 
 
@@ -1601,5 +1679,9 @@ def validate_tournament(tournament: Tournament) -> None:
     completed_facts = _validate_completed_match_facts(tournament, structure)
     _validate_completed_knockout_dependencies(tournament, structure, completed_facts)
     resolved_state = _resolved_qualification_state(tournament, structure, completed_facts)
-    _validate_knockout_entrant_possibilities(structure, resolved_state)
+    _validate_knockout_entrant_possibilities(
+        structure,
+        resolved_state,
+        tournament.knockout_seeds,
+    )
     _validate_locked_knockout_pairs(structure, completed_facts, resolved_state)

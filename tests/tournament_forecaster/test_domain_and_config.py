@@ -973,6 +973,64 @@ def test_loader_rejects_invalid_knockout_format_knobs(
         load_tournament_document(document)
 
 
+def _better_seed_home_document() -> dict[str, object]:
+    document = _document()
+    stages = document["stages"]
+    assert isinstance(stages, list)
+    final = stages[1]
+    assert isinstance(final, dict)
+    final["legs"] = 2
+    final["home_away_order"] = "better_seed_second_leg_home"
+    document["knockout_seeds"] = {"north-city": 1, "south-city": 2}
+    return document
+
+
+def test_better_seed_second_leg_home_requires_unique_known_seeds() -> None:
+    _require_package()
+    from tournament_forecaster.config import load_tournament_document
+    from tournament_forecaster.errors import TournamentValidationError
+
+    document = _better_seed_home_document()
+    document["knockout_seeds"] = {"north-city": 1, "south-city": 1}
+
+    with pytest.raises(TournamentValidationError, match="knockout seeds"):
+        load_tournament_document(document)
+
+
+def test_better_seed_second_leg_home_requires_every_possible_entrant_seed() -> None:
+    _require_package()
+    from tournament_forecaster.config import load_tournament_document
+    from tournament_forecaster.errors import TournamentValidationError
+
+    document = _better_seed_home_document()
+    document["knockout_seeds"] = {"north-city": 1}
+
+    with pytest.raises(TournamentValidationError, match="knockout seeds"):
+        load_tournament_document(document)
+
+
+def test_better_seed_second_leg_home_rejects_completed_leg_with_reversed_venue() -> None:
+    _require_package()
+    from tournament_forecaster.config import load_tournament_document
+    from tournament_forecaster.errors import TournamentValidationError
+
+    document = _better_seed_home_document()
+    document["completed_matches"] = [
+        *document["completed_matches"],
+        {
+            "match_id": "final-1",
+            "stage_id": "final",
+            "home_team_id": "north-city",
+            "away_team_id": "south-city",
+            "score": {"home": 1, "away": 0},
+            "leg": 1,
+        },
+    ]
+
+    with pytest.raises(TournamentValidationError, match="home-away order"):
+        load_tournament_document(document)
+
+
 @pytest.mark.parametrize(
     ("direct_per_group", "best_additional", "message"),
     [(3, 0, "attainable"), (2, 1, "every group")],

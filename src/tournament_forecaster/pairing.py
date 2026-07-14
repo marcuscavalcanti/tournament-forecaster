@@ -47,6 +47,7 @@ def validate_locked_pairs(
     locked_pairs: Mapping[str, tuple[str, str]],
     *,
     configured_tie_ids: Sequence[str] | None = None,
+    fixed_pair_order: bool = True,
 ) -> None:
     """Validate observed tie entrants against resolved fixed or draw pools."""
 
@@ -82,7 +83,12 @@ def validate_locked_pairs(
     if mode == "fixed":
         for tie_id, locked_pair in locked_pairs.items():
             resolved_pair = resolved_by_id.get(tie_id)
-            if resolved_pair is None or locked_pair != resolved_pair:
+            pairs_match = (
+                locked_pair == resolved_pair
+                if fixed_pair_order
+                else resolved_pair is not None and set(locked_pair) == set(resolved_pair)
+            )
+            if not pairs_match:
                 raise TournamentValidationError(
                     "completed tie contradicts fixed pairing sources"
                 )
@@ -114,6 +120,7 @@ def build_pairings(
     rng: random.Random,
     *,
     locked_pairs: Mapping[str, tuple[str, str]] | None = None,
+    fixed_pair_order: bool = True,
 ) -> tuple[Pairing, ...]:
     """Resolve sources and pair all entrants using one supplied random stream."""
 
@@ -125,6 +132,7 @@ def build_pairings(
         resolved,
         locked,
         configured_tie_ids=tie_ids,
+        fixed_pair_order=fixed_pair_order,
     )
 
     if mode == "fixed":

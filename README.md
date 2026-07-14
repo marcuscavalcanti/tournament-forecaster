@@ -23,13 +23,30 @@ Each run first creates an immutable generation directory. The CLI labels the sta
 
 Output publication fails closed when the lexical output path contains an ancestor symlink or junction. Use a canonical path instead. For example, macOS exposes `/tmp` as a symlink to `/private/tmp`, so use `--output-dir /private/tmp/tournament-forecaster-outputs` rather than a path below `/tmp`.
 
-`v0.1.0` supports macOS and Linux natively. On Windows, use WSL2 and run the four POSIX quickstart commands inside the Linux distribution; native Windows is not supported in `v0.1.0`.
+`v0.1.1` supports macOS and Linux natively. On Windows, use WSL2 and run the four POSIX quickstart commands inside the Linux distribution; native Windows is not supported in `v0.1.1`.
 
 For a fully synthetic offline smoke test after installation:
 
 ```bash
 tournament-forecast quickstart --iterations 10000 --output-dir outputs
 ```
+
+## Copa Libertadores 2026 Example
+
+The repository also includes a ready-to-run [Copa Libertadores 2026 round-of-16
+snapshot](examples/copa-libertadores-2026-live/README.md) focused on Palmeiras. It
+uses the official CONMEBOL field, seed order, fixed draw, and two-leg rules from a
+frozen snapshot; ratings remain explicitly synthetic project inputs.
+
+```bash
+tournament-forecast validate --config examples/copa-libertadores-2026-live/tournament.json
+tournament-forecast simulate --config examples/copa-libertadores-2026-live/tournament.json --iterations 10000 --output-dir outputs
+```
+
+The configuration models the official `A-H`, `B-G`, `C-F`, and `D-E` quarter-final
+path. Better group-stage seeds host leg two through the semi-finals; aggregate ties
+before the final go directly to penalties, while the one-leg final uses extra time
+and then penalties. See the example's [source record](examples/copa-libertadores-2026-live/DATA_SOURCES.md) before refreshing the snapshot.
 
 ## Multi-LLM Council
 

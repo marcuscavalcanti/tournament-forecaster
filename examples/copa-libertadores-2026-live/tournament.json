@@ -1,0 +1,138 @@
+{
+  "schema_version": 2,
+  "tournament": {
+    "id": "copa-libertadores-2026-round-of-16",
+    "display_name": "Copa Libertadores 2026 Round of 16 Snapshot",
+    "season": "2026"
+  },
+  "focus_team_id": "palmeiras",
+  "teams": [
+    {"id": "flamengo", "display_name": "Flamengo"},
+    {"id": "independiente-rivadavia", "display_name": "Independiente Rivadavia"},
+    {"id": "independiente-del-valle", "display_name": "Independiente del Valle"},
+    {"id": "universidad-catolica", "display_name": "Universidad Católica"},
+    {"id": "cerro-porteno", "display_name": "Cerro Porteño"},
+    {"id": "ldu-quito", "display_name": "LDU Quito"},
+    {"id": "corinthians", "display_name": "Corinthians"},
+    {"id": "coquimbo-unido", "display_name": "Coquimbo Unido"},
+    {"id": "rosario-central", "display_name": "Rosario Central"},
+    {"id": "mirassol", "display_name": "Mirassol"},
+    {"id": "palmeiras", "display_name": "Palmeiras"},
+    {"id": "cruzeiro", "display_name": "Cruzeiro"},
+    {"id": "platense", "display_name": "Platense"},
+    {"id": "estudiantes-la-plata", "display_name": "Estudiantes de La Plata"},
+    {"id": "deportes-tolima", "display_name": "Deportes Tolima"},
+    {"id": "fluminense", "display_name": "Fluminense"}
+  ],
+  "knockout_seeds": {
+    "flamengo": 1,
+    "independiente-rivadavia": 2,
+    "independiente-del-valle": 3,
+    "universidad-catolica": 4,
+    "cerro-porteno": 5,
+    "ldu-quito": 6,
+    "corinthians": 7,
+    "coquimbo-unido": 8,
+    "rosario-central": 9,
+    "mirassol": 10,
+    "palmeiras": 11,
+    "cruzeiro": 12,
+    "platense": 13,
+    "estudiantes-la-plata": 14,
+    "deportes-tolima": 15,
+    "fluminense": 16
+  },
+  "stages": [
+    {
+      "id": "round-of-16",
+      "type": "knockout",
+      "pairing": {
+        "mode": "fixed",
+        "ties": [
+          {"id": "r16-a", "entrants": [{"type": "team", "team_id": "estudiantes-la-plata"}, {"type": "team", "team_id": "universidad-catolica"}]},
+          {"id": "r16-b", "entrants": [{"type": "team", "team_id": "mirassol"}, {"type": "team", "team_id": "ldu-quito"}]},
+          {"id": "r16-c", "entrants": [{"type": "team", "team_id": "fluminense"}, {"type": "team", "team_id": "independiente-rivadavia"}]},
+          {"id": "r16-d", "entrants": [{"type": "team", "team_id": "deportes-tolima"}, {"type": "team", "team_id": "independiente-del-valle"}]},
+          {"id": "r16-e", "entrants": [{"type": "team", "team_id": "cruzeiro"}, {"type": "team", "team_id": "flamengo"}]},
+          {"id": "r16-f", "entrants": [{"type": "team", "team_id": "platense"}, {"type": "team", "team_id": "coquimbo-unido"}]},
+          {"id": "r16-g", "entrants": [{"type": "team", "team_id": "palmeiras"}, {"type": "team", "team_id": "cerro-porteno"}]},
+          {"id": "r16-h", "entrants": [{"type": "team", "team_id": "rosario-central"}, {"type": "team", "team_id": "corinthians"}]}
+        ]
+      },
+      "legs": 2,
+      "home_away_order": "better_seed_second_leg_home",
+      "aggregate_tiebreak": "penalties",
+      "away_goals_rule": false
+    },
+    {
+      "id": "quarter-finals",
+      "type": "knockout",
+      "pairing": {
+        "mode": "fixed",
+        "ties": [
+          {"id": "quarter-final-1", "entrants": [{"type": "match_winner", "match_id": "r16-a"}, {"type": "match_winner", "match_id": "r16-h"}]},
+          {"id": "quarter-final-2", "entrants": [{"type": "match_winner", "match_id": "r16-b"}, {"type": "match_winner", "match_id": "r16-g"}]},
+          {"id": "quarter-final-3", "entrants": [{"type": "match_winner", "match_id": "r16-c"}, {"type": "match_winner", "match_id": "r16-f"}]},
+          {"id": "quarter-final-4", "entrants": [{"type": "match_winner", "match_id": "r16-d"}, {"type": "match_winner", "match_id": "r16-e"}]}
+        ]
+      },
+      "legs": 2,
+      "home_away_order": "better_seed_second_leg_home",
+      "aggregate_tiebreak": "penalties",
+      "away_goals_rule": false
+    },
+    {
+      "id": "semi-finals",
+      "type": "knockout",
+      "pairing": {
+        "mode": "fixed",
+        "ties": [
+          {"id": "semi-final-1", "entrants": [{"type": "match_winner", "match_id": "quarter-final-1"}, {"type": "match_winner", "match_id": "quarter-final-4"}]},
+          {"id": "semi-final-2", "entrants": [{"type": "match_winner", "match_id": "quarter-final-2"}, {"type": "match_winner", "match_id": "quarter-final-3"}]}
+        ]
+      },
+      "legs": 2,
+      "home_away_order": "better_seed_second_leg_home",
+      "aggregate_tiebreak": "penalties",
+      "away_goals_rule": false
+    },
+    {
+      "id": "final",
+      "type": "knockout",
+      "pairing": {
+        "mode": "fixed",
+        "ties": [
+          {"id": "final-1", "entrants": [{"type": "match_winner", "match_id": "semi-final-1"}, {"type": "match_winner", "match_id": "semi-final-2"}]}
+        ]
+      },
+      "legs": 1,
+      "home_away_order": "listed_team_first_leg_home",
+      "aggregate_tiebreak": "extra_time_then_penalties",
+      "away_goals_rule": false,
+      "terminal": "championship"
+    }
+  ],
+  "ratings": {
+    "flamengo": 1710,
+    "independiente-rivadavia": 1510,
+    "independiente-del-valle": 1640,
+    "universidad-catolica": 1580,
+    "cerro-porteno": 1590,
+    "ldu-quito": 1620,
+    "corinthians": 1600,
+    "coquimbo-unido": 1540,
+    "rosario-central": 1625,
+    "mirassol": 1545,
+    "palmeiras": 1680,
+    "cruzeiro": 1610,
+    "platense": 1550,
+    "estudiantes-la-plata": 1630,
+    "deportes-tolima": 1570,
+    "fluminense": 1650
+  },
+  "completed_matches": [],
+  "metadata": {
+    "data_status": "official CONMEBOL round-of-16 field, seed order, and bracket normalized on 2026-07-13; project-authored synthetic ratings",
+    "snapshot_stage": "round_of_16"
+  }
+}

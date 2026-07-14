@@ -20,6 +20,7 @@ _ROOT_PROPERTIES = frozenset(
         "teams",
         "stages",
         "ratings",
+        "knockout_seeds",
         "completed_matches",
         "metadata",
     }
@@ -160,6 +161,14 @@ def load_tournament_document(document: Mapping[str, object]) -> Tournament:
     ratings: dict[str, float] = {}
     for team_id, rating in ratings_document.items():
         ratings[team_id] = bounded_finite_number(rating, f"rating {team_id}")
+    knockout_seed_document = _optional_mapping(root, "knockout_seeds", "knockout_seeds")
+    knockout_seeds = {
+        _string(team_id, "knockout_seeds team id"): _integer(
+            seed,
+            f"knockout_seeds.{team_id}",
+        )
+        for team_id, seed in knockout_seed_document.items()
+    }
     completed_matches = tuple(
         _completed_match(_mapping(value, f"completed_matches[{index}]"), index)
         for index, value in enumerate(
@@ -177,6 +186,7 @@ def load_tournament_document(document: Mapping[str, object]) -> Tournament:
         teams=teams,
         stages=stages,
         ratings=ratings,
+        knockout_seeds=knockout_seeds,
         completed_matches=completed_matches,
         season=season,
         metadata=_optional_mapping(root, "metadata", "metadata"),

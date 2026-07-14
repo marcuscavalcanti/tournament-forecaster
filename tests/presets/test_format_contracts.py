@@ -257,11 +257,15 @@ def test_libertadores_style_contract_has_groups_fixed_two_leg_ties_and_one_leg_f
     assert quarter_finals["legs"] == 2
     assert quarter_finals["home_away_order"] == "listed_team_first_leg_home"
     assert all(
-        stage["pairing"]["mode"] == "fixed" and stage["legs"] == 2
+        stage["pairing"]["mode"] == "fixed"
+        and stage["legs"] == 2
+        and stage["aggregate_tiebreak"] == "penalties"
+        and stage["away_goals_rule"] is False
         for stage in _knockout_stages(tournament)
         if stage.get("terminal") != "championship"
     )
     assert final["legs"] == 1
+    assert final["aggregate_tiebreak"] == "extra_time_then_penalties"
     assert final["terminal"] == "championship"
 
 
