@@ -13,6 +13,15 @@ tournament-forecast simulate --config examples/world-cup-2026-live/tournament.js
 
 The first source install requires package-index/network access for build dependencies; Hatchling is not vendored. After installation, `simulate`, `init`, and `validate` run offline without provider credentials or additional downloads.
 
+## Ready-To-Run Examples
+
+The repository includes two credential-free, reproducible tournament snapshots:
+
+- **FIFA World Cup 2026, France:** group stage through the final, with France as the active focus team.
+- **Copa Libertadores 2026, Palmeiras:** the confirmed round-of-16 field, fixed draw, and two-leg knockout rules.
+
+### FIFA World Cup 2026: France
+
 The checked-in World Cup 2026 example is normalized from the CC0 1.0 [OpenFootball World Cup 2026 snapshot](https://raw.githubusercontent.com/openfootball/worldcup.json/056c53ec82feb3fb68da63d1ce74ec59fc23e95d/2026/worldcup.json), pinned to upstream commit `056c53ec82feb3fb68da63d1ce74ec59fc23e95d`. Its `retrieved_at` value is `2026-07-13T16:35:34Z`, and the exact source SHA-256 is `b0aef8771d7fc3b6a5ec04cf7a9f9cd167c4e8b0be9152b3a35ae5629bb4e8d5`. The source contains 104 matches and 100 completed facts. Stage counts are 72 group, 16 R32, 8 R16, 4 QF, 0 SF, and 0 final. The remaining semi-finals are France-Spain and England-Argentina. Its active default focus team is France, and its frozen ratings are a project-authored, cited pre-tournament seed. It is reproducible snapshot data, not a live feed. OpenFootball-derived match facts retain CC0 status; the repository MIT license applies only to project-authored material and does not relicense those facts. The command writes:
 
 - `outputs/fifa-world-cup-2026-live/france/forecast.json`
@@ -31,7 +40,7 @@ For a fully synthetic offline smoke test after installation:
 tournament-forecast quickstart --iterations 10000 --output-dir outputs
 ```
 
-## Copa Libertadores 2026 Example
+### Copa Libertadores 2026: Palmeiras
 
 The repository also includes a ready-to-run [Copa Libertadores 2026 round-of-16
 snapshot](examples/copa-libertadores-2026-live/README.md) focused on Palmeiras. It
