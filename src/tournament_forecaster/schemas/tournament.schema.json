@@ -263,7 +263,7 @@
         "pairing": {"$ref": "#/$defs/knockout_pairing"},
         "legs": {"type": "integer", "enum": [1, 2]},
         "home_away_order": {
-          "enum": ["listed_team_first_leg_home", "seeded_team_second_leg_home"]
+          "enum": ["listed_team_first_leg_home", "seeded_team_second_leg_home", "better_seed_second_leg_home"]
         },
         "aggregate_tiebreak": {"enum": ["extra_time_then_penalties", "penalties"]},
         "away_goals_rule": {"type": "boolean"},
@@ -378,6 +378,11 @@
       "type": "object",
       "propertyNames": {"$ref": "#/$defs/stable_id"},
       "additionalProperties": {"$ref": "#/$defs/finite_number"}
+    },
+    "knockout_seeds": {
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/stable_id"},
+      "additionalProperties": {"type": "integer", "minimum": 1}
     },
     "completed_matches": {
       "type": "array",

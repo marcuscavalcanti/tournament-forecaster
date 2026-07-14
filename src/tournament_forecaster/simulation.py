@@ -280,6 +280,7 @@ def simulate_tournament(
                     stage,
                     state=state,
                     ratings=tournament.ratings,
+                    knockout_seeds=tournament.knockout_seeds,
                     completed_matches=tournament.completed_matches,
                     rng=rng,
                 )
