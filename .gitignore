@@ -39,6 +39,8 @@ data/
 outputs/
 .backups/
 .worktrees/
+# Internal agent planning notes are not part of the public product.
+docs/superpowers/
 *.log
 *.tmp
 *.temp

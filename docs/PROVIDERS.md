@@ -11,7 +11,7 @@ Providers are acquisition boundaries, not owners of tournament truth. Tournament
 
 ## Platform Boundary
 
-In `v0.1.1`, race-resistant results apply and durable report publication require POSIX file descriptors, no-follow opens, and native rename primitives. They are supported natively on macOS and Linux. Native Windows is not supported; run the CLI inside WSL2 and use Linux paths.
+In `v0.1.2`, race-resistant results apply and durable report publication require POSIX file descriptors, no-follow opens, and native rename primitives. They are supported natively on macOS and Linux. Native Windows is not supported; run the CLI inside WSL2 and use Linux paths.
 
 ## Official FIFA Calendar Discovery
 
