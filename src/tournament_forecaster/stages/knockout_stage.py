@@ -123,7 +123,11 @@ def _locked_pairs(
             oriented = (first_fact.home_team_id, first_fact.away_team_id)
         elif home_away_order == "better_seed_second_leg_home":
             try:
-                oriented = tuple(sorted(team_pair, key=knockout_seeds.__getitem__))
+                better_seed, worse_seed = sorted(
+                    team_pair,
+                    key=knockout_seeds.__getitem__,
+                )
+                oriented = (better_seed, worse_seed)
             except KeyError as error:
                 raise TournamentValidationError(
                     "knockout seeds must cover every entrant in a better-seed home stage"

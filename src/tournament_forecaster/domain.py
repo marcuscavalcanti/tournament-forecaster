@@ -1020,7 +1020,8 @@ def _knockout_fact_pair(
         return match.home_team_id, match.away_team_id
     home_away_order = str(stage.get("home_away_order"))
     if home_away_order == "better_seed_second_leg_home":
-        return tuple(sorted((match.home_team_id, match.away_team_id)))
+        first_team, second_team = sorted((match.home_team_id, match.away_team_id))
+        return first_team, second_team
     first_team_is_home = (
         home_away_order == "listed_team_first_leg_home" and match.leg == 1
     ) or (
