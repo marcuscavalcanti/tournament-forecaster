@@ -213,6 +213,7 @@
       "required": ["id", "entrants"],
       "properties": {
         "id": {"$ref": "#/$defs/stable_id"},
+        "draw_group": {"$ref": "#/$defs/stable_id"},
         "entrants": {
           "type": "array",
           "minItems": 2,

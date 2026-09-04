@@ -112,7 +112,7 @@ jobs:
       - name: Build distributions
         run: python -m build --no-isolation
       - name: Check distribution metadata
-        run: python -m twine check dist/*
+        run: uv run --locked --extra dev python -m twine check dist/*
 
   architecture-assets:
     name: Reference architecture render parity

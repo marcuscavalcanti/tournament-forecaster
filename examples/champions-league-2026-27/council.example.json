@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "enabled": false,
+  "engine_weight": 0.55,
+  "council_weight": 0.45,
+  "rounds": 2,
+  "minimum_valid_agents": 3,
+  "timeout_seconds": 120,
+  "max_attempts": 2,
+  "agents": [
+    {"id":"kimi","display_name":"Kimi","provider":"openai-compatible","model":"replace-with-kimi-model-id","api_key_env":"MOONSHOT_API_KEY","endpoint":"https://api.moonshot.ai/v1/chat/completions","enabled":true,"max_output_tokens":2400,"temperature":0.2},
+    {"id":"gemini","display_name":"Gemini","provider":"google-gemini","model":"replace-with-gemini-model-id","api_key_env":"GEMINI_API_KEY","enabled":true,"reasoning_effort":"high","max_output_tokens":2400,"temperature":0.2},
+    {"id":"claude-opus","display_name":"Claude Opus 5","provider":"anthropic","model":"replace-with-claude-opus-5-model-id","api_key_env":"ANTHROPIC_API_KEY","enabled":true,"thinking_budget_tokens":4096,"max_output_tokens":4800,"temperature":0.2},
+    {"id":"codex","display_name":"Codex","provider":"openai","model":"replace-with-codex-model-id","api_key_env":"OPENAI_API_KEY","enabled":true,"reasoning_effort":"high","max_output_tokens":2400,"temperature":0.2},
+    {"id":"deepseek","display_name":"DeepSeek","provider":"openai-compatible","model":"replace-with-deepseek-model-id","api_key_env":"DEEPSEEK_API_KEY","endpoint":"https://api.deepseek.com/chat/completions","enabled":true,"max_output_tokens":2400,"temperature":0.2}
+  ]
+}

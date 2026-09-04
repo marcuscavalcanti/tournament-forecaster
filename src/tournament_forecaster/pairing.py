@@ -20,6 +20,18 @@ class Pairing:
 ResolvedTie = tuple[str, str, str]
 
 
+def _tie_draw_groups(
+    ties: Sequence[Mapping[str, object]],
+) -> dict[str, str]:
+    groups: dict[str, str] = {}
+    for tie in ties:
+        tie_id = tie.get("id")
+        draw_group = tie.get("draw_group", "__all__")
+        if isinstance(tie_id, str) and isinstance(draw_group, str):
+            groups[tie_id] = draw_group
+    return groups
+
+
 def resolve_ties(
     ties: Sequence[Mapping[str, object]],
     state: QualificationState,
@@ -32,7 +44,11 @@ def resolve_ties(
         entrants = tie.get("entrants")
         if not isinstance(match_id, str):
             raise TournamentValidationError("knockout tie requires a stable id")
-        if not isinstance(entrants, Sequence) or isinstance(entrants, (str, bytes)) or len(entrants) != 2:
+        if (
+            not isinstance(entrants, Sequence)
+            or isinstance(entrants, (str, bytes))
+            or len(entrants) != 2
+        ):
             raise TournamentValidationError("knockout tie must contain exactly two entrants")
         first, second = entrants
         if not isinstance(first, Mapping) or not isinstance(second, Mapping):
@@ -48,6 +64,7 @@ def validate_locked_pairs(
     *,
     configured_tie_ids: Sequence[str] | None = None,
     fixed_pair_order: bool = True,
+    configured_ties: Sequence[Mapping[str, object]] | None = None,
 ) -> None:
     """Validate observed tie entrants against resolved fixed or draw pools."""
 
@@ -89,24 +106,27 @@ def validate_locked_pairs(
                 else resolved_pair is not None and set(locked_pair) == set(resolved_pair)
             )
             if not pairs_match:
-                raise TournamentValidationError(
-                    "completed tie contradicts fixed pairing sources"
-                )
+                raise TournamentValidationError("completed tie contradicts fixed pairing sources")
     elif mode == "seeded_draw":
-        seeded = {first_team_id for _, first_team_id, _ in resolved_ties}
-        unseeded = {second_team_id for _, _, second_team_id in resolved_ties}
-        for locked_pair in locked_pairs.values():
+        groups_by_id = _tie_draw_groups(configured_ties or ())
+        resolved_groups: dict[str, tuple[set[str], set[str]]] = {}
+        for tie_id, first_team_id, second_team_id in resolved_ties:
+            group = groups_by_id.get(tie_id, "__all__")
+            seeded, unseeded = resolved_groups.setdefault(group, (set(), set()))
+            seeded.add(first_team_id)
+            unseeded.add(second_team_id)
+        for tie_id, locked_pair in locked_pairs.items():
+            group = groups_by_id.get(tie_id, "__all__")
+            seeded, unseeded = resolved_groups[group]
             if locked_pair[0] not in seeded or locked_pair[1] not in unseeded:
                 raise TournamentValidationError(
-                    "completed seeded tie contradicts configured seed pots"
+                    "completed seeded tie contradicts configured seed pots or draw group"
                 )
     elif mode == "open_draw":
         declared_pool = set(declared_entrants)
         for locked_pair in locked_pairs.values():
             if any(team_id not in declared_pool for team_id in locked_pair):
-                raise TournamentValidationError(
-                    "completed open tie contains an undeclared entrant"
-                )
+                raise TournamentValidationError("completed open tie contains an undeclared entrant")
     else:
         raise TournamentValidationError(
             "knockout pairing mode must be fixed, seeded_draw, or open_draw"
@@ -133,6 +153,7 @@ def build_pairings(
         locked,
         configured_tie_ids=tie_ids,
         fixed_pair_order=fixed_pair_order,
+        configured_ties=ties,
     )
 
     if mode == "fixed":
@@ -141,27 +162,27 @@ def build_pairings(
             for tie_id, first_team_id, second_team_id in resolved
         ]
     elif mode == "seeded_draw":
-        seeded = [first for _, first, _ in resolved]
-        unseeded = [second for _, _, second in resolved]
-        locked_by_id: dict[str, Pairing] = {}
-        for tie_id, locked_pair in locked.items():
-            seeded_team = [team_id for team_id in locked_pair if team_id in seeded]
-            unseeded_team = [team_id for team_id in locked_pair if team_id in unseeded]
-            assert len(seeded_team) == len(unseeded_team) == 1
-            seeded.remove(seeded_team[0])
-            unseeded.remove(unseeded_team[0])
-            locked_by_id[tie_id] = Pairing(
-                tie_id,
-                seeded_team[0],
-                unseeded_team[0],
+        groups_by_id = _tie_draw_groups(ties)
+        resolved_by_id = {tie_id: (first, second) for tie_id, first, second in resolved}
+        pairings = []
+        for group in sorted(set(groups_by_id.values())):
+            group_ids = [tie_id for tie_id in tie_ids if groups_by_id[tie_id] == group]
+            seeded = [resolved_by_id[tie_id][0] for tie_id in group_ids]
+            unseeded = [resolved_by_id[tie_id][1] for tie_id in group_ids]
+            for tie_id in group_ids:
+                if tie_id not in locked:
+                    continue
+                locked_pair = locked[tie_id]
+                seeded.remove(locked_pair[0])
+                unseeded.remove(locked_pair[1])
+                pairings.append(Pairing(tie_id, *locked_pair))
+            rng.shuffle(seeded)
+            rng.shuffle(unseeded)
+            unlocked_ids = [tie_id for tie_id in group_ids if tie_id not in locked]
+            pairings.extend(
+                Pairing(tie_id, seeded[index], unseeded[index])
+                for index, tie_id in enumerate(unlocked_ids)
             )
-        rng.shuffle(seeded)
-        rng.shuffle(unseeded)
-        unlocked_ids = [tie_id for tie_id in tie_ids if tie_id not in locked]
-        pairings = list(locked_by_id.values()) + [
-            Pairing(tie_id, seeded[index], unseeded[index])
-            for index, tie_id in enumerate(unlocked_ids)
-        ]
     elif mode == "open_draw":
         entrants = [team_id for _, first, second in resolved for team_id in (first, second)]
         locked_by_id = {}
@@ -176,7 +197,9 @@ def build_pairings(
             for index, tie_id in enumerate(unlocked_ids)
         ]
     else:
-        raise TournamentValidationError("knockout pairing mode must be fixed, seeded_draw, or open_draw")
+        raise TournamentValidationError(
+            "knockout pairing mode must be fixed, seeded_draw, or open_draw"
+        )
 
     all_entrants = [
         team_id

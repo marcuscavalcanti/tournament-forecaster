@@ -53,3 +53,6 @@ data/.run.lock
 .DS_Store
 .idea/
 .vscode/
+
+# Runtime-generated official examples
+examples/champions-league-2026-27/tournament.local.json
