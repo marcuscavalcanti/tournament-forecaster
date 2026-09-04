@@ -874,10 +874,12 @@ def _validate_knockout_stage(
         tie = _mapping(tie_value, "knockout tie")
         _reject_unknown_properties(
             tie,
-            frozenset({"id", "entrants"}),
+            frozenset({"id", "entrants", "draw_group"}),
             "knockout tie",
         )
         tie_id = _stable_id(tie.get("id"), "knockout tie id")
+        if "draw_group" in tie:
+            _stable_id(tie["draw_group"], "knockout tie draw group")
         if tie_id in tie_ids:
             raise TournamentValidationError("knockout tie ids must be unique")
         tie_ids.add(tie_id)

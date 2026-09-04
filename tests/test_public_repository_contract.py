@@ -16,6 +16,7 @@ RETIRED_PATHS = {
     "docs/knockout-stage-output-contract.md",
 }
 ALLOWED_ROOT_SCRIPTS = {
+    "scripts/build_champions_league_2026_27_example.py",
     "scripts/build_world_cup_2026_example.py",
 }
 REQUIRED_PUBLIC_FILES = {
@@ -43,6 +44,9 @@ REQUIRED_PUBLIC_FILES = {
     "examples/copa-libertadores-2026-live/README.md",
     "examples/copa-libertadores-2026-live/tournament.json",
     "examples/council.example.json",
+    "examples/champions-league-2026-27/README.md",
+    "examples/champions-league-2026-27/DATA_SOURCES.md",
+    "examples/champions-league-2026-27/council.example.json",
 }
 
 

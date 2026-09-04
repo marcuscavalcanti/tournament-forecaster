@@ -15,10 +15,15 @@ The first source install requires package-index/network access for build depende
 
 ## Ready-To-Run Examples
 
-The repository includes two credential-free, reproducible tournament snapshots:
+The repository includes an official-fixture Champions League builder and two credential-free, reproducible snapshots:
 
+- **UEFA Champions League 2026/27, Real Madrid:** official league-phase fixtures fetched at runtime, restricted seeded draws, two-leg knockout ties, and a one-leg final.
 - **FIFA World Cup 2026, France:** group stage through the final, with France as the active focus team.
 - **Copa Libertadores 2026, Palmeiras:** the confirmed round-of-16 field, fixed draw, and two-leg knockout rules.
+
+### UEFA Champions League 2026/27: Real Madrid
+
+Build the official-fixture local example and simulate it with the commands in the Quickstart. The builder validates 36 clubs, 144 fixtures, eight opponents per club, and four home/four away matches. See [the example guide](examples/champions-league-2026-27/README.md).
 
 ### FIFA World Cup 2026: France
 
@@ -71,7 +76,7 @@ tournament-forecast council validate --config council.local.json
 Set `enabled` to `true` in `council.local.json`, export only the environment variables named by its `api_key_env` fields, and run:
 
 ```bash
-tournament-forecast simulate --config examples/world-cup-2026-live/tournament.json --iterations 10000 --output-dir outputs --council-config council.local.json --council
+tournament-forecast simulate --config examples/champions-league-2026-27/tournament.local.json --iterations 10000 --output-dir outputs --council-config council.local.json --council
 ```
 
 The default two-pass debrief keeps round one independent and gives valid reviewers anonymized peer positions in round two. Models have equal voting weight; the median valid opinion becomes the council consensus. Model, provider, effort, rounds, failures, and consensus are retained in `forecast.json` and `report.md`. If the council misses quorum or a provider fails, the run falls back to the deterministic baseline and records the reason instead of weakening tournament invariants.
@@ -79,7 +84,7 @@ The default two-pass debrief keeps round one independent and gives valid reviewe
 Hard-disable all model calls without changing the saved configuration:
 
 ```bash
-tournament-forecast simulate --config examples/world-cup-2026-live/tournament.json --iterations 10000 --output-dir outputs --council-config council.local.json --no-council
+tournament-forecast simulate --config examples/champions-league-2026-27/tournament.local.json --iterations 10000 --output-dir outputs --council-config council.local.json --no-council
 ```
 
 Supported adapters are OpenAI Responses, Anthropic Messages, Google Gemini, and HTTPS OpenAI-compatible chat endpoints. Model IDs and reasoning controls remain explicit because provider availability and capabilities change independently of this repository. See [Configuration](docs/CONFIGURATION.md), [Providers](docs/PROVIDERS.md), and [Security](SECURITY.md).
