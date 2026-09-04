@@ -23,7 +23,15 @@ The repository includes an official-fixture Champions League builder and two cre
 
 ### UEFA Champions League 2026/27: Real Madrid
 
-Build the official-fixture local example and simulate it with the commands in the Quickstart. The builder validates 36 clubs, 144 fixtures, eight opponents per club, and four home/four away matches. See [the example guide](examples/champions-league-2026-27/README.md).
+Build the official-fixture local example and simulate it:
+
+```bash
+python3 scripts/build_champions_league_2026_27_example.py --output examples/champions-league-2026-27/tournament.local.json
+tournament-forecast validate --config examples/champions-league-2026-27/tournament.local.json
+tournament-forecast simulate --config examples/champions-league-2026-27/tournament.local.json --iterations 10000 --output-dir outputs
+```
+
+The builder validates 36 clubs, 144 fixtures, eight opponents per club, and four home/four away matches. See [the example guide](examples/champions-league-2026-27/README.md).
 
 ### FIFA World Cup 2026: France
 
